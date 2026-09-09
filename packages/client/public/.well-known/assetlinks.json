@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.deadtiles.game",
+      "sha256_cert_fingerprints": [
+        "CB:0F:B1:7D:9F:07:5B:E6:F3:9F:65:36:4D:D2:A9:0D:A8:83:46:29:85:A7:54:17:BB:C0:D2:3B:54:40:0E:98"
+      ]
+    }
+  }
+]

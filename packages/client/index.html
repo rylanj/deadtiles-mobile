@@ -2611,6 +2611,150 @@
         color: rgba(158, 216, 158, 0.85);
         font-weight: 600;
       }
+      .main-menu-wallet-hint {
+        text-align: center;
+        font: 12px/1.45 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.78);
+      }
+      .main-menu-wallet-hint[hidden] {
+        display: none !important;
+      }
+      .main-menu-wallet-hint a {
+        color: #9fe830;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .main-menu-wallet-hint a:hover {
+        text-decoration: underline;
+      }
+      .wallet-picker {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        align-items: safe center;
+        justify-content: center;
+        padding: 16px;
+        background: rgba(5, 8, 5, 0.72);
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .wallet-picker-panel {
+        width: min(340px, 100%);
+        margin-block: 0;
+        padding: 20px 18px 16px;
+        font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+        border-radius: 16px;
+        background: linear-gradient(165deg, rgba(22, 28, 20, 0.96), rgba(9, 12, 9, 0.98));
+        border: 1px solid rgba(159, 232, 48, 0.16);
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+      }
+      .wallet-picker-title {
+        margin: 0 0 6px;
+        font-family: Oswald, sans-serif;
+        font-size: 18px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-align: center;
+        color: #f4f4f5;
+      }
+      .wallet-picker-hint {
+        margin: 0 0 14px;
+        text-align: center;
+        font: 12px/1.4 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.7);
+      }
+      .wallet-picker-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .wallet-picker-option {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 52px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border: 1px solid rgba(159, 232, 48, 0.12);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        color: #d8ecd4;
+        font: 15px/1.2 "Segoe UI", system-ui, sans-serif;
+        text-align: left;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .wallet-picker-option:hover,
+      .wallet-picker-option:focus-visible {
+        border-color: rgba(159, 232, 48, 0.4);
+        background: rgba(159, 232, 48, 0.08);
+        outline: none;
+      }
+      .wallet-picker-option--last {
+        border-color: rgba(159, 232, 48, 0.28);
+      }
+      .wallet-picker-option--action {
+        justify-content: center;
+        font-weight: 600;
+      }
+      .wallet-picker-option--primary {
+        border-color: rgba(159, 232, 48, 0.4);
+        background: rgba(159, 232, 48, 0.1);
+        color: #e8ffb8;
+      }
+      .wallet-picker-icon,
+      .wallet-picker-mark {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        flex: 0 0 auto;
+      }
+      .wallet-picker-icon {
+        object-fit: cover;
+        background: #111;
+      }
+      .wallet-picker-mark {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(159, 232, 48, 0.16);
+        color: #9fe830;
+        font-weight: 700;
+      }
+      .wallet-picker-name {
+        flex: 1 1 auto;
+      }
+      .wallet-picker-last {
+        flex: 0 0 auto;
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: rgba(159, 232, 48, 0.8);
+      }
+      .wallet-picker-cancel {
+        display: block;
+        width: 100%;
+        margin-top: 12px;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font: 12px/1.2 "Segoe UI", system-ui, sans-serif;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(158, 180, 158, 0.7);
+        background: transparent;
+        cursor: pointer;
+      }
+      .wallet-picker-cancel:hover {
+        color: #d4f0d4;
+        background: rgba(255, 255, 255, 0.04);
+      }
       body.main-menu-open #player-hud,
       body.main-menu-open #chat-bar,
       body.main-menu-open #weapon-hotbar,
@@ -2911,8 +3055,16 @@
         #ashen-militia-dialog-overlay,
         #faction-attack-warning-overlay,
         #death-screen-overlay,
-        #map-overlay {
-          align-items: center;
+        #map-overlay,
+        #craft-overlay,
+        #fireplace-overlay,
+        #prefab-overlay,
+        #deconstruct-overlay,
+        #door-code-overlay,
+        #onboarding-controls-legend {
+          /* Pin to the top. Auto block margins on the child re-center a tall
+             sheet and make the header unreachable. */
+          align-items: flex-start;
           justify-content: center;
           /* Double the previous 12/10 margins, plus safe-area insets. */
           padding: calc(24px + env(safe-area-inset-top, 0px))
@@ -2933,7 +3085,13 @@
         #death-screen-overlay:not([hidden]),
         #inventory-overlay:not([hidden]),
         #container-loot-overlay:not([hidden]),
-        #map-overlay:not([hidden]) {
+        #map-overlay:not([hidden]),
+        #craft-overlay:not([hidden]),
+        #fireplace-overlay:not([hidden]),
+        #prefab-overlay:not([hidden]),
+        #deconstruct-overlay:not([hidden]),
+        #door-code-overlay:not([hidden]),
+        #onboarding-controls-legend:not([hidden]) {
           display: flex;
         }
 
@@ -2942,7 +3100,7 @@
           /* Fill the padded overlay when content needs it (inventory). */
           max-height: 100%;
           min-height: 0;
-          margin-block: auto;
+          margin-block: 0;
           overflow: hidden;
         }
         .inventory-header {
@@ -2997,12 +3155,13 @@
           align-items: stretch;
           width: min(420px, 100%);
           gap: 10px;
-          max-height: 100%;
+          max-height: none;
           min-height: 0;
-          margin-block: auto;
-          overflow-x: hidden;
-          overflow-y: auto;
-          -webkit-overflow-scrolling: touch;
+          margin-block: 0;
+          overflow: visible;
+        }
+        #container-loot-overlay {
+          touch-action: pan-y;
         }
         .container-loot-layout .container-loot-panel {
           width: 100%;
@@ -3020,12 +3179,10 @@
 
         .trader-layout {
           width: min(420px, 100%);
-          max-height: 100%;
+          max-height: none;
           min-height: 0;
-          margin-block: auto;
-          overflow-x: hidden;
-          overflow-y: auto;
-          -webkit-overflow-scrolling: touch;
+          margin-block: 0;
+          overflow: visible;
           display: flex;
           flex-direction: column;
           gap: 10px;
@@ -3040,12 +3197,10 @@
         }
         .red-dialog-layout {
           width: min(420px, 100%);
-          max-height: 100%;
+          max-height: none;
           min-height: 0;
-          margin-block: auto;
-          overflow-x: hidden;
-          overflow-y: auto;
-          -webkit-overflow-scrolling: touch;
+          margin-block: 0;
+          overflow: visible;
           display: flex;
           flex-direction: column;
           gap: 10px;
@@ -3099,22 +3254,43 @@
           flex: 0 0 auto;
         }
 
+        .craft-layout,
+        .fireplace-layout,
+        .door-code-panel,
+        .death-screen-panel,
+        .faction-attack-warning-panel,
+        .onboarding-legend-panel,
+        .trader-qty-panel {
+          margin-block: 0;
+        }
+        .trader-qty-modal {
+          align-items: flex-start;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+        }
         .map-panel {
           width: min(420px, 100%);
-          max-height: 100%;
-          margin-block: auto;
-          overflow: auto;
+          max-height: none;
+          margin-block: 0;
+          overflow: visible;
         }
         .map-frame {
           margin: 10px;
         }
 
-        .main-menu-panel {
-          width: min(400px, 100%);
-          max-height: min(92dvh, 100%);
-          border-radius: 16px;
+        #main-menu {
+          align-items: flex-start;
+          overflow-x: hidden;
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
+        }
+        .wallet-picker {
+          align-items: flex-start;
+        }
+        .main-menu-panel {
+          width: min(400px, 100%);
+          margin-block: 0;
+          border-radius: 16px;
         }
         .main-menu-header {
           padding: 22px 20px 16px;
@@ -3180,6 +3356,27 @@
           height: 52px;
           font-size: 12px;
         }
+      }
+
+      /* APK / phone: overlay is the only scroller, always from the top. */
+      body.is-mobile #container-loot-overlay:not([hidden]),
+      body.is-mobile #trader-overlay:not([hidden]),
+      body.is-mobile #red-order-dialog-overlay:not([hidden]),
+      body.is-mobile #ashen-dialog-overlay:not([hidden]),
+      body.is-mobile #ashen-militia-dialog-overlay:not([hidden]) {
+        align-items: flex-start;
+        justify-content: center;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+      }
+      body.is-mobile .container-loot-layout,
+      body.is-mobile .trader-layout,
+      body.is-mobile .red-dialog-layout {
+        margin-block: 0;
+        max-height: none;
+        overflow: visible;
       }
     </style>
   </head>

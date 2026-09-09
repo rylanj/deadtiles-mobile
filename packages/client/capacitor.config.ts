@@ -10,7 +10,9 @@ const config: CapacitorConfig = {
   webDir: "dist",
   server: {
     androidScheme: "https",
-    // LAN Colyseus over HTTP while iterating. Use HTTPS in production builds.
+    // Do not set hostname to play.deadtiles.com. Capacitor would treat that
+    // origin as the local asset server, so /auth and Colyseus would get
+    // index.html instead of the live API.
     cleartext: true,
   },
   android: {

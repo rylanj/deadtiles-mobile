@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @font-face {
+        font-family: "Oswald";
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url("Oswald-Regular.woff2") format("woff2");
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1536px;
+        height: 1536px;
+        background: #0a0c0a;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .wordmark {
+        margin: 0;
+        font-family: Oswald, sans-serif;
+        font-style: normal;
+        font-weight: 400;
+        font-size: 100px;
+        line-height: 1;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: #f4f4f5;
+        padding-left: 0.28em;
+        white-space: nowrap;
+      }
+      .tiles {
+        color: #9fe830;
+        text-shadow:
+          0 0 10px hsla(84, 80%, 55%, 0.95),
+          0 0 28px hsla(84, 80%, 55%, 0.7),
+          0 0 56px hsla(84, 80%, 45%, 0.45),
+          0 0 96px hsla(84, 80%, 40%, 0.28);
+      }
+    </style>
+  </head>
+  <body>
+    <h1 class="wordmark">DEAD<span class="tiles">TILES</span></h1>
+  </body>
+</html>
