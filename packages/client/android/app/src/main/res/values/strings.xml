@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Deadtiles</string>
+    <string name="title_activity_main">Deadtiles</string>
+    <string name="package_name">com.deadtiles.game</string>
+    <string name="custom_url_scheme">com.deadtiles.game</string>
+</resources>

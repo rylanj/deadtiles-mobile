@@ -1,0 +1,29 @@
+{
+  "name": "@zombie/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "npm run assets:atlas:ensure --prefix ../..",
+    "dev": "vite",
+    "prebuild": "npm run assets:atlas:ensure --prefix ../..",
+    "build": "npm run build -w @zombie/shared && tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "cap:sync": "cap sync android",
+    "cap:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@metamask/connect-solana": "^2.1.1",
+    "@zombie/shared": "*",
+    "bs58": "^6.0.0",
+    "colyseus.js": "^0.16.19",
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  }
+}

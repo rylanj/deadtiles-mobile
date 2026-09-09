@@ -141,3 +141,25 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Deadtiles
+.DS_Store
+packages/server/data/
+scripts/maps/
+
+# Cursor
+.cursor/
+
+# Android / Capacitor
+.gradle/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+packages/client/android/app/src/main/assets/public/

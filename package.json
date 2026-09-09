@@ -1,0 +1,28 @@
+{
+  "name": "deadtiles",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
+  "scripts": {
+    "free-port": "node scripts/free-port.mjs",
+    "map:export": "node scripts/render-world-map.mjs",
+    "assets:atlas": "npm run build -w @zombie/shared && tsx scripts/pack-atlases.mts",
+    "assets:atlas:ensure": "npm run build -w @zombie/shared && tsx scripts/pack-atlases.mts --if-missing",
+    "check:walls": "node scripts/check-partition-faces.mjs && node scripts/check-wall-order.mjs && tsx scripts/check-wall-building-order.mts && tsx scripts/check-entity-wall-order.mts",
+    "check:los": "node scripts/check-structure-los.mjs",
+    "dev": "concurrently --kill-others-on-fail -n server,client -c blue,green \"npm run dev -w @zombie/server\" \"npm run dev -w @zombie/client\"",
+    "build": "npm run build -w @zombie/shared && npm run build -w @zombie/server && npm run build -w @zombie/client",
+    "start": "npm run free-port && npm run start -w @zombie/server",
+    "apk:sync": "npm run build -w @zombie/client && npm run cap:sync -w @zombie/client",
+    "apk:open": "npm run cap:open -w @zombie/client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "sharp": "^0.35.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
