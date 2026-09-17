@@ -6,6 +6,7 @@ import {
   RADIO_SLOT_INDEX,
   MAP_SLOT_INDEX,
   getEntryDurability,
+  getEntryWetness,
   getItemDefinition,
   getMaxDurability,
   WEAPON_SLOT_COUNT,
@@ -24,8 +25,9 @@ import {
   weaponIndexFromItemId,
   type Inventory,
 } from "@zombie/shared";
+import { AudioManager } from "../audio/AudioManager";
 import { isMobileDevice } from "../device";
-import { appendItemDurabilityBar, appendItemIcon } from "./itemIcons";
+import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import {
@@ -49,6 +51,7 @@ export type InventoryPlayerStats = {
   health: number;
   hunger: number;
   thirst: number;
+  temperature?: number;
   maxHealth: number;
   maxHunger: number;
   maxThirst: number;
@@ -88,6 +91,7 @@ export class InventoryUI {
     health: 100,
     hunger: 100,
     thirst: 100,
+    temperature: 37,
     maxHealth: 100,
     maxHunger: 100,
     maxThirst: 100,
@@ -252,13 +256,16 @@ export class InventoryUI {
   }
 
   open() {
+    if (this.visible) return;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("inventory-open");
     resetDialogScroll(this.overlay);
+    AudioManager.get().play("inventory_open");
   }
 
   close() {
+    const wasOpen = this.visible;
     cancelAllSlotDrags();
     this.visible = false;
     this.overlay.hidden = true;
@@ -268,6 +275,7 @@ export class InventoryUI {
     this.footerEl.hidden = true;
     this.hideActionButtons();
     document.body.classList.remove("inventory-open");
+    if (wasOpen) AudioManager.get().play("inventory_close");
   }
 
   isOpen() {
@@ -395,6 +403,7 @@ export class InventoryUI {
         cell.appendChild(qty);
       }
       appendItemDurabilityBar(cell, slot);
+      appendItemWetnessBar(cell, slot);
 
       const weaponIndex = weaponIndexFromItemId(slot.id);
       const isWeaponEquipped =
@@ -415,9 +424,11 @@ export class InventoryUI {
         getMaxDurability(slot.id) != null
           ? ` · ${getEntryDurability(slot)}/${getMaxDurability(slot.id)}`
           : "";
+      const wet = getEntryWetness(slot);
+      const wetLabel = wet > 0.005 ? ` · ${Math.round(wet * 100)}% wet` : "";
       cell.setAttribute(
         "aria-label",
-        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${dur}`,
+        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${dur}${wetLabel}`,
       );
 
       const toggleEquip = () => {
@@ -549,6 +560,9 @@ export class InventoryUI {
     else zoneHint = " · pocket";
     if (isHotbarOnlyItem(slot.id)) zoneHint += " · too large for pockets";
     if (worn) zoneHint += " · worn";
+    const wet = getEntryWetness(slot);
+    if (wet > 0.7) zoneHint += " · soaked";
+    else if (wet > 0.005) zoneHint += ` · ${Math.round(wet * 100)}% wet`;
     const loadedRounds = this.slotLoadedRounds(this.selectedSlot, slot.id);
     if (loadedRounds > 0) zoneHint += ` · ${loadedRounds} loaded`;
 

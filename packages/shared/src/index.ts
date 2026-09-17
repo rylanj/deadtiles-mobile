@@ -15,6 +15,7 @@ export * from "./redOrder.js";
 export * from "./dialogVariants.js";
 export * from "./crafting.js";
 export * from "./fireplace.js";
+export * from "./temperature.js";
 export * from "./sealedRegion.js";
 export * from "./combat.js";
 export * from "./pathfinding.js";

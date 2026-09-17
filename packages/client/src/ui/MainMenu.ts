@@ -4,11 +4,13 @@ import {
   STAMINA_MAX,
   SURVIVOR_NAME_MAX,
   THIRST_MAX,
+  TEMPERATURE_CORE_DEFAULT,
   createEmptyInventory,
   normalizeSurvivorName,
   playerMaxHealthFromInfection,
   serializeInventory,
   survivorNameValidationError,
+  temperatureHudLook,
 } from "@zombie/shared";
 import {
   clearStoredSession,
@@ -27,6 +29,7 @@ import { listWalletOptions, rememberWallet } from "../network/walletOptions";
 import { isNativeApp } from "../native";
 import { isMobileDevice } from "../device";
 import { pickWallet } from "./WalletPicker";
+import { resetDialogScroll } from "./dialogScroll";
 import { showDesktopWalletHelp, showMobileWebWalletHelp } from "./MobileWebWalletHelp";
 import {
   needsDesktopWalletHelp,
@@ -126,6 +129,8 @@ export class MainMenu {
   private staminaFill: HTMLElement;
   private hungerFill: HTMLElement;
   private thirstFill: HTMLElement;
+  private tempFill: HTMLElement;
+  private tempLabel: HTMLElement;
   private avatarImg: HTMLImageElement;
   private previewHotbar?: WeaponHotbar;
   private walletHint: HTMLElement;
@@ -187,13 +192,16 @@ export class MainMenu {
     const stamina = makeBarRow("main-menu-stamina-label", "Stamina", "main-menu-stamina-fill");
     const hunger = makeBarRow("main-menu-hunger-label", "Hunger", "main-menu-hunger-fill");
     const thirst = makeBarRow("main-menu-thirst-label", "Thirst", "main-menu-thirst-fill");
+    const temp = makeBarRow("main-menu-temp-label", "Temp", "main-menu-temp-fill");
     this.healthFill = health.fill;
     this.healthCap = health.cap;
     this.healthLost = health.lost;
     this.staminaFill = stamina.fill;
     this.hungerFill = hunger.fill;
     this.thirstFill = thirst.fill;
-    bars.append(health.row, stamina.row, hunger.row, thirst.row);
+    this.tempFill = temp.fill;
+    this.tempLabel = temp.row.querySelector(".player-bar-label") as HTMLElement;
+    bars.append(health.row, stamina.row, hunger.row, thirst.row, temp.row);
 
     const identityRow = document.createElement("div");
     identityRow.className = "main-menu-preview-top";
@@ -325,6 +333,7 @@ export class MainMenu {
     });
 
     void this.tryRestoreSession();
+    resetDialogScroll(this.root);
     window.setTimeout(() => this.refreshWalletHint(), 400);
     window.setTimeout(() => this.refreshWalletHint(), 1600);
     try {
@@ -339,6 +348,10 @@ export class MainMenu {
     const stamina = preview.exists ? (preview.stamina ?? STAMINA_MAX) : STAMINA_MAX;
     const hunger = preview.exists ? (preview.hunger ?? HUNGER_MAX) : HUNGER_MAX;
     const thirst = preview.exists ? (preview.thirst ?? THIRST_MAX) : THIRST_MAX;
+    const temperature = preview.exists
+      ? (preview.temperature ?? TEMPERATURE_CORE_DEFAULT)
+      : TEMPERATURE_CORE_DEFAULT;
+    const tempLook = temperatureHudLook(temperature);
     const infected = !!(preview.exists && preview.infected);
     const infection = preview.exists ? (preview.infection ?? 0) : 0;
     const maxHp = playerMaxHealthFromInfection(infection, infected);
@@ -350,6 +363,9 @@ export class MainMenu {
     this.staminaFill.style.width = `${clampPct(stamina, STAMINA_MAX)}%`;
     this.hungerFill.style.width = `${clampPct(hunger, HUNGER_MAX)}%`;
     this.thirstFill.style.width = `${clampPct(thirst, THIRST_MAX)}%`;
+    this.tempFill.style.width = `${tempLook.percent}%`;
+    this.tempFill.style.background = tempLook.fillColor;
+    this.tempLabel.textContent = tempLook.label;
     this.avatarImg.src = playerAvatarSrc(
       preview.exists ? (preview.clothingSkin ?? 1) : 1,
     );
@@ -419,6 +435,7 @@ export class MainMenu {
   private refreshWalletHint() {
     const needsHelp = needsMobileWebWalletHelp() || needsDesktopWalletHelp();
     this.walletHint.hidden = Boolean(this.session) || !needsHelp;
+    resetDialogScroll(this.root);
   }
 
   private handleSignOut() {

@@ -6,6 +6,7 @@ import {
   SOLFLARE_DOWNLOAD_HREF,
   solflareBrowseHref,
 } from "../network/walletDeepLinks";
+import { resetDialogScroll } from "./dialogScroll";
 
 type HelpLink = {
   href: string;
@@ -89,6 +90,7 @@ function showWalletHelpDialog(
     panel.append(title, hint, list, cancel);
     overlay.appendChild(panel);
     host.appendChild(overlay);
+    resetDialogScroll(overlay);
     anchors[0]?.focus();
   });
 }

@@ -1,5 +1,6 @@
 import {
   getEntryDurability,
+  getEntryWetness,
   getMaxDurability,
   type InventoryEntry,
 } from "@zombie/shared";
@@ -98,6 +99,27 @@ export function appendItemDurabilityBar(
 
   const fill = document.createElement("div");
   fill.className = "inventory-cell-durability-fill";
+  fill.style.width = `${pct}%`;
+  track.appendChild(fill);
+  parent.appendChild(track);
+  return true;
+}
+
+/** Thin blue soak bar along the bottom of an inventory cell. Hidden when dry. */
+export function appendItemWetnessBar(
+  parent: HTMLElement,
+  entry: InventoryEntry,
+): boolean {
+  const wet = getEntryWetness(entry);
+  if (wet <= 0.005) return false;
+  const pct = Math.max(0, Math.min(100, wet * 100));
+
+  const track = document.createElement("div");
+  track.className = "inventory-cell-wetness";
+  track.setAttribute("aria-hidden", "true");
+
+  const fill = document.createElement("div");
+  fill.className = "inventory-cell-wetness-fill";
   fill.style.width = `${pct}%`;
   track.appendChild(fill);
   parent.appendChild(track);

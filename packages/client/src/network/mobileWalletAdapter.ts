@@ -1,10 +1,12 @@
 import bs58 from "bs58";
 import { isNativeApp, SolanaMWA } from "../native";
+import appIcon from "../brand/deadtiles-icon.png?inline";
 
+/** Phantom fetches `icon` itself. A data URI always works; a site path 500s today. */
 const APP_IDENTITY = {
   name: "Deadtiles",
   uri: "https://play.deadtiles.com",
-  icon: "brand/deadtiles-logo.png",
+  icon: appIcon,
 } as const;
 
 export type MobileWalletLogin = {
@@ -104,33 +106,6 @@ function mapMwaError(err: unknown): Error {
   return err instanceof Error ? err : new Error(message);
 }
 
-function waitUntilAppForeground(): Promise<void> {
-  const visible = () =>
-    typeof document === "undefined" || document.visibilityState === "visible";
-
-  return new Promise((resolve) => {
-    const finish = () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-      resolve();
-    };
-    const onVisible = () => {
-      if (visible()) finish();
-    };
-    if (visible()) {
-      resolve();
-      return;
-    }
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    window.setTimeout(finish, 4000);
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function listMobileWallets(): Promise<
   { id: string; name: string; icon?: string; packageName: string }[]
 > {
@@ -156,11 +131,12 @@ export async function setPreferredMobileWallet(
 }
 
 /**
- * Authorize, then fetch a nonce after Deadtiles is back in front (Android
- * cannot resolve public DNS while Phantom is covering the app), then sign.
+ * One Phantom session: connect and sign the login nonce fetched while
+ * Deadtiles is still in front (Android DNS fails if we fetch under Phantom).
  */
 export async function signInWithMobileWallet(opts: {
-  fetchNonce: (wallet: string) => Promise<{ nonce: string; message: string }>;
+  nonce: string;
+  message: string;
   onPhase?: (message: string) => void;
   packageName?: string;
   walletName?: string;
@@ -172,15 +148,16 @@ export async function signInWithMobileWallet(opts: {
   const { transact } = await import(
     "@solana-mobile/mobile-wallet-adapter-protocol"
   );
+  const encoded = new TextEncoder().encode(opts.message);
 
   try {
     await setPreferredMobileWallet(opts.packageName ?? null);
     opts.onPhase?.(
       opts.walletName
-        ? `Approve the connection in ${opts.walletName}…`
-        : "Approve the connection in Phantom, Solflare, or Seed Vault…",
+        ? `Approve connect and login in ${opts.walletName}…`
+        : "Approve connect and login in Phantom…",
     );
-    const authorized = await transact(async (wallet) => {
+    return await transact(async (wallet) => {
       const auth = await wallet.authorize({
         chain: "solana:mainnet",
         identity: APP_IDENTITY,
@@ -189,31 +166,9 @@ export async function signInWithMobileWallet(opts: {
       if (!account?.address) {
         throw new Error("Wallet did not return an account");
       }
-      return {
-        wallet: mwaAddressToBase58(account.address),
-        address: account.address,
-        authToken: auth.auth_token,
-      };
-    });
-
-    await waitUntilAppForeground();
-    await sleep(350);
-
-    opts.onPhase?.("Talking to the Deadtiles server…");
-    const { nonce, message } = await opts.fetchNonce(authorized.wallet);
-    const encoded = new TextEncoder().encode(message);
-
-    opts.onPhase?.("Approve the login signature…");
-    return await transact(async (wallet) => {
-      const auth = await wallet.authorize({
-        chain: "solana:mainnet",
-        identity: APP_IDENTITY,
-        auth_token: authorized.authToken,
-      });
-      const address = auth.accounts?.[0]?.address ?? authorized.address;
 
       const { signed_payloads } = await wallet.signMessages({
-        addresses: [address],
+        addresses: [account.address],
         payloads: [bytesToBase64(encoded)],
       });
       const first = signed_payloads?.[0];
@@ -226,8 +181,8 @@ export async function signInWithMobileWallet(opts: {
         encoded,
       );
       return {
-        wallet: authorized.wallet,
-        nonce,
+        wallet: mwaAddressToBase58(account.address),
+        nonce: opts.nonce,
         signature: bs58.encode(signatureBytes),
       };
     });

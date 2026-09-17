@@ -30,6 +30,7 @@ import {
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
+  fireplaceAirHeatFromOffset,
 } from "@zombie/shared";
 import {
   buildingHospitalDoorKey,
@@ -584,6 +585,31 @@ export class InteriorView {
       if (!sprite?.visible) continue;
       cb(sprite.x, sprite.y - sprite.displayHeight * 0.45);
     }
+  }
+
+  /** True when a lit fireplace is on or adjacent to this interior tile. */
+  isNearLitFireplace(tx: number, ty: number, nowMs: number): boolean {
+    if (!this.visible) return false;
+    for (const tile of this.fireplaces) {
+      if (nowMs >= tile.activeUntil) continue;
+      if (Math.max(Math.abs(tile.x - tx), Math.abs(tile.y - ty)) <= 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 0–1 indoor fire air heat from the strongest lit fireplace. */
+  fireplaceAirHeatAt(tx: number, ty: number, nowMs: number): number {
+    if (!this.visible) return 0;
+    let best = 0;
+    for (const tile of this.fireplaces) {
+      if (nowMs >= tile.activeUntil) continue;
+      const heat = fireplaceAirHeatFromOffset(tile.x - tx, tile.y - ty, true);
+      if (heat > best) best = heat;
+      if (best >= 1) return 1;
+    }
+    return best;
   }
 
   /** Re-clamp every placeable sprite after walls/doors change. */

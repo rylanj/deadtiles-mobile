@@ -149,6 +149,12 @@ import {
   getWorldChainlinkPanelOrigin,
   worldChainlinkOccupiesTile,
   fireplaceIsActive,
+  temperatureHudLook,
+  computeFeltAmbient,
+  wornClothingStats,
+  buildingInteriorIsPowered,
+  fireplaceAirHeatFromOffset,
+  TEMPERATURE_CORE_DEFAULT,
   countStandingTreesNear,
   phaseOfDay,
   isNightPhase,
@@ -163,8 +169,6 @@ import {
   type WorldSfxPayload,
   type WorldSfxStopKind,
   dayNightLook,
-  isBirchportHospital,
-  isBirchportBarracksMessHall,
   parseSky,
   parsePrecip,
 } from "@zombie/shared";
@@ -677,14 +681,21 @@ export class WorldScene extends Phaser.Scene {
   private staminaFillEl?: HTMLElement;
   private hungerFillEl?: HTMLElement;
   private thirstFillEl?: HTMLElement;
+  private tempFillEl?: HTMLElement;
   private playerAvatarImgEl?: HTMLImageElement;
   private lastHudAvatarSkin = -1;
   private lastInfectionLogAt = 0;
   private hungerTrackEl?: HTMLElement;
   private thirstTrackEl?: HTMLElement;
+  private tempTrackEl?: HTMLElement;
   private hungerLabelEl?: HTMLElement;
   private thirstLabelEl?: HTMLElement;
+  private tempLabelEl?: HTMLElement;
+  private temperatureFxEl?: HTMLElement;
   private worldClockEl?: HTMLElement;
+  private worldClockTimeEl?: HTMLElement;
+  private worldClockCoreEl?: HTMLElement;
+  private worldClockAirEl?: HTMLElement;
   private consumeActionLabel = "Eating";
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private shiftKey?: Phaser.Input.Keyboard.Key;
@@ -1552,14 +1563,21 @@ export class WorldScene extends Phaser.Scene {
     this.staminaFillEl = document.getElementById("stamina-fill") ?? undefined;
     this.hungerFillEl = document.getElementById("hunger-fill") ?? undefined;
     this.thirstFillEl = document.getElementById("thirst-fill") ?? undefined;
+    this.tempFillEl = document.getElementById("temp-fill") ?? undefined;
     this.playerAvatarImgEl =
       (document.querySelector("#player-avatar img") as HTMLImageElement | null) ??
       undefined;
     this.hungerTrackEl = document.getElementById("hunger-track") ?? undefined;
     this.thirstTrackEl = document.getElementById("thirst-track") ?? undefined;
+    this.tempTrackEl = document.getElementById("temp-track") ?? undefined;
     this.hungerLabelEl = document.getElementById("hunger-label") ?? undefined;
     this.thirstLabelEl = document.getElementById("thirst-label") ?? undefined;
+    this.tempLabelEl = document.getElementById("temp-label") ?? undefined;
+    this.temperatureFxEl = document.getElementById("temperature-fx") ?? undefined;
     this.worldClockEl = document.getElementById("world-clock") ?? undefined;
+    this.worldClockTimeEl = document.getElementById("world-clock-time") ?? undefined;
+    this.worldClockCoreEl = document.getElementById("world-clock-core") ?? undefined;
+    this.worldClockAirEl = document.getElementById("world-clock-air") ?? undefined;
 
     this.tileManager = drawProceduralWorld(this, this.worldBounds);
     this.dayNightLighting = new DayNightLighting(this);
@@ -2794,12 +2812,10 @@ export class WorldScene extends Phaser.Scene {
     const wasOpen = this.inventoryUI?.isOpen() ?? false;
     this.inventoryUI?.toggle();
     if (!wasOpen) {
-      AudioManager.get().play("ui_open");
       this.notifyTutorial("inventory");
       this.lastInventoryRenderKey = "";
       this.refreshInventoryUI();
     } else {
-      AudioManager.get().play("ui_close");
       this.lastInventoryRenderKey = "";
     }
   }
@@ -3828,9 +3844,10 @@ export class WorldScene extends Phaser.Scene {
     const health = Math.ceil(me.health);
     const hunger = Math.ceil(me.hunger);
     const thirst = Math.ceil(me.thirst);
+    const temperature = Math.round((me.temperature ?? TEMPERATURE_CORE_DEFAULT) * 10) / 10;
     const infected = me.infected ? 1 : 0;
     const infection = me.infection ?? 0;
-    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}|${health}|${hunger}|${thirst}|${infected}|${infection}`;
+    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}|${health}|${hunger}|${thirst}|${temperature}|${infected}|${infection}`;
     if (key === this.lastInventoryRenderKey) return;
     this.lastInventoryRenderKey = key;
     this.inventoryUI.render(
@@ -3840,6 +3857,7 @@ export class WorldScene extends Phaser.Scene {
         health: me.health,
         hunger: me.hunger,
         thirst: me.thirst,
+        temperature: me.temperature ?? TEMPERATURE_CORE_DEFAULT,
         maxHealth: playerMaxHealthFromInfection(infection, !!me.infected),
         maxHunger: HUNGER_MAX,
         maxThirst: THIRST_MAX,
@@ -9588,6 +9606,27 @@ export class WorldScene extends Phaser.Scene {
     if (this.statusEl) this.statusEl.textContent = text;
   }
 
+  private localPlayerFireHeat(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+  }): number {
+    const tx = Math.floor(me.x);
+    const ty = Math.floor(me.y);
+    const now = Date.now();
+    if (me.inInterior) {
+      return this.interiorView?.fireplaceAirHeatAt(tx, ty, now) ?? 0;
+    }
+    let best = 0;
+    for (const tile of this.structureFireplacesOverworld.values()) {
+      if (!fireplaceIsActive(tile.activeUntil, now)) continue;
+      const heat = fireplaceAirHeatFromOffset(tile.x - tx, tile.y - ty, false);
+      if (heat > best) best = heat;
+      if (best >= 1) return 1;
+    }
+    return best;
+  }
+
   /** Status bar + search progress — once per frame, not per entity update. */
   private updateDayNightLighting(dt = 16) {
     if (!this.dayNightLighting || !this.room?.state) return;
@@ -9595,10 +9634,7 @@ export class WorldScene extends Phaser.Scene {
     const me = this.room.state.players?.get(this.sessionId);
     const indoor = !!me?.inInterior;
     const alwaysLit =
-      indoor &&
-      !!me &&
-      (isBirchportHospital(me.buildingX, me.buildingY) ||
-        isBirchportBarracksMessHall(me.buildingX, me.buildingY));
+      indoor && !!me && buildingInteriorIsPowered(me.buildingX, me.buildingY);
     const sky = parseSky(this.room.state.sky);
     const precip = parsePrecip(this.room.state.weather);
     this.weatherFx?.update(
@@ -9633,15 +9669,41 @@ export class WorldScene extends Phaser.Scene {
     if (this.worldClockEl) {
       const inventoryJson =
         this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
-      const wornWatch = parseInventory(inventoryJson)[WATCH_SLOT_INDEX];
+      const inventory = parseInventory(inventoryJson);
+      const wornWatch = inventory[WATCH_SLOT_INDEX];
       const showClock = !!wornWatch && isWatchItem(wornWatch.id);
-      this.worldClockEl.hidden = !showClock;
+      this.worldClockEl.hidden = !me;
+      if (this.worldClockTimeEl) {
+        this.worldClockTimeEl.hidden = !showClock;
+        this.worldClockTimeEl.textContent = showClock ? look.clockLabel : "";
+      }
       if (showClock) {
-        this.worldClockEl.textContent = look.clockLabel;
         this.worldClockEl.dataset.phase = look.phase;
       } else {
-        this.worldClockEl.textContent = "";
+        delete this.worldClockEl.dataset.phase;
         delete this.worldClockEl.dataset.weather;
+      }
+      if (me && this.worldClockCoreEl && this.worldClockAirEl) {
+        const equippedSlot =
+          this.localInventorySync?.equippedClothingSlot ??
+          me.equippedClothingSlot ??
+          -1;
+        const worn = wornClothingStats(inventory, equippedSlot);
+        const fireHeat = this.localPlayerFireHeat(me);
+        const airC = computeFeltAmbient({
+          worldTimeMs,
+          sky,
+          precip,
+          indoor,
+          buildingX: indoor ? me.buildingX : undefined,
+          buildingY: indoor ? me.buildingY : undefined,
+          fireHeat,
+          insulation: worn.insulation,
+          wornWetness: worn.wetness,
+        });
+        const coreC = me.temperature ?? TEMPERATURE_CORE_DEFAULT;
+        this.worldClockCoreEl.textContent = `Core ${coreC.toFixed(1)}°C`;
+        this.worldClockAirEl.textContent = `Air ${airC.toFixed(1)}°C`;
       }
     }
 
@@ -9752,6 +9814,9 @@ export class WorldScene extends Phaser.Scene {
     const staminaPct = Math.max(0, Math.min(100, (me.stamina / STAMINA_MAX) * 100));
     const hungerPct = Math.max(0, Math.min(100, (me.hunger / HUNGER_MAX) * 100));
     const thirstPct = Math.max(0, Math.min(100, (me.thirst / THIRST_MAX) * 100));
+    const tempLook = temperatureHudLook(
+      me.temperature ?? TEMPERATURE_CORE_DEFAULT,
+    );
 
     if (this.healthFillEl) this.healthFillEl.style.width = `${healthPct}%`;
     if (this.healthCapEl) this.healthCapEl.style.width = `${capPct}%`;
@@ -9760,6 +9825,11 @@ export class WorldScene extends Phaser.Scene {
     if (this.staminaFillEl) this.staminaFillEl.style.width = `${staminaPct}%`;
     if (this.hungerFillEl) this.hungerFillEl.style.width = `${hungerPct}%`;
     if (this.thirstFillEl) this.thirstFillEl.style.width = `${thirstPct}%`;
+    if (this.tempFillEl) {
+      this.tempFillEl.style.width = `${tempLook.percent}%`;
+      this.tempFillEl.style.background = tempLook.fillColor;
+    }
+    if (this.tempLabelEl) this.tempLabelEl.textContent = tempLook.label;
 
     const clothingSkin =
       this.localInventorySync?.clothingSkin ?? me.clothingSkin ?? 1;
@@ -9777,6 +9847,10 @@ export class WorldScene extends Phaser.Scene {
     this.hungerLabelEl?.classList.toggle("player-bar-label--critical", hungerCritical);
     this.thirstTrackEl?.classList.toggle("player-bar-track--critical", thirstCritical);
     this.thirstLabelEl?.classList.toggle("player-bar-label--critical", thirstCritical);
+    this.tempTrackEl?.classList.toggle("player-bar-track--critical", tempLook.critical);
+    this.tempLabelEl?.classList.toggle("player-bar-label--critical", tempLook.critical);
+    this.temperatureFxEl?.classList.toggle("temp-fx-cold", tempLook.fx === "cold");
+    this.temperatureFxEl?.classList.toggle("temp-fx-hot", tempLook.fx === "hot");
 
     const moving =
       me.anim === "walk" || me.anim === "sprint" || me.anim === "run";
@@ -13230,6 +13304,7 @@ export class WorldScene extends Phaser.Scene {
         maxHunger: HUNGER_MAX,
         maxThirst: THIRST_MAX,
         infected: !!me.infected,
+        temperature: me.temperature ?? TEMPERATURE_CORE_DEFAULT,
       })
     ) {
       return;

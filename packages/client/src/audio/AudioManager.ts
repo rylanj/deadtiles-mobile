@@ -47,6 +47,8 @@ export type SfxId =
   | "footstep_run"
   | "ui_open"
   | "ui_close"
+  | "inventory_open"
+  | "inventory_close"
   | "death"
   | "fireplace";
 
@@ -68,6 +70,8 @@ export const SFX_FILES: Record<SfxId, readonly string[]> = {
   ],
   ui_open: ["assets/audio/ui_open.ogg", "assets/audio/ui_open.mp3"],
   ui_close: ["assets/audio/ui_close.ogg", "assets/audio/ui_close.mp3"],
+  inventory_open: ["assets/audio/Inventory/OpenInventory.wav"],
+  inventory_close: ["assets/audio/Inventory/CloseInventory.wav"],
   death: ["assets/audio/death.ogg", "assets/audio/death.mp3"],
   fireplace: ["assets/audio/Fireplace/Fireplace1.wav"],
 };
@@ -98,7 +102,11 @@ function gunshotBankVariants(itemId: string): number {
  * Only these ids are loaded at boot (avoids 404 spam for missing placeholders).
  * Add an id here once its file exists under `public/assets/audio/`.
  */
-export const SFX_READY: readonly SfxId[] = ["fireplace"];
+export const SFX_READY: readonly SfxId[] = [
+  "fireplace",
+  "inventory_open",
+  "inventory_close",
+];
 
 const VOLUME_KEY = "deadtiles.sfxVolume";
 const MUTE_KEY = "deadtiles.sfxMute";
@@ -170,6 +178,7 @@ const MELEE_HIT_GAIN: Record<MeleeHitBank, number> = {
 const DOOR_HEAR_RADIUS = 22;
 const DOOR_FULL_DIST = 6;
 const DOOR_GAIN = 0.3;
+const INVENTORY_UI_GAIN = 0.12;
 
 export type GunshotListener = {
   x: number;
@@ -648,9 +657,18 @@ export class AudioManager {
       fullDist?: number;
     },
   ) {
-    if (id === "ui_open" || id === "ui_close") {
+    if (
+      id === "ui_open" ||
+      id === "ui_close" ||
+      id === "inventory_open" ||
+      id === "inventory_close"
+    ) {
       this.playKey(sfxKey(id), id, {
-        volume: opts?.volume ?? 1,
+        volume:
+          opts?.volume ??
+          (id === "inventory_open" || id === "inventory_close"
+            ? INVENTORY_UI_GAIN
+            : 1),
         rate: opts?.rate,
       });
       return;

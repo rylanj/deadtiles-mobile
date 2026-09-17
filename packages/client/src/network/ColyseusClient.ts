@@ -29,6 +29,7 @@ export type PlayerPreview = {
   stamina?: number;
   hunger?: number;
   thirst?: number;
+  temperature?: number;
   inventoryJson?: string;
   weaponMagazinesJson?: string;
   equippedInventorySlot?: number;
@@ -146,10 +147,13 @@ export function clearStoredSession() {
 }
 
 async function fetchAuthNonce(
-  walletAddress: string,
+  walletAddress?: string,
 ): Promise<{ nonce: string; message: string }> {
+  const query = walletAddress
+    ? `?wallet=${encodeURIComponent(walletAddress)}`
+    : "";
   return apiRequest<{ nonce: string; message: string }>(
-    `${serverUrl()}/auth/nonce?wallet=${encodeURIComponent(walletAddress)}`,
+    `${serverUrl()}/auth/nonce${query}`,
   );
 }
 
@@ -199,8 +203,10 @@ export async function loginWithSolanaWallet(
   if (isNativeApp()) {
     onPhase?.("Checking the Deadtiles server…");
     await apiRequest<{ ok: boolean }>(`${serverUrl()}/health`);
+    const challenge = await fetchAuthNonce();
     const { wallet, nonce, signature } = await signInWithMobileWallet({
-      fetchNonce: fetchAuthNonce,
+      nonce: challenge.nonce,
+      message: challenge.message,
       onPhase,
       packageName: choice?.packageName,
       walletName: choice?.name,
@@ -378,6 +384,7 @@ export type PlayerSchema = {
   staminaRegenAfter: number;
   hunger: number;
   thirst: number;
+  temperature: number;
   isConsuming: boolean;
   consumeEndTime: number;
   consumeDurationMs: number;

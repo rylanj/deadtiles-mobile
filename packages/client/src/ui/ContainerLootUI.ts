@@ -22,7 +22,7 @@ import {
   type Inventory,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
-import { appendItemDurabilityBar, appendItemIcon } from "./itemIcons";
+import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import {
@@ -30,6 +30,82 @@ import {
   cancelAllSlotDrags,
   type SlotTapState,
 } from "./slotPointerDnD";
+
+const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
+  desk: "Desk",
+  desk2: "Desk",
+  bigshelf: "Shelf",
+  bigbox: "Crate",
+  watercontainer: "Water Container",
+  cabinet: "Cabinet",
+  workbench: "Workbench",
+  bed: "Bed",
+  dresser: "Dresser",
+  bookshelf: "Bookshelf",
+  bookshelf2: "Bookshelf",
+  lockers: "Lockers",
+  drawers: "Drawers",
+  guncabinet: "Gun Cabinet",
+  fridge: "Fridge",
+  kitchensink: "Kitchen Sink",
+  dinnertable: "Dinner Table",
+  nightstand: "Nightstand",
+  deadofficer: "Dead Officer",
+  bagchair: "Chair",
+  suitcase: "Suitcase",
+  watercooler: "Water Cooler",
+  trashcan: "Trash Can",
+  checkout: "Checkout",
+  supershelf1: "Shelf",
+  supershelf2: "Shelf",
+  superfridge1: "Fridge",
+  hospitalbed: "Hospital Bed",
+  hospitalbed2: "Hospital Bed",
+  hospitalbed3: "Hospital Bed",
+  ivstand: "IV Stand",
+  medicalcart: "Medical Cart",
+  medicalreception: "Reception Desk",
+  medicaldrawers: "Medical Drawers",
+  threeseater: "Bench",
+  threeseater2: "Bench",
+  threeseater3: "Bench",
+  vendingmachine: "Vending Machine",
+  counter: "Counter",
+  motelbed: "Bed",
+  minifridge: "Mini Fridge",
+  groundbackpack: "Backpack",
+  militarybed: "Camp Bed",
+  footlocker: "Footlocker",
+  kitbag: "Kit Bag",
+  camptable: "Camp Table",
+  campchair: "Camp Chair",
+  militarybasket: "Laundry Basket",
+  range: "Range",
+  hotdisplay: "Hot Display",
+  drinkdisplay: "Drink Station",
+  canteentable1: "Canteen Table",
+  canteentable2: "Canteen Table",
+  canteentable3: "Canteen Table",
+  canteenchair: "Canteen Chair",
+  fallentree: "Fallen Tree",
+  zombie: "Zombie",
+  guard: "Guard",
+};
+
+function furnitureDisplayName(objectType: string): string {
+  if (!objectType) return "Loot";
+  const key = objectType.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  const mapped = FURNITURE_DISPLAY_NAMES[key];
+  if (mapped) return mapped;
+  const spaced = objectType
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Za-z])\d+/g, "$1")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) return "Loot";
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export type ContainerLootUIHandlers = {
   onTakeFromContainer: (fromSlot: number, toSlot: number) => void;
@@ -226,48 +302,10 @@ export class ContainerLootUI {
   }
 
   render(containerJson: string, playerInventoryJson: string) {
-    this.titleEl.textContent = this.formatTitle(this.objectType);
+    this.titleEl.textContent = furnitureDisplayName(this.objectType);
     this.containerInventory = parseContainerInventory(containerJson);
     this.playerInventory = parseInventory(playerInventoryJson);
     this.rebuildGrids();
-  }
-
-  private formatTitle(objectType: string): string {
-    if (!objectType) return "Loot";
-    if (objectType === "Zombie") return "Zombie";
-    if (objectType === "Guard") return "Guard";
-    if (
-      objectType === "hospitalbed" ||
-      objectType === "hospitalbed2" ||
-      objectType === "hospitalbed3"
-    ) {
-      return "Hospital Bed";
-    }
-    if (objectType === "ivstand") return "IV Stand";
-    if (objectType === "medicalcart") return "Medical Cart";
-    if (objectType === "medicalreception") return "Reception Desk";
-    if (objectType === "medicaldrawers") return "Medical Drawers";
-    if (objectType === "fallenTree") return "Fallen Tree";
-    if (objectType === "militarybed") return "Camp Bed";
-    if (objectType === "footlocker") return "Footlocker";
-    if (objectType === "kitbag") return "Kit Bag";
-    if (objectType === "camptable") return "Camp Table";
-    if (objectType === "militarybasket") return "Laundry Basket";
-    if (objectType === "range") return "Range";
-    if (objectType === "hotdisplay") return "Hot Display";
-    if (objectType === "drinkdisplay") return "Drink Station";
-    if (
-      objectType === "canteentable1" ||
-      objectType === "canteentable2" ||
-      objectType === "canteentable3"
-    ) {
-      return "Canteen Table";
-    }
-    if (objectType === "canteenchair") return "Canteen Chair";
-    return objectType
-      .replace(/([a-z])([A-Z0-9])/g, "$1 $2")
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   private rebuildGrids() {
@@ -374,6 +412,7 @@ export class ContainerLootUI {
         cell.appendChild(qty);
       }
       appendItemDurabilityBar(cell, slot);
+      appendItemWetnessBar(cell, slot);
 
       cell.setAttribute(
         "aria-label",

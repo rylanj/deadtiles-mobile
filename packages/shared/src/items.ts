@@ -67,6 +67,11 @@ export type InventoryEntry = {
    * (melee swings, lighter sparks). Missing → full max.
    */
   durability?: number;
+  /**
+   * Clothing soak 0–1. Missing or 0 = dry (no inventory bar).
+   * Only clothing stores this; wearing it is what affects temperature.
+   */
+  wetness?: number;
 };
 
 export function isItemRarity(value: unknown): value is ItemRarity {
@@ -102,6 +107,13 @@ export function withNormalizedItemMeta(entry: InventoryEntry): InventoryEntry {
   };
   if (entry.magazineRounds != null) next.magazineRounds = entry.magazineRounds;
   if (entry.durability != null) next.durability = entry.durability;
+  if (
+    typeof entry.wetness === "number" &&
+    Number.isFinite(entry.wetness) &&
+    entry.wetness > 0
+  ) {
+    next.wetness = Math.max(0, Math.min(1, entry.wetness));
+  }
   return next;
 }
 /** One inventory cell — null when empty. */
@@ -141,6 +153,10 @@ export type ItemDefinition = {
   healOverTimeDurationMs?: number;
   /** True when using this item treats an active infection. */
   treatsInfection?: boolean;
+  /** Clothing insulation points (bare = 0, t-shirt = 1). */
+  insulation?: number;
+  /** Core temperature change on use (°C). Water cools. */
+  restoreTemperature?: number;
 };
 
 export const INVENTORY_ITEMS: ItemDefinition[] = [
@@ -195,6 +211,7 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     category: "clothing",
     stackable: false,
     weight: 0.2,
+    insulation: 1,
   },
   {
     id: "black_tshirt",
@@ -202,6 +219,7 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     category: "clothing",
     stackable: false,
     weight: 0.2,
+    insulation: 1,
   },
   {
     id: WATCH_ITEM_ID,
@@ -374,6 +392,7 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     weight: 0.5,
     consumeDurationMs: 2000,
     restoreThirst: 50,
+    restoreTemperature: -1,
   },
 ];
 
@@ -427,6 +446,7 @@ export function canUseConsumable(
     maxHunger: number;
     maxThirst: number;
     infected?: boolean;
+    temperature?: number;
   },
 ): boolean {
   const def = ITEM_BY_ID.get(itemId);
@@ -444,6 +464,11 @@ export function canUseConsumable(
   }
   if ((def.restoreHunger ?? 0) > 0 && stats.hunger < stats.maxHunger) return true;
   if ((def.restoreThirst ?? 0) > 0 && stats.thirst < stats.maxThirst) return true;
+  const restoreTemp = def.restoreTemperature ?? 0;
+  if (restoreTemp !== 0 && typeof stats.temperature === "number") {
+    if (restoreTemp < 0 && stats.temperature > 37.2) return true;
+    if (restoreTemp > 0 && stats.temperature < 36.8) return true;
+  }
 
   // Item restores nothing useful, or every restored need is already full.
   return false;
@@ -535,6 +560,49 @@ export function isWeaponItem(itemId: string): boolean {
 
 export function isClothingItem(itemId: string): boolean {
   return getItemDefinition(itemId)?.category === "clothing";
+}
+
+/** Insulation points for a clothing item (0 if unknown / not clothing). */
+export function clothingInsulation(itemId: string): number {
+  const value = getItemDefinition(itemId)?.insulation;
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+/** Clothing soak 0–1. Non-clothing is always dry. */
+export function getEntryWetness(entry: InventoryEntry | null | undefined): number {
+  if (!entry || !isClothingItem(entry.id)) return 0;
+  if (typeof entry.wetness !== "number" || !Number.isFinite(entry.wetness)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, entry.wetness));
+}
+
+/** Write soak onto a clothing entry. Clears the field when dry. */
+export function setEntryWetness(entry: InventoryEntry, wetness: number): void {
+  if (!isClothingItem(entry.id)) {
+    delete entry.wetness;
+    return;
+  }
+  const next = Math.max(0, Math.min(1, Number.isFinite(wetness) ? wetness : 0));
+  if (next <= 0.0005) delete entry.wetness;
+  else entry.wetness = Math.round(next * 10000) / 10000;
+}
+
+export type InventoryEntryMeta = Pick<
+  InventoryEntry,
+  "rarity" | "condition" | "durability" | "wetness"
+>;
+
+export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
+  const meta: InventoryEntryMeta = {
+    rarity: entry.rarity,
+    condition: entry.condition,
+  };
+  if (entry.durability != null) meta.durability = entry.durability;
+  const wet = getEntryWetness(entry);
+  if (wet > 0) meta.wetness = wet;
+  return meta;
 }
 
 export function isWatchItem(itemId: string): boolean {
@@ -768,6 +836,7 @@ export function makeInventoryEntry(
     rarity?: ItemRarity;
     condition?: number;
     durability?: number;
+    wetness?: number;
   },
 ): InventoryEntry {
   const { rarity, condition } = normalizeItemMeta(meta ?? {});
@@ -794,6 +863,9 @@ export function makeInventoryEntry(
     } else {
       entry.durability = maxDur;
     }
+  }
+  if (isClothingItem(itemId)) {
+    setEntryWetness(entry, typeof meta?.wetness === "number" ? meta.wetness : 0);
   }
   return entry;
 }
@@ -1543,11 +1615,7 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
           entry.id,
           entry.quantity,
           entry.magazineRounds,
-          {
-            rarity: entry.rarity,
-            condition: entry.condition,
-            durability: entry.durability,
-          },
+          inventoryEntryMeta(entry),
         );
       }
     }
@@ -1655,11 +1723,7 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
         entry.id,
         entry.quantity,
         entry.magazineRounds,
-        {
-          rarity: entry.rarity,
-          condition: entry.condition,
-          durability: entry.durability,
-        },
+        inventoryEntryMeta(entry),
       );
       if (!itemFitsInSlot(normalized.id, i)) {
         overflow.push(normalized);
@@ -1761,6 +1825,8 @@ export function serializeInventory(inventory: Inventory) {
       serialized.quantity = 1;
       serialized.durability = getEntryDurability(slot);
     }
+    const wet = getEntryWetness(slot);
+    if (wet > 0) serialized.wetness = wet;
     slots[i] = serialized;
   }
   return JSON.stringify(slots);
@@ -1814,6 +1880,7 @@ export function addToContainerInventory(
     rarity?: ItemRarity;
     condition?: number;
     durability?: number;
+    wetness?: number;
   },
 ): Inventory {
   if (quantity <= 0 || !getItemDefinition(itemId)) return inventory;
@@ -1930,11 +1997,7 @@ export function createContainerInventoryFromLoot(loot: InventoryEntry[]): Invent
       entry.id,
       entry.quantity,
       entry.magazineRounds,
-      {
-        rarity: entry.rarity,
-        condition: entry.condition,
-        durability: entry.durability,
-      },
+      inventoryEntryMeta(entry),
     );
   }
   return inventory;
@@ -1963,11 +2026,7 @@ export function playerInventoryToCorpseLoot(
       return;
     }
     entries.push(
-      makeInventoryEntry(entry.id, qty, entry.magazineRounds, {
-        rarity: entry.rarity,
-        condition: entry.condition,
-        durability: entry.durability,
-      }),
+      makeInventoryEntry(entry.id, qty, entry.magazineRounds, inventoryEntryMeta(entry)),
     );
   };
 
@@ -2011,11 +2070,7 @@ export function parseContainerInventory(json: string): Inventory {
           entry.id,
           entry.quantity,
           entry.magazineRounds,
-          {
-            rarity: entry.rarity,
-            condition: entry.condition,
-            durability: entry.durability,
-          },
+          inventoryEntryMeta(entry),
         );
       }
     }
@@ -2033,11 +2088,7 @@ export function serializeContainerInventory(inventory: Inventory): string {
       slots[i] = null;
       continue;
     }
-    slots[i] = makeInventoryEntry(slot.id, slot.quantity, slot.magazineRounds, {
-      rarity: slot.rarity,
-      condition: slot.condition,
-      durability: slot.durability,
-    });
+    slots[i] = makeInventoryEntry(slot.id, slot.quantity, slot.magazineRounds, inventoryEntryMeta(slot));
   }
   return JSON.stringify(slots);
 }

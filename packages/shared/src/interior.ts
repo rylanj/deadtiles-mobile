@@ -183,6 +183,86 @@ export const FURNITURE_TYPES = [
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
+
+const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
+  desk: "Desk",
+  desk2: "Desk",
+  bigshelf: "Shelf",
+  bigbox: "Crate",
+  watercontainer: "Water Container",
+  cabinet: "Cabinet",
+  workbench: "Workbench",
+  bed: "Bed",
+  dresser: "Dresser",
+  bookshelf: "Bookshelf",
+  bookshelf2: "Bookshelf",
+  lockers: "Lockers",
+  drawers: "Drawers",
+  guncabinet: "Gun Cabinet",
+  fridge: "Fridge",
+  kitchensink: "Kitchen Sink",
+  dinnertable: "Dinner Table",
+  nightstand: "Nightstand",
+  deadofficer: "Dead Officer",
+  bagchair: "Chair",
+  suitcase: "Suitcase",
+  watercooler: "Water Cooler",
+  trashcan: "Trash Can",
+  checkout: "Checkout",
+  supershelf1: "Shelf",
+  supershelf2: "Shelf",
+  superfridge1: "Fridge",
+  hospitalbed: "Hospital Bed",
+  hospitalbed2: "Hospital Bed",
+  hospitalbed3: "Hospital Bed",
+  ivstand: "IV Stand",
+  medicalcart: "Medical Cart",
+  medicalreception: "Reception Desk",
+  medicaldrawers: "Medical Drawers",
+  threeseater: "Bench",
+  threeseater2: "Bench",
+  threeseater3: "Bench",
+  vendingmachine: "Vending Machine",
+  counter: "Counter",
+  motelbed: "Bed",
+  minifridge: "Mini Fridge",
+  groundbackpack: "Backpack",
+  militarybed: "Camp Bed",
+  footlocker: "Footlocker",
+  kitbag: "Kit Bag",
+  camptable: "Camp Table",
+  campchair: "Camp Chair",
+  militarybasket: "Laundry Basket",
+  range: "Range",
+  hotdisplay: "Hot Display",
+  drinkdisplay: "Drink Station",
+  canteentable1: "Canteen Table",
+  canteentable2: "Canteen Table",
+  canteentable3: "Canteen Table",
+  canteenchair: "Canteen Chair",
+  fallentree: "Fallen Tree",
+  zombie: "Zombie",
+  guard: "Guard",
+};
+
+function furnitureDisplayKey(objectType: string): string {
+  return objectType.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+/** Player-facing furniture name. Strips variant numbers (Desk2 → Desk). */
+export function furnitureDisplayName(objectType: string): string {
+  if (!objectType) return "Loot";
+  const mapped = FURNITURE_DISPLAY_NAMES[furnitureDisplayKey(objectType)];
+  if (mapped) return mapped;
+  const spaced = objectType
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Za-z])\d+/g, "$1")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) return "Loot";
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 export type SearchableKind = "furniture";
 /** Iso facing encoded in furniture texture names (e.g. Desk1_Idle_SW). */
 export type FurnitureFacing = "NE" | "NW" | "SE" | "SW";
@@ -4613,15 +4693,25 @@ function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
     const doorX = houseRoomDoorAt(along, INNER);
     const wallTiles: InteriorWallTile[] = [];
     for (let y = 0; y <= DEPTH; y++) {
-      // The k=0 bay's west divider (x = along = DEPTH) is the SE-line's own
-      // front wall column — that wall (with its own door gap) already exists;
-      // drawing over it here would seal the SE bay's doorway.
+      // The k=0 bay skips its west divider (x = along = DEPTH) so the room
+      // can include the NW corner. A west-wall (SE) neighbour normally
+      // supplies y = DEPTH, x = 0..DEPTH and closes that L. Drawing the
+      // divider here would cut the corner off and is not the SE doorway
+      // (that gap sits further south on the same column).
       if (along !== DEPTH) wallTiles.push({ x: along, y });
       wallTiles.push({ x: along + PITCH, y });
     }
     for (let x = along + 1; x <= along + INNER; x++) {
       if (x === doorX) continue;
       wallTiles.push({ x, y: DEPTH });
+    }
+    // When no SE bay sits on the west wall, nothing else draws the south
+    // closer across the NW corner. Without it the kitchen opens into the
+    // hallway. Harmless duplicate if the SE neighbour already placed these.
+    if (along === DEPTH) {
+      for (let x = 0; x <= along; x++) {
+        wallTiles.push({ x, y: DEPTH });
+      }
     }
     bays.push({
       role: "kitchen",
@@ -4641,9 +4731,10 @@ function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
 /**
  * Expand each bay's floor AABB (and fade wall set) to the full orthogonal
  * region enclosed by solid partitions + that bay's door. Bay templates can
- * underspecify floor (e.g. SW kitchen skips its west wall because the SE
- * line owns x = DEPTH further south) — flood-fill captures the real room,
- * including the NW corner kitchens need for a dining table.
+ * underspecify floor (e.g. SW kitchen skips its west divider so the room
+ * includes the NW corner) — flood-fill captures the real L. The first SW
+ * bay always draws the south closer across that corner, so the kitchen
+ * stays enclosed when no west-wall room is there to share the wall.
  */
 function finalizeHouseRoomsWithEnclosedBounds(
   rooms: HouseRoom[],
