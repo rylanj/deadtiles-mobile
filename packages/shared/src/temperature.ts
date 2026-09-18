@@ -103,6 +103,31 @@ export function temperatureBand(temp: number): TemperatureBand {
   return "comfort";
 }
 
+/** Slight core shift from food/drink at hypothermia / heatstroke (°C). */
+export const CONSUME_EXTREME_TEMP_DELTA = 0.2;
+
+/**
+ * Food warms only while freezing. Drinks cool only while overheating,
+ * and never below the comfort band. Consumption never cools otherwise.
+ */
+export function applyConsumeCoreTemperature(
+  current: number,
+  kind: "food" | "drink",
+): number {
+  const core = clampTemperature(current);
+  const band = temperatureBand(core);
+  if (kind === "food") {
+    if (band !== "hypothermia") return core;
+    return clampTemperature(
+      Math.min(core + CONSUME_EXTREME_TEMP_DELTA, TEMPERATURE_COMFORT_LOW),
+    );
+  }
+  if (band !== "heatstroke") return core;
+  return clampTemperature(
+    Math.max(core - CONSUME_EXTREME_TEMP_DELTA, TEMPERATURE_COMFORT_HIGH),
+  );
+}
+
 /** Birchport hospital and barracks hall: lights and HVAC stay on. */
 export function buildingInteriorIsPowered(bx: number, by: number): boolean {
   return isBirchportHospital(bx, by) || isBirchportBarracksMessHall(bx, by);

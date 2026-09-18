@@ -78,6 +78,7 @@ export const ONBOARDING_CONTROLS_LEGEND = [
   { key: "R", action: "Reload" },
   { key: "E", action: "Search / interact" },
   { key: "Tab", action: "Inventory" },
+  { key: "J", action: "Journal" },
   { key: "M", action: "Map" },
   { key: "1 / 2", action: "Weapon hotbar" },
   { key: "B", action: "Build (hammer)" },

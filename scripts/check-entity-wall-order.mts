@@ -16,6 +16,7 @@
 // before walls learned to lift in front of building cuboids. It should fail.
 
 import {
+  applyBuildingTreeDepth,
   applyFurnitureEntityDepth,
   applyOverworldStructureEntityDepth,
   buildingWallDepth,
@@ -432,6 +433,59 @@ for (const b of overworldSample) {
 // Report
 // ---------------------------------------------------------------------------
 
+// Player on the west wall / NW diagonal of a house must sit above that cuboid
+// (the regression for "tile north-west of a building"). Trees on the same
+// tiles stay under the roof. North-face tiles (not the NW diagonal) stay under
+// so the player does not walk onto the roof.
+let westFaceChecked = 0;
+const westFaceFailures: string[] = [];
+let northFaceChecked = 0;
+const northFaceFailures: string[] = [];
+let westTreeChecked = 0;
+const westTreeFailures: string[] = [];
+
+for (const b of sampleBySize(buildings, 16)) {
+  const bd = buildingWallDepth(b);
+  const lot = `${b.w}x${b.h} ${b.buildingType} @ (${b.ox},${b.oy})`;
+  for (let ty = b.oy - 1; ty < b.oy + b.h; ty++) {
+    const tx = b.ox - 1;
+    if (getBuildingAt(tx, ty)) continue;
+    westFaceChecked++;
+    const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
+    if (entityDepth <= bd) {
+      westFaceFailures.push(
+        `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} under ${lot} depth ${bd.toFixed(4)}`,
+      );
+    }
+    // SW-apron trees already lift (same street rule as entities). Only the
+    // west wall / NW diagonal must keep canopies under the roof.
+    if (ty < b.oy + b.h - 1) {
+      westTreeChecked++;
+      const treeDepth = applyBuildingTreeDepth(
+        entityRenderDepth(tx + 0.5, ty + 0.5),
+        tx,
+        ty,
+      );
+      if (treeDepth > bd) {
+        westTreeFailures.push(
+          `  tree (${tx},${ty}) depth ${treeDepth.toFixed(4)} over ${lot} depth ${bd.toFixed(4)}`,
+        );
+      }
+    }
+  }
+  for (let tx = b.ox; tx < b.ox + b.w; tx++) {
+    const ty = b.oy - 1;
+    if (getBuildingAt(tx, ty)) continue;
+    northFaceChecked++;
+    const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
+    if (entityDepth > bd) {
+      northFaceFailures.push(
+        `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} over north face of ${lot} depth ${bd.toFixed(4)}`,
+      );
+    }
+  }
+}
+
 console.log(`mode: ${PLAIN ? "plain footprints (pre-fix)" : "current"}`);
 console.log(`buildings discovered: ${buildings.length}`);
 console.log(`overlapping entity/wall pairs checked: ${pairsChecked}`);
@@ -443,6 +497,16 @@ for (const s of wallPairFailures.slice(0, 8)) console.log(s);
 console.log(`street-in-front-of-building cases checked: ${buildingFrontChecked}`);
 console.log(`entity under building while in front: ${buildingFrontFailures.length}`);
 for (const s of buildingFrontFailures.slice(0, 8)) console.log(s);
+
+console.log(`west-face / NW-diagonal entity vs cuboid: ${westFaceChecked}`);
+console.log(`entity under cuboid on west/NW: ${westFaceFailures.length}`);
+for (const s of westFaceFailures.slice(0, 8)) console.log(s);
+console.log(`north-face entity vs cuboid: ${northFaceChecked}`);
+console.log(`entity over cuboid on north face: ${northFaceFailures.length}`);
+for (const s of northFaceFailures.slice(0, 8)) console.log(s);
+console.log(`west-face tree vs cuboid: ${westTreeChecked}`);
+console.log(`tree over cuboid on west/NW: ${westTreeFailures.length}`);
+for (const s of westTreeFailures.slice(0, 8)) console.log(s);
 
 const shown = new Set<string>();
 for (const f of failures) {
@@ -457,6 +521,13 @@ for (const f of failures) {
   );
 }
 
-if (failures.length || wallPairFailures.length || buildingFrontFailures.length) {
+if (
+  failures.length ||
+  wallPairFailures.length ||
+  buildingFrontFailures.length ||
+  westFaceFailures.length ||
+  northFaceFailures.length ||
+  westTreeFailures.length
+) {
   process.exitCode = 1;
 } else console.log("OK");

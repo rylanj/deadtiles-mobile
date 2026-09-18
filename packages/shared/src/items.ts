@@ -27,6 +27,9 @@ export const BASE_INVENTORY_SLOTS =
   WATCH_SLOT_COUNT +
   RADIO_SLOT_COUNT +
   MAP_SLOT_COUNT;
+/** Extra carrying pockets append after equipment so clothing/watch indices stay stable. */
+export const MAX_EXTRA_POCKET_SLOTS = 4;
+export const MAX_INVENTORY_SLOTS = BASE_INVENTORY_SLOTS + MAX_EXTRA_POCKET_SLOTS;
 /** @deprecated Use WEAPON_SLOT_COUNT — kept for transitional imports. */
 export const HOTBAR_SLOT_COUNT = WEAPON_SLOT_COUNT;
 /** Fixed slot grid for looted container contents (fits a full player inventory). */
@@ -155,8 +158,6 @@ export type ItemDefinition = {
   treatsInfection?: boolean;
   /** Clothing insulation points (bare = 0, t-shirt = 1). */
   insulation?: number;
-  /** Core temperature change on use (°C). Water cools. */
-  restoreTemperature?: number;
 };
 
 export const INVENTORY_ITEMS: ItemDefinition[] = [
@@ -392,7 +393,6 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     weight: 0.5,
     consumeDurationMs: 2000,
     restoreThirst: 50,
-    restoreTemperature: -1,
   },
 ];
 
@@ -446,7 +446,6 @@ export function canUseConsumable(
     maxHunger: number;
     maxThirst: number;
     infected?: boolean;
-    temperature?: number;
   },
 ): boolean {
   const def = ITEM_BY_ID.get(itemId);
@@ -464,11 +463,6 @@ export function canUseConsumable(
   }
   if ((def.restoreHunger ?? 0) > 0 && stats.hunger < stats.maxHunger) return true;
   if ((def.restoreThirst ?? 0) > 0 && stats.thirst < stats.maxThirst) return true;
-  const restoreTemp = def.restoreTemperature ?? 0;
-  if (restoreTemp !== 0 && typeof stats.temperature === "number") {
-    if (restoreTemp < 0 && stats.temperature > 37.2) return true;
-    if (restoreTemp > 0 && stats.temperature < 36.8) return true;
-  }
 
   // Item restores nothing useful, or every restored need is already full.
   return false;
@@ -661,11 +655,18 @@ export function isMapSlot(slotIndex: number): boolean {
 }
 
 export function isPocketSlot(slotIndex: number): boolean {
-  return slotIndex >= WEAPON_SLOT_COUNT && slotIndex < CLOTHING_SLOT_INDEX;
+  return (
+    (slotIndex >= WEAPON_SLOT_COUNT && slotIndex < CLOTHING_SLOT_INDEX) ||
+    (slotIndex >= BASE_INVENTORY_SLOTS && slotIndex < MAX_INVENTORY_SLOTS)
+  );
 }
 
 export function itemFitsInSlot(itemId: string, slotIndex: number): boolean {
-  if (slotIndex < 0 || slotIndex >= BASE_INVENTORY_SLOTS) return false;
+  if (slotIndex < 0 || slotIndex >= MAX_INVENTORY_SLOTS) return false;
+  if (slotIndex >= BASE_INVENTORY_SLOTS) {
+    if (isHotbarOnlyItem(itemId)) return false;
+    return true;
+  }
   if (isWeaponSlot(slotIndex)) return isWeaponItem(itemId);
   if (isClothingSlot(slotIndex)) return isClothingItem(itemId);
   if (isWatchSlot(slotIndex)) return isWatchItem(itemId);
@@ -675,8 +676,12 @@ export function itemFitsInSlot(itemId: string, slotIndex: number): boolean {
   return true;
 }
 
-export function createEmptyInventory(): Inventory {
-  return Array.from({ length: BASE_INVENTORY_SLOTS }, () => null);
+export function createEmptyInventory(slotCount = BASE_INVENTORY_SLOTS): Inventory {
+  const n = Math.max(
+    BASE_INVENTORY_SLOTS,
+    Math.min(MAX_INVENTORY_SLOTS, Math.floor(slotCount) || BASE_INVENTORY_SLOTS),
+  );
+  return Array.from({ length: n }, () => null);
 }
 
 export function inventoryUsedSlots(inventory: Inventory): number {
@@ -928,11 +933,12 @@ export function moveInventorySlot(
   toSlot: number,
 ): Inventory {
   if (fromSlot === toSlot) return inventory;
+  const slotCount = Math.min(MAX_INVENTORY_SLOTS, inventory.length);
   if (
     fromSlot < 0 ||
     toSlot < 0 ||
-    fromSlot >= BASE_INVENTORY_SLOTS ||
-    toSlot >= BASE_INVENTORY_SLOTS
+    fromSlot >= slotCount ||
+    toSlot >= slotCount
   ) {
     return inventory;
   }
@@ -1396,13 +1402,16 @@ export function generateSearchLoot(
   _searchSeed: string,
   _buildingX?: number,
   _buildingY?: number,
+  chanceScale = 1,
 ): InventoryEntry[] {
   const possibleItems = eligibleLootItems(objectType);
   const results: InventoryEntry[] = [];
+  const scale =
+    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
 
   for (const id of possibleItems) {
     const data = ITEM_SPAWN_DATA[id];
-    if (!data || Math.random() >= data.chance) continue;
+    if (!data || Math.random() >= Math.min(1, data.chance * scale)) continue;
     const quantity =
       Math.floor(Math.random() * (data.maxQty - data.minQty + 1)) + data.minQty;
     results.push({ id, quantity });
@@ -1410,13 +1419,13 @@ export function generateSearchLoot(
 
   // Checkout1: cash drawer + rare sidearm (+ matching ammo) on top of loot.
   if (objectType === "checkout") {
-    if (Math.random() < 0.05) {
+    if (Math.random() < Math.min(1, 0.05 * scale)) {
       results.push({
         id: "banknote",
         quantity: 1 + Math.floor(Math.random() * 50), // 1–50
       });
     }
-    if (Math.random() < 0.01) {
+    if (Math.random() < Math.min(1, 0.01 * scale)) {
       const pistol = Math.random() < 0.5;
       results.push({
         id: pistol ? "weapon_pistol" : "weapon_revolver",
@@ -1432,7 +1441,7 @@ export function generateSearchLoot(
   }
 
   // Motel Counter1: 1% sidearm + matching ammo (0–17 / 0–6).
-  if (objectType === "counter" && Math.random() < 0.01) {
+  if (objectType === "counter" && Math.random() < Math.min(1, 0.01 * scale)) {
     const pistol = Math.random() < 0.5;
     results.push({
       id: pistol ? "weapon_pistol" : "weapon_revolver",
@@ -1450,7 +1459,7 @@ export function generateSearchLoot(
   }
 
   // MedicalReception1: dedicated cash-drawer banknote roll (on top of junk).
-  if (objectType === "medicalreception" && Math.random() < 0.15) {
+  if (objectType === "medicalreception" && Math.random() < Math.min(1, 0.15 * scale)) {
     results.push({
       id: "banknote",
       quantity: 1 + Math.floor(Math.random() * 15), // 1–15
@@ -1597,7 +1606,7 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
   // Former backpack layout (16 slots): keep body slots 0–7, then pack
   // backpack-band items into the remaining pocket slots.
   const LEGACY_BACKPACK_SLOT_COUNT = 16;
-  if (parsed.length === LEGACY_BACKPACK_SLOT_COUNT || parsed.length > BASE_INVENTORY_SLOTS) {
+  if (parsed.length === LEGACY_BACKPACK_SLOT_COUNT) {
     let inventory = createEmptyInventory();
     for (let i = 0; i < Math.min(8, parsed.length); i++) {
       const slot = parsed[i];
@@ -1703,9 +1712,13 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
     return inventory;
   }
 
-  let slots = createEmptyInventory();
+  const slotCount = Math.min(
+    MAX_INVENTORY_SLOTS,
+    Math.max(BASE_INVENTORY_SLOTS, parsed.length),
+  );
+  let slots = createEmptyInventory(slotCount);
   const overflow: InventoryEntry[] = [];
-  for (let i = 0; i < Math.min(parsed.length, BASE_INVENTORY_SLOTS); i++) {
+  for (let i = 0; i < Math.min(parsed.length, slotCount); i++) {
     const slot = parsed[i];
     if (slot === null) continue;
     if (
@@ -1805,8 +1818,12 @@ export function parseInventory(json: string): Inventory {
 }
 
 export function serializeInventory(inventory: Inventory) {
-  const slots = createEmptyInventory();
-  for (let i = 0; i < BASE_INVENTORY_SLOTS; i++) {
+  const n = Math.min(
+    MAX_INVENTORY_SLOTS,
+    Math.max(BASE_INVENTORY_SLOTS, inventory.length),
+  );
+  const slots: Inventory = Array.from({ length: n }, () => null);
+  for (let i = 0; i < n; i++) {
     const slot = inventory[i];
     if (!slot || slot.quantity <= 0 || !getItemDefinition(slot.id)) {
       slots[i] = null;
@@ -2111,7 +2128,8 @@ export function takeFromContainerSlot(
     fromSlot < 0 ||
     toSlot < 0 ||
     fromSlot >= CONTAINER_INVENTORY_SLOTS ||
-    toSlot >= BASE_INVENTORY_SLOTS
+    toSlot >= playerInventory.length ||
+    toSlot >= MAX_INVENTORY_SLOTS
   ) {
     return null;
   }

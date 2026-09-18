@@ -352,6 +352,11 @@ export class ContainerLootUI {
         this.createCell("player", i, this.playerInventory[i] ?? null),
       );
     }
+    for (let i = BASE_INVENTORY_SLOTS; i < this.playerInventory.length; i++) {
+      this.playerPocketsEl.appendChild(
+        this.createCell("player", i, this.playerInventory[i] ?? null),
+      );
+    }
   }
 
   private createCell(
@@ -528,7 +533,7 @@ export class ContainerLootUI {
 
     // Prefer an existing stack with room before opening a new slot.
     if (maxStack > 1) {
-      for (let i = 0; i < BASE_INVENTORY_SLOTS; i++) {
+      for (let i = 0; i < this.playerInventory.length; i++) {
         const slot = this.playerInventory[i];
         if (!slot || slot.id !== itemId) continue;
         if (!itemFitsInSlot(itemId, i)) continue;
@@ -536,7 +541,7 @@ export class ContainerLootUI {
       }
     }
 
-    for (let i = 0; i < BASE_INVENTORY_SLOTS; i++) {
+    for (let i = 0; i < this.playerInventory.length; i++) {
       if (this.playerInventory[i]) continue;
       if (itemFitsInSlot(itemId, i)) return i;
     }

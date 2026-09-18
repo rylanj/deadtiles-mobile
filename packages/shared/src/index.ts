@@ -22,6 +22,7 @@ export * from "./pathfinding.js";
 export * from "./survivorName.js";
 export * from "./settlementNames.js";
 export * from "./skills.js";
+export * from "./skillEffects.js";
 export * from "./quests.js";
 export * from "./worldClock.js";
 export * from "./buildCosts.js";

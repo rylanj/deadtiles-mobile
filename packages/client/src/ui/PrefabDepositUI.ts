@@ -28,6 +28,7 @@ export type PrefabDepositUIState = {
   depositsJson: string;
   inventoryJson: string;
   funded?: boolean;
+  durationMs?: number;
 };
 
 const KIND_LABELS: Record<StructureBuildKind, string> = {
@@ -69,6 +70,7 @@ export class PrefabDepositUI {
   private kind: StructureBuildKind = "wall";
   private deposits: StructureDeposits = {};
   private inventory: Inventory = [];
+  private durationMs = 30_000;
 
   private overlay: HTMLElement;
   private titleEl: HTMLElement;
@@ -180,6 +182,9 @@ export class PrefabDepositUI {
     this.kind = state.kind;
     this.deposits = parseStructureDepositsJson(state.depositsJson);
     this.inventory = parseInventory(state.inventoryJson);
+    if (typeof state.durationMs === "number" && state.durationMs > 0) {
+      this.durationMs = state.durationMs;
+    }
   }
 
   private render() {
@@ -187,7 +192,8 @@ export class PrefabDepositUI {
     const funded = structureDepositsMeetCost(this.kind, this.deposits);
     this.statusEl.textContent = funded
       ? "Fully stocked. Ready to build"
-      : "Deposit materials to fund construction";
+      : "Deposit the remaining materials";
+    this.buildBtn.textContent = `Build (${Math.max(1, Math.round(this.durationMs / 1000))}s)`;
 
     this.costListEl.replaceChildren();
     for (const line of getStructureBuildCosts(this.kind)) {

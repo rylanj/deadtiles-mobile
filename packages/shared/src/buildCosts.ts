@@ -157,11 +157,13 @@ export function remainingDepositCapacity(
 /** Half the build cost (rounded down, min 1 per line). Refund on raid / deconstruct. */
 export function partialStructureRefund(
   kind: StructureBuildKind,
+  ratio = 0.5,
 ): BuildCostLine[] {
+  const r = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.5;
   return STRUCTURE_BUILD_COSTS[kind]
     .map((line) => ({
       itemId: line.itemId,
-      quantity: Math.max(1, Math.floor(line.quantity / 2)),
+      quantity: Math.max(1, Math.floor(line.quantity * r)),
     }))
     .filter((line) => line.quantity > 0);
 }

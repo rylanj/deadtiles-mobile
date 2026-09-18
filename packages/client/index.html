@@ -261,6 +261,7 @@
         animation: bar-flash-red 0.8s ease-in-out infinite;
       }
       body.inventory-open #game canvas,
+      body.journal-open #game canvas,
       body.container-loot-open #game canvas,
       body.trader-open #game canvas,
       body.red-order-dialog-open #game canvas,
@@ -283,6 +284,162 @@
       }
       #inventory-overlay[hidden] {
         display: none;
+      }
+      #journal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      #journal-overlay[hidden] {
+        display: none;
+      }
+      .journal-panel {
+        width: min(440px, 92vw);
+        max-height: min(78vh, 720px);
+      }
+      .journal-header-text {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .journal-tabs {
+        display: flex;
+        gap: 6px;
+        padding: 8px 16px 0;
+        border-bottom: 1px solid rgba(100, 220, 100, 0.22);
+        flex: 0 0 auto;
+      }
+      .journal-tab {
+        appearance: none;
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: 4px 4px 0 0;
+        padding: 8px 12px;
+        background: transparent;
+        color: #a8c8a8;
+        font: 600 13px/1.2 system-ui, sans-serif;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .journal-tab:hover {
+        color: #d4f0d4;
+      }
+      .journal-tab--active {
+        color: #e8f8e8;
+        background: rgba(94, 200, 94, 0.14);
+        border-color: rgba(100, 220, 100, 0.45);
+      }
+      .journal-header {
+        flex: 0 0 auto;
+      }
+      .journal-body {
+        padding: 12px 16px 16px;
+        overflow-y: auto;
+        flex: 1 1 auto;
+        min-height: 0;
+        -webkit-overflow-scrolling: touch;
+      }
+      .journal-empty {
+        margin: 12px 0;
+        color: #9ab89a;
+      }
+      .journal-section-label {
+        margin: 4px 0 0;
+        color: #7ecf7e;
+        font: 700 11px/1.2 system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .journal-section-label:first-child {
+        margin-top: 0;
+      }
+      .journal-quest-list,
+      .journal-skill-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .journal-panel .craft-recipe {
+        border-color: rgba(100, 220, 100, 0.22);
+      }
+      .journal-quest--active {
+        border-color: rgba(159, 232, 48, 0.45);
+        background: rgba(94, 200, 94, 0.08);
+      }
+      .journal-panel .craft-recipe-summary-meta {
+        color: #9ab89a;
+      }
+      .journal-panel .craft-recipe--ready .craft-recipe-summary-meta {
+        color: #98c898;
+      }
+      .journal-panel .craft-recipe-chevron {
+        color: #a8c8a8;
+      }
+      .journal-panel .craft-recipe-details {
+        border-top-color: rgba(100, 220, 100, 0.22);
+      }
+      .journal-quest-desc,
+      .journal-quest-meta {
+        margin: 0;
+        color: #b8d0b8;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      .journal-quest-objectives {
+        margin: 0;
+        padding-left: 18px;
+        color: #c8e0c8;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      .journal-quest-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .journal-abandon-btn {
+        background: rgba(72, 28, 28, 0.9) !important;
+        border-color: rgba(220, 100, 100, 0.55) !important;
+        color: #f0c8c8 !important;
+      }
+      .journal-skill-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .journal-skill-sub-name {
+        font: 600 13px/1.2 system-ui, sans-serif;
+        color: #d4f0d4;
+      }
+      .journal-skill-meta {
+        color: #9ab89a;
+        font: 12px/1.2 system-ui, sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      .journal-skill-benefit {
+        margin: 4px 0 0;
+        color: #8aa88a;
+        font: 12px/1.35 system-ui, sans-serif;
+      }
+      .journal-xp {
+        height: 6px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .journal-xp-fill {
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, #5a9a5a, #9fe830);
+      }
+      .journal-skill-subs {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
       }
       #container-loot-overlay {
         position: fixed;
@@ -1442,6 +1599,12 @@
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
         overflow: hidden;
       }
+      .inventory-panel.journal-panel {
+        width: min(440px, 92vw);
+        max-height: min(78vh, 720px);
+        min-height: 0;
+        overflow: hidden;
+      }
       .inventory-header {
         padding: 14px 16px 10px;
         border-bottom: 1px solid rgba(100, 220, 100, 0.22);
@@ -2142,6 +2305,25 @@
         text-transform: uppercase;
         color: #7ecf7e;
         margin-bottom: 6px;
+      }
+      .loot-card-header--split {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 0;
+      }
+      .loot-card-header-name {
+        min-width: 0;
+      }
+      .loot-card-arrow {
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: 0;
+        text-transform: none;
+        color: inherit;
+        flex-shrink: 0;
       }
       .loot-card-row {
         display: flex;
@@ -2974,6 +3156,7 @@
         background: rgba(94, 200, 94, 0.22);
       }
       body.inventory-open #mobile-inventory-btn,
+      body.journal-open #mobile-journal-btn,
       body.map-open #mobile-map-btn,
       body.chat-open #mobile-chat-btn,
       body.build-mode-open #mobile-build-btn,
@@ -3186,6 +3369,7 @@
         #faction-attack-warning-overlay:not([hidden]),
         #death-screen-overlay:not([hidden]),
         #inventory-overlay:not([hidden]),
+        #journal-overlay:not([hidden]),
         #container-loot-overlay:not([hidden]),
         #map-overlay:not([hidden]),
         #craft-overlay:not([hidden]),
@@ -3197,12 +3381,18 @@
           display: flex;
         }
 
-        .inventory-panel:not(.trader-panel):not(.container-loot-panel):not(.craft-panel):not(.fireplace-panel) {
+        .inventory-panel:not(.trader-panel):not(.container-loot-panel):not(.craft-panel):not(.fireplace-panel):not(.journal-panel) {
           width: min(420px, 100%);
           /* Fill the padded overlay when content needs it (inventory). */
           max-height: 100%;
           min-height: 0;
           margin-block: 0;
+          overflow: hidden;
+        }
+        .inventory-panel.journal-panel {
+          width: min(440px, 100%);
+          max-height: min(78vh, 100%);
+          min-height: 0;
           overflow: hidden;
         }
         .inventory-header {
@@ -3467,6 +3657,7 @@
 
       /* APK / phone: overlay is the only scroller. */
       body.is-mobile #container-loot-overlay:not([hidden]),
+      body.is-mobile #journal-overlay:not([hidden]),
       body.is-mobile #trader-overlay:not([hidden]),
       body.is-mobile #red-order-dialog-overlay:not([hidden]),
       body.is-mobile #ashen-dialog-overlay:not([hidden]),

@@ -360,17 +360,29 @@ export function itemBaseTradeValue(itemId: string): number {
 }
 
 /** What the trader charges the player (player buys from trader). */
-export function traderSellPrice(itemId: string, reputation = ASHEN_REP_START): number {
+export function traderSellPrice(
+  itemId: string,
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): number {
   if (itemId === "banknote") return 0;
   const { buyRate } = ashenTraderRates(reputation);
-  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * buyRate));
+  const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
+  const rate = Math.max(0.65, buyRate * (1 - 0.15 * t));
+  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
 }
 
 /** What the trader pays the player (player sells to trader). */
-export function traderBuyPrice(itemId: string, reputation = ASHEN_REP_START): number {
+export function traderBuyPrice(
+  itemId: string,
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): number {
   if (itemId === "banknote") return 0;
   const { sellRate } = ashenTraderRates(reputation);
-  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * sellRate));
+  const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
+  const rate = Math.min(0.5, sellRate * (1 + 0.15 * t));
+  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
 }
 
 export type TraderShopState = {
@@ -562,16 +574,17 @@ export function tradeOfferTotals(
   sells: readonly TradeOfferSellLine[],
   buys: readonly TradeOfferBuyLine[],
   reputation = ASHEN_REP_START,
+  barterT = 0,
 ): TradeOfferTotals {
   let sellTotal = 0;
   for (const line of sells) {
     if (line.quantity <= 0) continue;
-    sellTotal += traderBuyPrice(line.itemId, reputation) * line.quantity;
+    sellTotal += traderBuyPrice(line.itemId, reputation, barterT) * line.quantity;
   }
   let buyTotal = 0;
   for (const line of buys) {
     if (line.quantity <= 0) continue;
-    buyTotal += traderSellPrice(line.itemId, reputation) * line.quantity;
+    buyTotal += traderSellPrice(line.itemId, reputation, barterT) * line.quantity;
   }
   return { sellTotal, buyTotal, net: sellTotal - buyTotal };
 }
@@ -610,6 +623,7 @@ export function applyTradeOffer(
   sells: readonly TradeOfferSellLine[],
   buys: readonly TradeOfferBuyLine[],
   reputation = ASHEN_REP_START,
+  barterT = 0,
 ): {
   playerInv: Inventory;
   shop: TraderShopState;
@@ -700,6 +714,7 @@ export function applyTradeOffer(
     sellLines,
     buyLines,
     reputation,
+    barterT,
   );
   const cash = tradeOfferCashSettlement(
     net,

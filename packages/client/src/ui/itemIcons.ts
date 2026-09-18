@@ -48,6 +48,7 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   handheld_radio: "/assets/UI/UI_handheld_radio.png",
   backpack: "/assets/UI/UI_backpack.png",
   chat: "/assets/UI/UI_chat.png",
+  journal: "/assets/UI/UI_journal.png",
   build: "/assets/UI/UI_build.png",
   crosshair: "/assets/UI/UI_crosshair.png",
   rep: "/assets/UI/UI_rep.png",

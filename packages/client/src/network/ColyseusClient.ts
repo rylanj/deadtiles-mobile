@@ -617,6 +617,11 @@ export type DialogHealCompleteEvent = {
   };
 };
 
+export type QuestSyncEvent = {
+  type: "questSync";
+  payload: { questsJson: string };
+};
+
 export type CraftOpenEvent = {
   type: "craftOpen";
   payload: {
@@ -812,6 +817,11 @@ export type DeconstructOpenEvent = {
   };
 };
 
+export type SkillLevelUpEvent = {
+  type: "skillLevelUp";
+  payload: { label: string; subId: string; level: number };
+};
+
 export type InventorySyncEvent = {
   inventoryJson: string;
   weaponMagazinesJson: string;
@@ -828,6 +838,7 @@ export type ServerEvent =
   | DialogOpenEvent
   | DialogTaskCompleteEvent
   | DialogHealCompleteEvent
+  | QuestSyncEvent
   | CraftOpenEvent
   | CraftSyncEvent
   | FireplaceOpenEvent
@@ -842,4 +853,5 @@ export type ServerEvent =
   | PrefabSyncEvent
   | PrefabBuiltEvent
   | StructureDamagedEvent
-  | DeconstructOpenEvent;
+  | DeconstructOpenEvent
+  | SkillLevelUpEvent;

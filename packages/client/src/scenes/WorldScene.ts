@@ -38,8 +38,8 @@ import {
   roomDoorApproachGoal,
   searchableFootprint,
   buildingKey,
-  SEARCH_DURATION_MS,
-  RELOAD_DURATION_MS,
+  computePlayerSkillMods,
+  craftDurationForSkill,
   ACTION_SFX_HEAR_RADIUS,
   UNLOAD_DURATION_MS,
   playerNearEntity,
@@ -109,7 +109,6 @@ import {
   OVERWORLD_BAG_BUILDING,
   isGroundBackpackType,
   CRAFT_DURATION_MS,
-  craftRecipeDurationMs,
   getCraftRecipe,
   TILE_HEIGHT,
   FURNITURE_RENDER_HEIGHT_PX,
@@ -251,6 +250,7 @@ import {
 } from "../sprites/EntitySprites";
 import { DamageOverlay } from "../ui/DamageOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
+import { JournalUI } from "../ui/JournalUI";
 import { ContainerLootUI } from "../ui/ContainerLootUI";
 import { CraftUI } from "../ui/CraftUI";
 import { FireplaceUI } from "../ui/FireplaceUI";
@@ -770,8 +770,10 @@ export class WorldScene extends Phaser.Scene {
   private groundBagSprites = new Map<string, Phaser.GameObjects.Image>();
   private searchKeyWasDown = false;
   private inventoryUI?: InventoryUI;
+  private journalUI?: JournalUI;
   private mobileHudEl?: HTMLElement;
   private mobileInventoryBtn?: HTMLButtonElement;
+  private mobileJournalBtn?: HTMLButtonElement;
   private mobileMapBtn?: HTMLButtonElement;
   private mobileAimBtn?: HTMLButtonElement;
   private mobileReloadBtn?: HTMLButtonElement;
@@ -803,14 +805,18 @@ export class WorldScene extends Phaser.Scene {
   private entityActionLabels?: EntityActionLabelManager;
   private tabKey?: Phaser.Input.Keyboard.Key;
   private mKey?: Phaser.Input.Keyboard.Key;
+  private jKey?: Phaser.Input.Keyboard.Key;
   private zeroKey?: Phaser.Input.Keyboard.Key;
   private hotbarKeys: Phaser.Input.Keyboard.Key[] = [];
   private tabWasDown = false;
   private mapKeyWasDown = false;
+  private journalKeyWasDown = false;
   private zeroWasDown = false;
   private hotbarWasDown = [false, false];
   private lastInventoryRenderKey = "";
   private lastHotbarRenderKey = "";
+  private lastQuestUiKey = "";
+  private cachedQuestsJson = "";
   /** Cached settlement labels for the open M map (recomputed when tile center moves). */
   private mapSettlementCache: {
     tx: number;
@@ -1607,6 +1613,10 @@ export class WorldScene extends Phaser.Scene {
       onUse: (slotIndex) => this.sendConsumeStart(slotIndex),
       onUnload: (slotIndex) => this.sendUnloadStart(slotIndex),
     });
+    this.journalUI = new JournalUI({
+      onClose: () => this.journalUI?.close(),
+      onAbandonQuest: (questId) => this.sendQuestAbandon(questId),
+    });
     this.containerLootUI = new ContainerLootUI({
       onTakeFromContainer: (fromSlot, toSlot) =>
         this.takeFromContainer(fromSlot, toSlot),
@@ -1642,6 +1652,8 @@ export class WorldScene extends Phaser.Scene {
     });
     this.redOrderDialogUI = new RedOrderDialogUI({
       onClose: () => this.closeRedOrderDialog(),
+      onAcceptQuest: (questId) =>
+        this.sendQuestAccept(questId, this.redOrderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendRedOrderCompleteTask(taskId),
     });
     this.ashenTraderDialogUI = new AshenTraderDialogUI({
@@ -1650,6 +1662,8 @@ export class WorldScene extends Phaser.Scene {
     });
     this.ashenMilitiaDialogUI = new AshenMilitiaDialogUI({
       onClose: () => this.closeAshenMilitiaDialog(),
+      onAcceptQuest: (questId) =>
+        this.sendQuestAccept(questId, this.ashenMilitiaDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenMilitiaCompleteTask(taskId),
       onHeal: () => this.sendAshenMilitiaHeal(),
     });
@@ -1750,6 +1764,7 @@ export class WorldScene extends Phaser.Scene {
       this.ctrlKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL);
       this.tabKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
       this.mKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.M);
+      this.jKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
       this.bKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.B);
       this.zeroKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO);
       const hotbarKeyCodes = [
@@ -2056,7 +2071,10 @@ export class WorldScene extends Phaser.Scene {
         } else if (msg.type === "tradeOpen") {
           this.openTraderUI(msg.payload);
         } else if (msg.type === "tradeSync") {
-          this.traderUI?.sync(msg.payload);
+          this.traderUI?.sync({
+            ...msg.payload,
+            barterT: this.localSkillMods().barterT,
+          });
           if (this.localInventorySync) {
             this.localInventorySync = {
               ...this.localInventorySync,
@@ -2067,6 +2085,8 @@ export class WorldScene extends Phaser.Scene {
           this.lastHotbarRenderKey = "";
         } else if (msg.type === "dialogOpen") {
           this.openNpcDialog(msg.payload);
+        } else if (msg.type === "questSync") {
+          this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "dialogTaskComplete") {
           this.closeRedOrderDialog();
           this.closeAshenMilitiaDialog();
@@ -2079,6 +2099,11 @@ export class WorldScene extends Phaser.Scene {
             header: msg.payload.curedInfection
               ? "Wounds treated. Infection cleared."
               : "You're fully healed.",
+          });
+        } else if (msg.type === "skillLevelUp") {
+          this.lootPopup?.show([], {
+            header: msg.payload.label,
+            arrow: "↑",
           });
         } else if (msg.type === "shotMissed") {
           if (msg.payload.treeCoverMiss) {
@@ -2353,6 +2378,7 @@ export class WorldScene extends Phaser.Scene {
     this.flushPendingZombieRefreshes();
     this.handleInventoryInput();
     this.handleMapInput();
+    this.handleJournalInput();
     this.handleStructureBuildInput();
     this.syncWorldTiles();
     this.syncInteriorView();
@@ -2473,6 +2499,7 @@ export class WorldScene extends Phaser.Scene {
     setCuboidStatsProvider(null);
     resetBuildingTextureCache(this);
     this.inventoryUI?.destroy();
+    this.journalUI?.destroy();
     this.containerLootUI?.destroy();
     this.craftUI?.close();
     this.craftUI = undefined;
@@ -2663,6 +2690,12 @@ export class WorldScene extends Phaser.Scene {
       () => this.toggleMapOverlay(),
     );
     this.mobileMapBtn.hidden = true;
+    this.mobileJournalBtn = makeBtn(
+      "mobile-journal-btn",
+      getItemIconPath("journal"),
+      "Open journal",
+      () => this.toggleJournalOverlay(),
+    );
     this.mobileInventoryBtn = makeBtn(
       "mobile-inventory-btn",
       getItemIconPath("backpack"),
@@ -2687,6 +2720,7 @@ export class WorldScene extends Phaser.Scene {
         this.mobileReloadBtn,
         this.mobileBuildBtn,
         this.mobileMapBtn,
+        this.mobileJournalBtn,
         this.mobileInventoryBtn,
         this.mobileChatBtn,
       ].filter((el): el is HTMLButtonElement => !!el),
@@ -2808,6 +2842,7 @@ export class WorldScene extends Phaser.Scene {
       this.closeDeconstructUI();
       return;
     }
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     const wasOpen = this.inventoryUI?.isOpen() ?? false;
     this.inventoryUI?.toggle();
@@ -2831,6 +2866,7 @@ export class WorldScene extends Phaser.Scene {
     }
     if (!this.playerHasMapItem()) return;
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
@@ -2844,6 +2880,29 @@ export class WorldScene extends Phaser.Scene {
     AudioManager.get().play("ui_open");
     this.notifyTutorial("map");
     this.refreshMapOverlay();
+  }
+
+  /** J / HUD journal button. */
+  private toggleJournalOverlay() {
+    if (this.chatOpen) return;
+    if (this.journalUI?.isOpen()) {
+      this.journalUI.close();
+      return;
+    }
+    if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
+    if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
+    if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
+    if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
+    if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
+    if (this.craftUI?.isOpen()) this.closeCraftUI();
+    if (this.fireplaceUI?.isOpen()) this.closeFireplaceUI();
+    if (this.prefabDepositUI?.isOpen()) this.closePrefabUI();
+    if (this.deconstructUI?.isOpen()) this.closeDeconstructUI();
+    this.refreshQuestPanels();
+    this.journalUI?.open();
   }
 
   private setupChatBar() {
@@ -2949,6 +3008,11 @@ export class WorldScene extends Phaser.Scene {
       if (this.deconstructUI?.isOpen()) {
         e.preventDefault();
         this.closeDeconstructUI();
+        return;
+      }
+      if (this.journalUI?.isOpen()) {
+        e.preventDefault();
+        this.journalUI.close();
         return;
       }
       if (this.inventoryUI?.isOpen()) {
@@ -3482,7 +3546,8 @@ export class WorldScene extends Phaser.Scene {
       (this.doorCodeUI?.isOpen() ?? false) ||
       (this.fireplaceUI?.isOpen() ?? false) ||
       (this.prefabDepositUI?.isOpen() ?? false) ||
-      (this.deconstructUI?.isOpen() ?? false)
+      (this.deconstructUI?.isOpen() ?? false) ||
+      (this.journalUI?.isOpen() ?? false)
     );
   }
 
@@ -3528,6 +3593,18 @@ export class WorldScene extends Phaser.Scene {
       this.toggleMapOverlay();
     }
     this.mapKeyWasDown = mDown;
+  }
+
+  private handleJournalInput() {
+    if (this.chatOpen) {
+      this.journalKeyWasDown = false;
+      return;
+    }
+    const jDown = this.jKey?.isDown ?? false;
+    if (jDown && !this.journalKeyWasDown) {
+      this.toggleJournalOverlay();
+    }
+    this.journalKeyWasDown = jDown;
   }
 
   private handleStructureBuildInput() {
@@ -3867,6 +3944,52 @@ export class WorldScene extends Phaser.Scene {
       magazinesJson,
       magazineRounds,
     );
+  }
+
+  private applyQuestSync(questsJson: string) {
+    this.cachedQuestsJson = questsJson;
+    this.lastQuestUiKey = "";
+    this.refreshQuestPanels();
+  }
+
+  private refreshQuestPanels() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me) return;
+    const schemaQuests = me.questsJson ?? "";
+    if (this.cachedQuestsJson && schemaQuests === this.cachedQuestsJson) {
+      this.cachedQuestsJson = "";
+    }
+    const questsJson = this.cachedQuestsJson || schemaQuests;
+    const skillsJson = me.skillsJson ?? "";
+    this.journalUI?.render(questsJson, skillsJson);
+    const key = `${questsJson}|${skillsJson}`;
+    if (key === this.lastQuestUiKey) return;
+    this.lastQuestUiKey = key;
+    this.syncRedOrderDialogStateWithQuests(questsJson);
+    this.syncAshenMilitiaDialogStateWithQuests(questsJson);
+  }
+
+  private syncRedOrderDialogStateWithQuests(questsJson: string) {
+    if (!this.redOrderDialogUI?.isOpen()) return;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    this.redOrderDialogUI.sync({
+      dogtagCount: this.localDogtagCount(),
+      redOrderReputation: me?.redOrderReputation ?? RED_ORDER_REP_START,
+      questsJson,
+    });
+  }
+
+  private syncAshenMilitiaDialogStateWithQuests(questsJson: string) {
+    if (!this.ashenMilitiaDialogUI?.isOpen()) return;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    this.ashenMilitiaDialogUI.sync({
+      inventoryJson:
+        this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]",
+      ashenMilitiaReputation: me?.ashenMilitiaReputation ?? ASHEN_REP_START,
+      playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
+      playerInfected: !!me?.infected,
+      questsJson,
+    });
   }
 
   private boundsKey(bounds: WorldBounds) {
@@ -8432,6 +8555,7 @@ export class WorldScene extends Phaser.Scene {
     this.ashenMilitiaDialogUI?.close();
     this.factionAttackWarningUI?.close();
     this.mapOverlayUI?.close();
+    this.journalUI?.close();
     AudioManager.get().playDeath();
     this.deathScreenUI?.show();
   }
@@ -8625,16 +8749,31 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", { type: "reloadStart" });
   }
 
+  private localSkillMods() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    return computePlayerSkillMods(me?.skillsJson);
+  }
+
   private beginOptimisticSearch(
     kind: "furniture" | "loot" = "loot",
     objectType?: string,
   ) {
-    this.beginLocalTimedAction("search", SEARCH_DURATION_MS, "Searching", true);
+    this.beginLocalTimedAction(
+      "search",
+      this.localSkillMods().searchDurationMs,
+      "Searching",
+      true,
+    );
     AudioManager.get().playSearch(kind === "furniture" ? "furniture" : "body", objectType);
   }
 
   private beginOptimisticReload() {
-    this.beginLocalTimedAction("reload", RELOAD_DURATION_MS, "Reloading", true);
+    this.beginLocalTimedAction(
+      "reload",
+      this.localSkillMods().reloadMs,
+      "Reloading",
+      true,
+    );
     const me = this.room?.state?.players?.get(this.sessionId);
     const weapon =
       me && me.equippedWeaponIndex >= 0
@@ -9886,9 +10025,19 @@ export class WorldScene extends Phaser.Scene {
     const building = !!me.isBuilding;
 
     if (searching) {
-      this.beginLocalTimedAction("search", SEARCH_DURATION_MS, "Searching", false);
+      this.beginLocalTimedAction(
+        "search",
+        this.localSkillMods().searchDurationMs,
+        "Searching",
+        false,
+      );
     } else if (reloading) {
-      this.beginLocalTimedAction("reload", RELOAD_DURATION_MS, "Reloading", false);
+      this.beginLocalTimedAction(
+        "reload",
+        this.localSkillMods().reloadMs,
+        "Reloading",
+        false,
+      );
     } else if (unloading) {
       this.beginLocalTimedAction("unload", UNLOAD_DURATION_MS, "Unloading", false);
     } else if (consuming) {
@@ -10579,10 +10728,12 @@ export class WorldScene extends Phaser.Scene {
             weapon.itemId === "weapon_hatchet" &&
             (AudioManager.get().isChoppingTreeNear(data.x, data.y) ||
               (id === this.sessionId && !!this.treeChopTargetTile));
+          // Chop swings reuse lastFireTime for Hit* anim only. The looping
+          // chop bed is the audio; melee hit would stack on top of it.
           const alreadySwinging = this.isEntityFiring(id);
           const skipLocalOptimistic =
-            id === this.sessionId && alreadySwinging && !chopping;
-          if (!skipLocalOptimistic) {
+            id === this.sessionId && alreadySwinging;
+          if (!chopping && !skipLocalOptimistic) {
             AudioManager.get().playMelee(
               id === this.sessionId
                 ? undefined
@@ -10646,6 +10797,7 @@ export class WorldScene extends Phaser.Scene {
       sprite.setData("server", next);
       // Paint immediately on spawn/schema — don't wait for the next movement patch.
       this.updateEntityFromState(sprite, "player", id);
+      if (id === this.sessionId) this.refreshQuestPanels();
     };
 
     const refreshCorpse = (id: string, data: PlayerCorpseSchema) => {
@@ -11067,9 +11219,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Keep client-extrapolated zombie feet out of player walls. Without this,
-   * leftover walk velocity toward a SE face walks the sprite into the wall
-   * between server snaps even when the server position is valid.
+   * Keep client-extrapolated feet out of overworld blockers. Leftover walk
+   * velocity toward a SE face can step the sprite onto a building / wall tile
+   * between server snaps; depth then behind-clamps and the sprite paints under
+   * the cuboid. Only neighbouring tiles overlap the wall, so that is where it
+   * shows.
    */
   private clampRenderAwayFromOverworldStructures(x: number, y: number): {
     x: number;
@@ -11079,7 +11233,8 @@ export class WorldScene extends Phaser.Scene {
     let cy = y;
     const tx = Math.floor(cx);
     const ty = Math.floor(cy);
-    if (this.isOverworldStructureBlocking(tx, ty)) {
+    const blocked = (nx: number, ny: number) => !this.overworldMoveWalkable(nx, ny);
+    if (blocked(tx, ty)) {
       // Prefer the side closest to the current point.
       const candidates = [
         { x: tx + 1.5, y: ty + 0.5 },
@@ -11090,7 +11245,7 @@ export class WorldScene extends Phaser.Scene {
       let best = candidates[0]!;
       let bestDist = Infinity;
       for (const c of candidates) {
-        if (this.isOverworldStructureBlocking(Math.floor(c.x), Math.floor(c.y))) {
+        if (blocked(Math.floor(c.x), Math.floor(c.y))) {
           continue;
         }
         const d = Math.hypot(c.x - cx, c.y - cy);
@@ -11101,10 +11256,10 @@ export class WorldScene extends Phaser.Scene {
       }
       return best;
     }
-    if (this.isOverworldStructureBlocking(tx + 1, ty)) cx = Math.min(cx, tx + 0.5);
-    if (this.isOverworldStructureBlocking(tx - 1, ty)) cx = Math.max(cx, tx + 0.5);
-    if (this.isOverworldStructureBlocking(tx, ty + 1)) cy = Math.min(cy, ty + 0.5);
-    if (this.isOverworldStructureBlocking(tx, ty - 1)) cy = Math.max(cy, ty + 0.5);
+    if (blocked(tx + 1, ty)) cx = Math.min(cx, tx + 0.5);
+    if (blocked(tx - 1, ty)) cx = Math.max(cx, tx + 0.5);
+    if (blocked(tx, ty + 1)) cy = Math.min(cy, ty + 0.5);
+    if (blocked(tx, ty - 1)) cy = Math.max(cy, ty + 0.5);
     return { x: cx, y: cy };
   }
 
@@ -11234,6 +11389,15 @@ export class WorldScene extends Phaser.Scene {
     let y = snapY + velY * elapsed;
     x += (serverX - x) * WorldScene.PLAYER_RENDER_LERP;
     y += (serverY - y) * WorldScene.PLAYER_RENDER_LERP;
+
+    const data = sprite.getData("server") as
+      | { inInterior?: boolean }
+      | undefined;
+    if (!data?.inInterior) {
+      const clamped = this.clampRenderAwayFromOverworldStructures(x, y);
+      x = clamped.x;
+      y = clamped.y;
+    }
 
     sprite.setData("renderX", x);
     sprite.setData("renderY", y);
@@ -12113,8 +12277,8 @@ export class WorldScene extends Phaser.Scene {
       } else {
         this.playerOcclusionHighlight?.update(
           sprite,
-          Math.floor(data.x),
-          Math.floor(data.y),
+          Math.floor(renderPos.x),
+          Math.floor(renderPos.y),
           depth,
         );
       }
@@ -12141,6 +12305,7 @@ export class WorldScene extends Phaser.Scene {
   /** Close inventory / loot UI so the Wear/Remove progress bar is visible. */
   private closeDialogsForClothingAction() {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
   }
 
@@ -12209,6 +12374,7 @@ export class WorldScene extends Phaser.Scene {
     containerJson: string,
   ) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.craftUI?.isOpen()) this.closeCraftUI();
@@ -12231,6 +12397,7 @@ export class WorldScene extends Phaser.Scene {
 
   private openCraftUI(payload: { workbenchId: string; inventoryJson: string }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
@@ -12259,6 +12426,7 @@ export class WorldScene extends Phaser.Scene {
     hasLighter: boolean;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
@@ -12399,6 +12567,7 @@ export class WorldScene extends Phaser.Scene {
     inventoryJson: string;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
@@ -12408,7 +12577,10 @@ export class WorldScene extends Phaser.Scene {
     if (this.craftUI?.isOpen()) this.closeCraftUI();
     if (this.fireplaceUI?.isOpen()) this.closeFireplaceUI();
     if (this.deconstructUI?.isOpen()) this.closeDeconstructUI();
-    this.prefabDepositUI?.open(payload);
+    this.prefabDepositUI?.open({
+      ...payload,
+      durationMs: this.localSkillMods().buildDurationMs,
+    });
   }
 
   private openDeconstructUI(payload: {
@@ -12421,6 +12593,7 @@ export class WorldScene extends Phaser.Scene {
     refund: { itemId: string; quantity: number }[];
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
@@ -12430,7 +12603,10 @@ export class WorldScene extends Phaser.Scene {
     if (this.craftUI?.isOpen()) this.closeCraftUI();
     if (this.fireplaceUI?.isOpen()) this.closeFireplaceUI();
     if (this.prefabDepositUI?.isOpen()) this.closePrefabUI();
-    this.deconstructUI?.open(payload);
+    this.deconstructUI?.open({
+      ...payload,
+      durationMs: this.localSkillMods().deconstructDurationMs,
+    });
   }
 
   private closeDeconstructUI() {
@@ -12687,7 +12863,10 @@ export class WorldScene extends Phaser.Scene {
     if (!workbenchId) return;
     const recipe = getCraftRecipe(recipeId);
     const durationMs = recipe
-      ? craftRecipeDurationMs(recipe)
+      ? craftDurationForSkill(
+          recipe,
+          this.localSkillMods().craftDurationScale,
+        )
       : CRAFT_DURATION_MS;
 
     // Soft-close the dialog (no craftClose) so the server can start the channel
@@ -12755,6 +12934,7 @@ export class WorldScene extends Phaser.Scene {
     ashenReputation?: number;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
@@ -12766,6 +12946,7 @@ export class WorldScene extends Phaser.Scene {
       playerName: me?.name ?? "You",
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
+      barterT: this.localSkillMods().barterT,
     });
     if (this.localInventorySync) {
       this.localInventorySync = {
@@ -12893,6 +13074,7 @@ export class WorldScene extends Phaser.Scene {
     redOrderReputation: number;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
@@ -12907,6 +13089,7 @@ export class WorldScene extends Phaser.Scene {
       dogtagCount: this.localDogtagCount(),
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
+      questsJson: me?.questsJson ?? "",
     });
   }
 
@@ -12929,12 +13112,20 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private syncRedOrderDialogState() {
-    if (!this.redOrderDialogUI?.isOpen()) return;
+    this.syncRedOrderDialogStateWithQuests(this.localQuestsJson());
+  }
+
+  private syncAshenMilitiaDialogState() {
+    this.syncAshenMilitiaDialogStateWithQuests(this.localQuestsJson());
+  }
+
+  private localQuestsJson(): string {
     const me = this.room?.state?.players?.get(this.sessionId);
-    this.redOrderDialogUI.sync({
-      dogtagCount: this.localDogtagCount(),
-      redOrderReputation: me?.redOrderReputation ?? RED_ORDER_REP_START,
-    });
+    const schemaQuests = me?.questsJson ?? "";
+    if (this.cachedQuestsJson && schemaQuests === this.cachedQuestsJson) {
+      this.cachedQuestsJson = "";
+    }
+    return this.cachedQuestsJson || schemaQuests;
   }
 
   private openAshenTraderDialog(payload: {
@@ -12944,6 +13135,7 @@ export class WorldScene extends Phaser.Scene {
     ashenReputation?: number;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
@@ -12970,6 +13162,7 @@ export class WorldScene extends Phaser.Scene {
     taskCompletionsJson?: string;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
@@ -12989,9 +13182,29 @@ export class WorldScene extends Phaser.Scene {
       playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
       playerInfected: !!me?.infected,
       taskCompletionsJson: payload.taskCompletionsJson,
+      questsJson: me?.questsJson ?? "",
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
+      doctorHealCost: this.localSkillMods().doctorHealCost,
     });
+  }
+
+  private sendQuestAccept(questId: string, npcId?: string) {
+    if (!this.room || !questId || !npcId) return;
+    const message: ClientMessage = {
+      type: "questAccept",
+      payload: { questId, npcId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendQuestAbandon(questId: string) {
+    if (!this.room || !questId) return;
+    const message: ClientMessage = {
+      type: "questAbandon",
+      payload: { questId },
+    };
+    this.room.send("action", message);
   }
 
   private sendAshenMilitiaCompleteTask(taskId: string) {
@@ -13014,18 +13227,6 @@ export class WorldScene extends Phaser.Scene {
       payload: { npcId },
     };
     this.room.send("action", message);
-  }
-
-  private syncAshenMilitiaDialogState() {
-    if (!this.ashenMilitiaDialogUI?.isOpen()) return;
-    const me = this.room?.state?.players?.get(this.sessionId);
-    this.ashenMilitiaDialogUI.sync({
-      inventoryJson:
-        this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]",
-      ashenMilitiaReputation: me?.ashenMilitiaReputation ?? ASHEN_REP_START,
-      playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
-      playerInfected: !!me?.infected,
-    });
   }
 
   private updateRedOrderDialogProximity() {
@@ -13304,7 +13505,6 @@ export class WorldScene extends Phaser.Scene {
         maxHunger: HUNGER_MAX,
         maxThirst: THIRST_MAX,
         infected: !!me.infected,
-        temperature: me.temperature ?? TEMPERATURE_CORE_DEFAULT,
       })
     ) {
       return;

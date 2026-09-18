@@ -37,9 +37,11 @@ export function getOccludingBuildingsForPlayerOutline(
 ) {
   const searchDist = PLAYER_WEST_NORTH_OUTLINE_REACH + 2;
   return getBuildingsNearTile(tileX, tileY, searchDist).filter((bld) => {
+    // Already painting in front of this cuboid: no silhouette.
+    if (sortDepth >= buildingWallDepth(bld)) return false;
     if (isWestOrNorthWallOutlineRange(tileX, tileY, bld)) return true;
     if (isInFrontOfBuilding(tileX, tileY, bld)) return false;
-    return sortDepth < buildingWallDepth(bld);
+    return true;
   });
 }
 

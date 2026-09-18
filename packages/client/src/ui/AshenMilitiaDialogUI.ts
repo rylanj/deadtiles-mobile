@@ -19,6 +19,9 @@ import {
   isMilitiaDoctorSkin,
   militiaGuardArtSkin,
   parseInventory,
+  parseQuestsJson,
+  canAcceptQuest,
+  canTurnInQuest,
   pickDialogVariant,
   PLAYER_MAX_HEALTH,
   type AshenMilitiaTask,
@@ -30,6 +33,7 @@ import { playerAvatarSrc } from "./playerAvatar";
 
 export type AshenMilitiaDialogUIHandlers = {
   onClose: () => void;
+  onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
   onHeal?: () => void;
 };
@@ -81,6 +85,8 @@ export class AshenMilitiaDialogUI {
   private playerInfected = false;
   /** Completions used in the current rolling window, keyed by task id. */
   private taskCompletions: Record<string, number> = {};
+  private questsJson = "";
+  private doctorHealCost = ASHEN_MILITIA_DOCTOR_HEAL_COST;
   private activeLineId: string | null = null;
   /** Task id currently expanded on the jobs reply (null = all collapsed). */
   private expandedTaskId: string | null = null;
@@ -201,6 +207,8 @@ export class AshenMilitiaDialogUI {
     playerHealth?: number;
     playerInfected?: boolean;
     taskCompletionsJson?: string;
+    questsJson?: string;
+    doctorHealCost?: number;
   }) {
     this.npcId = opts.npcId;
     this.npcSkin = opts.npcSkin;
@@ -229,6 +237,11 @@ export class AshenMilitiaDialogUI {
     this.playerHealth = opts.playerHealth ?? PLAYER_MAX_HEALTH;
     this.playerInfected = !!opts.playerInfected;
     this.taskCompletions = this.parseTaskCompletions(opts.taskCompletionsJson);
+    this.questsJson = opts.questsJson ?? "";
+    this.doctorHealCost =
+      typeof opts.doctorHealCost === "number" && opts.doctorHealCost > 0
+        ? Math.round(opts.doctorHealCost)
+        : ASHEN_MILITIA_DOCTOR_HEAL_COST;
     this.activeLineId = null;
     this.expandedTaskId = null;
     this.visible = true;
@@ -245,6 +258,7 @@ export class AshenMilitiaDialogUI {
     playerHealth?: number;
     playerInfected?: boolean;
     taskCompletionsJson?: string;
+    questsJson?: string;
   }) {
     if (opts.inventoryJson != null) this.inventoryJson = opts.inventoryJson;
     if (opts.ashenMilitiaReputation != null) {
@@ -257,6 +271,7 @@ export class AshenMilitiaDialogUI {
     if (opts.taskCompletionsJson != null) {
       this.taskCompletions = this.parseTaskCompletions(opts.taskCompletionsJson);
     }
+    if (opts.questsJson != null) this.questsJson = opts.questsJson;
     if (this.visible) this.render();
   }
 
@@ -272,6 +287,7 @@ export class AshenMilitiaDialogUI {
     this.inInterior = false;
     this.playerInfected = false;
     this.taskCompletions = {};
+    this.questsJson = "";
   }
 
   private parseTaskCompletions(json: string | undefined): Record<string, number> {
@@ -388,7 +404,7 @@ export class AshenMilitiaDialogUI {
       this.playerHealth,
       this.playerInfected,
     );
-    const canPay = banknotes >= ASHEN_MILITIA_DOCTOR_HEAL_COST;
+    const canPay = banknotes >= this.doctorHealCost;
     const canHeal = needsTreatment && canPay;
 
     const details = document.createElement("div");
@@ -406,8 +422,8 @@ export class AshenMilitiaDialogUI {
     costRow.appendChild(
       makeDisplayCell({
         itemId: "banknote",
-        qtyLabel: `×${ASHEN_MILITIA_DOCTOR_HEAL_COST}`,
-        ariaLabel: `${ASHEN_MILITIA_DOCTOR_HEAL_COST} banknotes`,
+        qtyLabel: `×${this.doctorHealCost}`,
+        ariaLabel: `${this.doctorHealCost} banknotes`,
       }),
     );
     details.appendChild(costRow);
@@ -417,7 +433,7 @@ export class AshenMilitiaDialogUI {
       const healBtn = document.createElement("button");
       healBtn.type = "button";
       healBtn.className = "red-dialog-complete-btn";
-      healBtn.textContent = `Pay $${ASHEN_MILITIA_DOCTOR_HEAL_COST}`;
+      healBtn.textContent = `Pay $${this.doctorHealCost}`;
       healBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         this.handlers.onHeal?.();
@@ -428,7 +444,7 @@ export class AshenMilitiaDialogUI {
       hint.className = "craft-recipe-hint";
       hint.textContent = !needsTreatment
         ? "You're already at full health"
-        : `Need $${ASHEN_MILITIA_DOCTOR_HEAL_COST} (you have $${banknotes})`;
+        : `Need $${this.doctorHealCost} (you have $${banknotes})`;
       details.appendChild(hint);
     }
 
@@ -442,8 +458,11 @@ export class AshenMilitiaDialogUI {
     const cappedRemaining =
       max != null ? Math.max(0, max - used) : null;
     const atCap = cappedRemaining === 0;
-    const canComplete =
-      !atCap && this.itemCount(task.requireItemId) >= task.requireQty;
+    const quests = parseQuestsJson(this.questsJson);
+    const accepted = canTurnInQuest(quests, task.id);
+    const haveItems = this.itemCount(task.requireItemId) >= task.requireQty;
+    const canAccept = !atCap && canAcceptQuest(quests, task.id);
+    const canComplete = accepted && haveItems;
     const expanded = this.expandedTaskId === task.id;
 
     const section = document.createElement("div");
@@ -481,6 +500,12 @@ export class AshenMilitiaDialogUI {
         cappedRemaining != null
           ? `Ready to turn in (${cappedRemaining} left today)`
           : "Ready to turn in";
+    } else if (canAccept) {
+      meta.textContent = haveItems
+        ? "Accept this job to turn in"
+        : "Available · accept to start";
+    } else if (accepted) {
+      meta.textContent = `Need ×${task.requireQty} ${task.requireItemLabel}`;
     } else {
       meta.textContent = `Need ×${task.requireQty} ${task.requireItemLabel}`;
     }
@@ -562,12 +587,30 @@ export class AshenMilitiaDialogUI {
         this.handlers.onCompleteTask(task.id);
       });
       details.appendChild(completeBtn);
+    } else if (canAccept) {
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.className = "red-dialog-complete-btn";
+      acceptBtn.textContent = "Accept Job";
+      acceptBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onAcceptQuest(task.id);
+      });
+      details.appendChild(acceptBtn);
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent = haveItems
+        ? "Accept this job, then turn the items in."
+        : `Missing ${task.requireItemLabel.toLowerCase()}`;
+      details.appendChild(hint);
     } else {
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
       hint.textContent = atCap
         ? "Come back later for more turn-ins"
-        : `Missing ${task.requireItemLabel.toLowerCase()}`;
+        : accepted
+          ? `Missing ${task.requireItemLabel.toLowerCase()}`
+          : "This job is not available right now.";
       details.appendChild(hint);
     }
 

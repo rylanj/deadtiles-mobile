@@ -300,7 +300,7 @@ export class InventoryUI {
     if (playerStats) this.playerStats = playerStats;
 
     if (
-      this.selectedSlot >= BASE_INVENTORY_SLOTS ||
+      this.selectedSlot >= inventory.length ||
       !inventory[this.selectedSlot]
     ) {
       this.selectedSlot = -1;
@@ -338,6 +338,11 @@ export class InventoryUI {
       ),
     );
     for (let i = WEAPON_SLOT_COUNT; i < CLOTHING_SLOT_INDEX; i++) {
+      this.pocketSlotsEl.appendChild(
+        this.createCell(i, inventory[i] ?? null, inventoryJson),
+      );
+    }
+    for (let i = BASE_INVENTORY_SLOTS; i < inventory.length; i++) {
       this.pocketSlotsEl.appendChild(
         this.createCell(i, inventory[i] ?? null, inventoryJson),
       );

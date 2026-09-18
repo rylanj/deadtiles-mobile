@@ -67,6 +67,7 @@ export class TraderUI {
   private playerBanknotes = 0;
   private traderBanknotes = 0;
   private ashenReputation = ASHEN_REP_START;
+  private barterT = 0;
   private playerInventory: Inventory = [];
   private stock: InventoryEntry[] = [];
   private selection: Selection | null = null;
@@ -261,6 +262,7 @@ export class TraderUI {
     inventoryJson: string;
     ashenReputation?: number;
     clothingSkin?: number;
+    barterT?: number;
   }) {
     this.traderId = opts.traderId;
     this.traderName = opts.traderName || ASHEN_TRADERS_FACTION;
@@ -285,6 +287,7 @@ export class TraderUI {
     stockJson: string;
     inventoryJson: string;
     ashenReputation?: number;
+    barterT?: number;
   }) {
     if (!this.visible || opts.traderId !== this.traderId) return;
     const completedConfirm = this.confirmPending;
@@ -334,10 +337,12 @@ export class TraderUI {
     stockJson: string;
     inventoryJson: string;
     ashenReputation?: number;
+    barterT?: number;
   }) {
     this.traderBanknotes = opts.traderBanknotes;
     this.playerBanknotes = opts.playerBanknotes;
     this.ashenReputation = opts.ashenReputation ?? ASHEN_REP_START;
+    this.barterT = Number.isFinite(opts.barterT) ? Math.max(0, Math.min(1, opts.barterT!)) : this.barterT;
     this.playerInventory = parseInventory(opts.inventoryJson);
     try {
       const parsed = JSON.parse(opts.stockJson) as InventoryEntry[];
@@ -529,8 +534,8 @@ export class TraderUI {
 
     const amount =
       opts.side === "player"
-        ? traderBuyPrice(opts.id, this.ashenReputation)
-        : traderSellPrice(opts.id, this.ashenReputation);
+        ? traderBuyPrice(opts.id, this.ashenReputation, this.barterT)
+        : traderSellPrice(opts.id, this.ashenReputation, this.barterT);
     cell.appendChild(makeAmountPill(amount, "trader-cell-price"));
 
     const def = getItemDefinition(opts.id);
@@ -597,6 +602,7 @@ export class TraderUI {
       sells,
       buys,
       this.ashenReputation,
+      this.barterT,
     );
     const cash = tradeOfferCashSettlement(
       net,

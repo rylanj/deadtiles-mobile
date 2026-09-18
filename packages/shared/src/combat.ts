@@ -61,6 +61,8 @@ export type ShooterMissContext = {
   furnitureCover?: boolean;
   /** Target is sprinting / running — harder to hit. */
   targetSprinting?: boolean;
+  /** Multiply resolved miss chance (accuracy skill). */
+  missScale?: number;
 };
 
 /** Linear miss chance from 0 at point-blank to missChanceAtMaxRange at weapon.range. */
@@ -101,6 +103,9 @@ export function resolveMissChance(ctx: ShooterMissContext = {}): number {
   }
   if (ctx.targetSprinting) {
     miss = Math.min(1, miss * TARGET_SPRINT_MISS_MULTIPLIER);
+  }
+  if (ctx.missScale != null && Number.isFinite(ctx.missScale)) {
+    miss *= Math.max(0, ctx.missScale);
   }
   return Math.max(0, Math.min(1, miss));
 }
@@ -224,10 +229,12 @@ export function weaponPelletCount(weapon: WeaponDefinition): number {
 export function pelletSpreadAngles(
   weapon: WeaponDefinition,
   random: () => number = Math.random,
+  spreadScale = 1,
 ): number[] {
   const n = weaponPelletCount(weapon);
-  if (n <= 1) return [rollAimSpread(weapon, random)];
-  const half = weapon.pelletConeRad ?? 0.34;
+  if (n <= 1) return [rollAimSpread(weapon, random, spreadScale)];
+  const scale = Number.isFinite(spreadScale) ? Math.max(0, spreadScale) : 1;
+  const half = (weapon.pelletConeRad ?? 0.34) * scale;
   const minGap = half * 0.08;
   const angles: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -656,8 +663,10 @@ export const MAX_AIM_SPREAD_RAD = 0.13;
 export function rollAimSpread(
   weapon: WeaponDefinition,
   random: () => number = Math.random,
+  spreadScale = 1,
 ): number {
-  const max = weapon.missChanceAtMaxRange * MAX_AIM_SPREAD_RAD;
+  const scale = Number.isFinite(spreadScale) ? Math.max(0, spreadScale) : 1;
+  const max = weapon.missChanceAtMaxRange * MAX_AIM_SPREAD_RAD * scale;
   if (max <= 0) return 0;
   return (random() + random() - 1) * max;
 }
@@ -748,6 +757,8 @@ export function freeAimRaycast(params: {
   random?: () => number;
   /** Skip the weapon accuracy roll and use this angle (shotgun pellets). */
   spreadOverride?: number;
+  /** Multiply aim-cone width (accuracy skill). */
+  spreadScale?: number;
 }): FreeAimResult | null {
   const {
     originX,
@@ -765,6 +776,7 @@ export function freeAimRaycast(params: {
     blocksSightAt,
     random = Math.random,
     spreadOverride,
+    spreadScale = 1,
   } = params;
 
   const aimDx = aimX - originX;
@@ -773,7 +785,9 @@ export function freeAimRaycast(params: {
   if (aimDist <= 0.001) return null;
 
   const spread =
-    spreadOverride !== undefined ? spreadOverride : rollAimSpread(weapon, random);
+    spreadOverride !== undefined
+      ? spreadOverride
+      : rollAimSpread(weapon, random, spreadScale);
   const cos = Math.cos(spread);
   const sin = Math.sin(spread);
   const ux = (aimDx * cos - aimDy * sin) / aimDist;
@@ -891,7 +905,11 @@ export function freeAimRaycast(params: {
 export function freeAimPellets(
   params: Omit<Parameters<typeof freeAimRaycast>[0], "spreadOverride">,
 ): FreeAimResult[] {
-  const angles = pelletSpreadAngles(params.weapon, params.random);
+  const angles = pelletSpreadAngles(
+    params.weapon,
+    params.random,
+    params.spreadScale,
+  );
   const pelletDamage =
     params.weapon.pelletDamage ?? params.weapon.damage / angles.length;
   const out: FreeAimResult[] = [];

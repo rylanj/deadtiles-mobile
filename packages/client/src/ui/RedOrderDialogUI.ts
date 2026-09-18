@@ -3,6 +3,9 @@ import {
   RED_ORDER_DIALOG_LINES,
   RED_ORDER_FACTION,
   RED_ORDER_REP_START,
+  canAcceptQuest,
+  canTurnInQuest,
+  parseQuestsJson,
   pickDialogVariant,
   redOrderStanding,
   redOrderStandingLabel,
@@ -15,6 +18,7 @@ import { playerAvatarSrc } from "./playerAvatar";
 
 export type RedOrderDialogUIHandlers = {
   onClose: () => void;
+  onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
 };
 
@@ -53,6 +57,7 @@ export class RedOrderDialogUI {
   private npcSkin = 1;
   private redOrderReputation = RED_ORDER_REP_START;
   private dogtagCount = 0;
+  private questsJson = "";
   private activeLineId: string | null = null;
 
   private overlay: HTMLElement;
@@ -166,6 +171,7 @@ export class RedOrderDialogUI {
     redOrderReputation?: number;
     dogtagCount?: number;
     clothingSkin?: number;
+    questsJson?: string;
   }) {
     this.npcId = opts.npcId;
     this.npcSkin = normalizeRedManSkin(opts.npcSkin);
@@ -174,6 +180,7 @@ export class RedOrderDialogUI {
     this.playerAvatarEl.src = playerAvatarSrc(opts.clothingSkin);
     this.redOrderReputation = opts.redOrderReputation ?? RED_ORDER_REP_START;
     this.dogtagCount = opts.dogtagCount ?? 0;
+    this.questsJson = opts.questsJson ?? "";
     this.activeLineId = null;
     this.visible = true;
     this.overlay.hidden = false;
@@ -183,12 +190,17 @@ export class RedOrderDialogUI {
   }
 
   /** Refresh turn-in eligibility / standing while the dialog stays open. */
-  sync(opts: { dogtagCount?: number; redOrderReputation?: number }) {
+  sync(opts: {
+    dogtagCount?: number;
+    redOrderReputation?: number;
+    questsJson?: string;
+  }) {
     if (!this.visible) return;
     if (opts.dogtagCount !== undefined) this.dogtagCount = opts.dogtagCount;
     if (opts.redOrderReputation !== undefined) {
       this.redOrderReputation = opts.redOrderReputation;
     }
+    if (opts.questsJson !== undefined) this.questsJson = opts.questsJson;
     this.render();
   }
 
@@ -199,6 +211,7 @@ export class RedOrderDialogUI {
     this.npcId = "";
     this.activeLineId = null;
     this.dogtagCount = 0;
+    this.questsJson = "";
   }
 
   private render() {
@@ -282,7 +295,10 @@ export class RedOrderDialogUI {
     );
     section.appendChild(rewardRow);
 
-    const canComplete = this.dogtagCount >= task.requireQty;
+    const quests = parseQuestsJson(this.questsJson);
+    const canAccept = canAcceptQuest(quests, task.id);
+    const canComplete =
+      canTurnInQuest(quests, task.id) && this.dogtagCount >= task.requireQty;
     if (canComplete) {
       const completeBtn = document.createElement("button");
       completeBtn.type = "button";
@@ -292,6 +308,29 @@ export class RedOrderDialogUI {
         this.handlers.onCompleteTask(task.id);
       });
       section.appendChild(completeBtn);
+    } else if (canAccept) {
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.className = "red-dialog-complete-btn";
+      acceptBtn.textContent = "Accept Job";
+      acceptBtn.addEventListener("click", () => {
+        this.handlers.onAcceptQuest(task.id);
+      });
+      section.appendChild(acceptBtn);
+      if (this.dogtagCount >= task.requireQty) {
+        const hint = document.createElement("div");
+        hint.className = "craft-recipe-hint";
+        hint.textContent = "Accept this job, then turn the tags in.";
+        section.appendChild(hint);
+      }
+    } else {
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent =
+        this.dogtagCount >= task.requireQty
+          ? "Come back later for more turn-ins."
+          : "Accepted. Bring Ashen dog tags.";
+      section.appendChild(hint);
     }
 
     return section;

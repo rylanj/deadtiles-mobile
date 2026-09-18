@@ -58,10 +58,12 @@ export function catchZombieInfection(
   state: InfectionState,
   now: number,
   rng: () => number = Math.random,
+  chance: number = ZOMBIE_INFECTION_CHANCE,
 ): boolean {
   if (state.infected) return false;
   if (hasActiveAntibiotics(state, now)) return false;
-  if (rng() >= ZOMBIE_INFECTION_CHANCE) return false;
+  const roll = Number.isFinite(chance) ? Math.max(0, Math.min(1, chance)) : ZOMBIE_INFECTION_CHANCE;
+  if (rng() >= roll) return false;
   state.infected = true;
   state.infection = 0;
   state.infectionTickAt = now + INFECTION_TICK_MS;
@@ -69,8 +71,16 @@ export function catchZombieInfection(
 }
 
 /** Start / refresh a 30-minute antibiotic course, including prophylactic use. */
-export function startAntibiotics(state: InfectionState, now: number): boolean {
-  state.antibioticUntil = now + ANTIBIOTIC_DURATION_MS;
+export function startAntibiotics(
+  state: InfectionState,
+  now: number,
+  durationMs: number = ANTIBIOTIC_DURATION_MS,
+): boolean {
+  const dur =
+    Number.isFinite(durationMs) && durationMs > 0
+      ? durationMs
+      : ANTIBIOTIC_DURATION_MS;
+  state.antibioticUntil = now + dur;
   if (state.infected) {
     state.infectionTickAt = now + INFECTION_TICK_MS;
   }
@@ -84,7 +94,11 @@ export function startAntibiotics(state: InfectionState, now: number): boolean {
  * After the course, leftover infection (> 0) climbs 1%/min again.
  * Curing keeps any remaining antibiotic time as prophylaxis.
  */
-export function tickInfection(state: InfectionState, now: number): void {
+export function tickInfection(
+  state: InfectionState,
+  now: number,
+  tickUp: number = INFECTION_TICK_UP,
+): void {
   if (!state.infected) {
     if (state.antibioticUntil > 0 && state.antibioticUntil <= now) {
       state.antibioticUntil = 0;
@@ -106,7 +120,12 @@ export function tickInfection(state: InfectionState, now: number): void {
         return;
       }
     } else {
-      state.infection = Math.min(INFECTION_MAX, state.infection + INFECTION_TICK_UP);
+      const rise =
+        Number.isFinite(tickUp) && tickUp > 0 ? tickUp : INFECTION_TICK_UP;
+      state.infection = Math.min(
+        INFECTION_MAX,
+        state.infection + rise,
+      );
     }
     state.infectionTickAt += INFECTION_TICK_MS;
   }

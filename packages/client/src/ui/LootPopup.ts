@@ -10,6 +10,8 @@ export type LootItem = {
 export type LootPopupOptions = {
   /** Override header (default: "You found:" / "Nothing found"). */
   header?: string;
+  /** When set, header is name on the left and this glyph on the right. */
+  arrow?: string;
 };
 
 /**
@@ -31,8 +33,20 @@ export class LootPopup {
 
     const header = document.createElement("div");
     header.className = "loot-card-header";
-    header.textContent =
+    const title =
       opts?.header ?? (items.length > 0 ? "You found:" : "Nothing useful found");
+    if (opts?.arrow) {
+      header.classList.add("loot-card-header--split");
+      const name = document.createElement("span");
+      name.className = "loot-card-header-name";
+      name.textContent = title;
+      const arrow = document.createElement("span");
+      arrow.className = "loot-card-arrow";
+      arrow.textContent = opts.arrow;
+      header.append(name, arrow);
+    } else {
+      header.textContent = title;
+    }
     card.appendChild(header);
 
     for (const item of items) {

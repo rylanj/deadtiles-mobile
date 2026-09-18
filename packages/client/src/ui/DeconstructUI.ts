@@ -16,6 +16,7 @@ export type DeconstructUIState = {
   y: number;
   kind: StructureBuildKind;
   refund: { itemId: string; quantity: number }[];
+  durationMs?: number;
 };
 
 const KIND_LABELS: Record<StructureBuildKind, string> = {
@@ -92,7 +93,7 @@ export class DeconstructUI {
 
     const label = document.createElement("div");
     label.className = "fireplace-section-label";
-    label.textContent = "Resources refunded (50%)";
+    label.textContent = "Resources refunded";
 
     this.refundListEl = document.createElement("div");
     this.refundListEl.className = "prefab-cost-list";
@@ -134,6 +135,11 @@ export class DeconstructUI {
     this.tile = { x: state.x, y: state.y };
     this.kind = state.kind;
     this.refund = state.refund.map((line) => ({ ...line }));
+    const durationMs =
+      typeof state.durationMs === "number" && state.durationMs > 0
+        ? state.durationMs
+        : 30_000;
+    this.deconstructBtn.textContent = `Deconstruct (${Math.max(1, Math.round(durationMs / 1000))}s)`;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("deconstruct-open");

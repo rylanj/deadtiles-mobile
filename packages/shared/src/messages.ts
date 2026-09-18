@@ -228,11 +228,10 @@ export type AimLookMessage = {
   facing: number;
 };
 
-/** Accept a quest from a giver / journal. */
+/** Accept a quest from the NPC currently offering it. */
 export type QuestAcceptMessage = {
   questId: string;
-  /** Optional NPC session id when accepting from dialog. */
-  npcId?: string;
+  npcId: string;
 };
 
 /** Abandon an active quest. */
@@ -668,13 +667,12 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       };
     }
     case "questAccept": {
-      if (!isIdString(p.questId)) return null;
-      if (p.npcId !== undefined && !isIdString(p.npcId)) return null;
+      if (!isIdString(p.questId) || !isIdString(p.npcId)) return null;
       return {
         type,
         payload: {
           questId: p.questId,
-          npcId: typeof p.npcId === "string" ? p.npcId : undefined,
+          npcId: p.npcId,
         },
       };
     }
@@ -1075,6 +1073,10 @@ export type ServerMessage =
         kind: StructureBuildKind;
         refund: { itemId: string; quantity: number }[];
       };
+    }
+  | {
+      type: "skillLevelUp";
+      payload: { label: string; subId: string; level: number };
     };
 
 /** One-shot / channelled world audio other clients in earshot should play. */

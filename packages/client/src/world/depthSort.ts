@@ -966,7 +966,14 @@ export function applyFurnitureEntityDepth(
       // still covers tiles south-west of the camera-near end (beside a tree
       // at the join). Those tiles are not behind the mesh; clamping them to
       // the origin depth puts the player under the tree.
-      furn.entityStep !== CHAINLINK_ENTITY_STEP
+      furn.entityStep !== CHAINLINK_ENTITY_STEP &&
+      (hideInsideCorner ||
+        isWestOrNorthOfFurniture(
+          tx,
+          ty,
+          furn,
+          furn.partition ? PARTITION_DEPTH_REACH : ENTITY_FURNITURE_DEPTH_REACH,
+        ))
     ) {
       result = Math.min(result, furnDepth - step);
     }
@@ -1087,6 +1094,45 @@ function isBuildingSwApronTile(
 }
 
 /**
+ * Immediate west neighbour of the cuboid, including the NW diagonal.
+ *
+ * The SW street apron only lifts the southmost row. One tile further north
+ * (west wall, or the tile north-west of the footprint) the cuboid's west edge
+ * still covers the sprite, but natural iso order leaves the player under it.
+ * Trees and lamps stay on the default behind path so canopies do not paint
+ * over the roof.
+ */
+function isBuildingWestAdjacentEntityTile(
+  tx: number,
+  ty: number,
+  bld: { ox: number; oy: number; w: number; h: number },
+): boolean {
+  const westOf = bld.ox - tx;
+  // Include the westmost footprint column: interpolated feet can overshoot
+  // one tile into the wall and would otherwise behind-clamp under the cuboid.
+  if (westOf === 1) {
+    return ty >= bld.oy - 1 && ty < bld.oy + bld.h;
+  }
+  if (westOf !== 0) return false;
+  return ty >= bld.oy && ty < bld.oy + bld.h;
+}
+
+/**
+ * Southmost / eastmost footprint row. Walkable tiles never sit here, but
+ * render interpolation on a street neighbour can floor onto this edge and
+ * lose the in-front lift for a frame.
+ */
+function isBuildingFrontFootprintEdge(
+  tx: number,
+  ty: number,
+  bld: { ox: number; oy: number; w: number; h: number },
+): boolean {
+  if (tx < bld.ox || ty < bld.oy) return false;
+  if (tx >= bld.ox + bld.w || ty >= bld.oy + bld.h) return false;
+  return ty === bld.oy + bld.h - 1 || tx === bld.ox + bld.w - 1;
+}
+
+/**
  * Shared front/behind building pin for living sprites, trees, and fences.
  * Preserves relative iso order inside the lift/sink band (see ENTITY_BUILDING_*).
  */
@@ -1112,6 +1158,15 @@ function applyBuildingObjectDepth(
     ) => boolean;
     /** Re-assert west/north behind after front lifts (entities + trees). */
     reassertWestNorth?: boolean;
+    /**
+     * Extra front-lift (entities only). Must also be skipped in the
+     * west/north reassert or that pass sinks the lift again.
+     */
+    extraLift?: (
+      tx: number,
+      ty: number,
+      bld: { ox: number; oy: number; w: number; h: number },
+    ) => boolean;
   } = {},
 ): number {
   const natural = depth;
@@ -1123,7 +1178,10 @@ function applyBuildingObjectDepth(
     const buildingDepth = buildingWallDepth(bld);
     const lift =
       opts.shouldLift?.(tx, ty, bld) ??
-      (isInFrontOfBuilding(tx, ty, bld) || isBuildingSwApronTile(tx, ty, bld));
+      (isInFrontOfBuilding(tx, ty, bld) ||
+        isBuildingSwApronTile(tx, ty, bld) ||
+        isBuildingFrontFootprintEdge(tx, ty, bld) ||
+        !!opts.extraLift?.(tx, ty, bld));
     if (lift) {
       frontFloor = Math.max(
         frontFloor,
@@ -1144,6 +1202,8 @@ function applyBuildingObjectDepth(
     for (const bld of nearby) {
       if (!isWestOrNorthWallOutlineRange(tx, ty, bld)) continue;
       if (isBuildingSwApronTile(tx, ty, bld)) continue;
+      if (isBuildingFrontFootprintEdge(tx, ty, bld)) continue;
+      if (opts.extraLift?.(tx, ty, bld)) continue;
       const buildingDepth = buildingWallDepth(bld);
       if (result >= buildingDepth) {
         result = Math.min(
@@ -1161,10 +1221,13 @@ function applyBuildingEntityDepth(
   tx: number,
   ty: number,
 ): number {
-  // Original order: clamp behind first, then front lifts win so SE/SW street
-  // tiles stay above the cuboid. NW/W/N overhang is handled in a final pass
-  // so a front-lift from another lot can't paint over that wall.
-  return applyBuildingObjectDepth(depth, tx, ty);
+  // Clamp behind first, then front lifts win so SE/SW street tiles stay
+  // above the cuboid. North-face overhang is handled in a final pass so a
+  // front-lift from another lot can't paint over that wall. West neighbours
+  // are entity-only (see extraLift) so trees stay under the roof.
+  return applyBuildingObjectDepth(depth, tx, ty, {
+    extraLift: isBuildingWestAdjacentEntityTile,
+  });
 }
 
 /**
@@ -1370,8 +1433,9 @@ export function applyOverworldStructureEntityDepth(
 
 /**
  * Overworld entity depth — bump above the building cuboid on street-facing
- * tiles (south / east). Clamp below when west/north so higher iso depth does
- * not draw over the cuboid one tile away from the footprint.
+ * tiles (south / east / SW apron) and on the immediate west wall / NW
+ * diagonal. Clamp below on the north face so higher iso depth does not draw
+ * over the roof.
  */
 export function overworldEntityRenderDepth(worldX: number, worldY: number) {
   const tx = Math.floor(worldX);

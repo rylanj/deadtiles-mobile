@@ -50,6 +50,34 @@ export type PlayerSkillsState = Partial<
 >;
 
 /** XP required to advance from `level` to `level + 1` (level 0–99). */
+export const PARENT_SKILL_LABELS: Record<ParentSkillId, string> = {
+  strength: "Strength",
+  endurance: "Endurance",
+  dexterity: "Dexterity",
+  intelligence: "Intelligence",
+  charisma: "Charisma",
+};
+
+export const SUB_SKILL_LABELS: Record<SubSkillId, string> = {
+  melee: "Melee",
+  harvesting: "Harvesting",
+  carrying: "Carrying",
+  construction: "Construction",
+  fitness: "Fitness",
+  immunity: "Immunity",
+  recovery: "Recovery",
+  accuracy: "Accuracy",
+  crafting: "Crafting",
+  scavenging: "Scavenging",
+  stealth: "Stealth",
+  cooking: "Cooking",
+  medicine: "Medicine",
+  reading: "Reading",
+  bartering: "Bartering",
+  persuasion: "Persuasion",
+  leadership: "Leadership",
+};
+
 export function xpToNextLevel(level: number): number {
   const clamped = Math.max(SKILL_LEVEL_MIN, Math.min(SKILL_LEVEL_MAX, level));
   if (clamped >= SKILL_LEVEL_MAX) return 0;
@@ -69,7 +97,8 @@ export function createEmptySkillsState(): PlayerSkillsState {
       subs[subId] = emptySkillProgress();
     }
     state[parentId] = {
-      ...emptySkillProgress(),
+      level: 1,
+      xp: 0,
       subs,
     };
   }
@@ -122,6 +151,10 @@ export function parseSkillsJson(json: string | null | undefined): PlayerSkillsSt
       if (!rawParent || typeof rawParent !== "object") continue;
       const parentObj = rawParent as Record<string, unknown>;
       const progress = normalizeProgress(parentObj);
+      if (progress.level < 1) {
+        progress.level = 1;
+        progress.xp = 0;
+      }
       const subs: ParentSkillState["subs"] = {
         ...base[parentId]!.subs,
       };
