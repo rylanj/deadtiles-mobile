@@ -144,7 +144,6 @@ vite.config.ts.timestamp-*
 
 # Deadtiles
 .DS_Store
-packages/server/data/
 scripts/maps/
 
 # Cursor
