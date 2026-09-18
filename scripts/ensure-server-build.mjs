@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+execSync("node scripts/assert-shared-ready.mjs", { cwd: root, stdio: "inherit" });
 
 function newestMtime(dir) {
   let newest = 0;
@@ -53,9 +54,15 @@ if (!buildShared && !buildServer) {
   process.exit(0);
 }
 
-if (buildShared) {
-  console.log("[ensure-build] compiling @zombie/shared (dist missing or stale)");
-  execSync("npm run build -w @zombie/shared", { cwd: root, stdio: "inherit" });
+// Always compile shared before the server. `tsc -p` on the server does not
+// rebuild project references, so a leftover dist from an older deploy makes
+// WorldRoom fail typecheck (missing wetness, SKILL_XP, barterT, …).
+if (buildShared || buildServer) {
+  console.log("[ensure-build] compiling @zombie/shared");
+  execSync("npx tsc -p tsconfig.json", {
+    cwd: join(root, "packages/shared"),
+    stdio: "inherit",
+  });
 }
 
 if (buildServer) {
