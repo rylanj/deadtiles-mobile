@@ -39,8 +39,14 @@ export const FIREPLACE_AIR_FULL_TILES = 1;
 export const FIREPLACE_AIR_RANGE_INDOOR = 10;
 /** Outdoor Euclidean tiles where fire air heat reaches 0. */
 export const FIREPLACE_AIR_RANGE_OUTDOOR = 5;
-/** Direct core heat while sprinting (°C/s). */
+/** Direct core heat while sprinting (°C/s). Warm-up rate, not an equilibrium offset. */
 export const TEMPERATURE_SPRINT_HEAT_PER_SEC = 0.008;
+/**
+ * Extra core °C sprinting may add on top of the air-driven target once felt air
+ * is already above comfort. Cold air uses the comfort-band cap instead, so a
+ * blizzard sprint cannot cook you.
+ */
+export const TEMPERATURE_SPRINT_MAX_EXTRA_C = 0.35;
 export const TEMPERATURE_FEVER_MAX_C = 1.4;
 export const TEMPERATURE_DAMAGE_PER_SEC = 1;
 export const TEMPERATURE_DAMAGE_INTERVAL_SEC = STARVATION_DAMAGE_INTERVAL_SEC;
@@ -54,7 +60,14 @@ export const CLOTHING_WET_FOG_MAX = 0.35;
 export const CLOTHING_DRY_FIRE_PER_SEC = 1 / 50;
 export const CLOTHING_DRY_INDOOR_PER_SEC = 1 / 180;
 export const CLOTHING_DRY_OUTDOOR_PER_SEC = 1 / 600;
-export const CLOTHING_WETNESS_WRITE_STEP = 0.01;
+/**
+ * Wetness step that counts as a display change, i.e. the step at which soak is
+ * written back into the bag json (a broadcast schema field) and pushed to
+ * clients. The UI shows soak as a ~30 px bar, so 5% is a 1.5 px move: finer
+ * steps only bought extra serialisation and network traffic while it rains.
+ * Temperature itself uses the continuous server-side value, not this.
+ */
+export const CLOTHING_WETNESS_WRITE_STEP = 0.05;
 
 const DAY_AIR_C = 18;
 const NIGHT_AIR_C = 5;
@@ -369,6 +382,21 @@ export function targetCoreTemperatureC(opts: {
   );
 }
 
+/**
+ * Highest core sprinting is allowed to push.
+ * In cold / mild air that is the top of the comfort band. In warm air it is a
+ * small bump over the air-driven target, not the old +5 °C equilibrium.
+ */
+export function sprintHeatCapC(feltAirC: number, infection = 0): number {
+  const airTarget = targetCoreTemperatureC({ feltAirC, infection });
+  if (!(feltAirC > TEMPERATURE_COMFORT_AIR_C)) {
+    return TEMPERATURE_COMFORT_HIGH;
+  }
+  return clampTemperature(
+    Math.max(TEMPERATURE_COMFORT_HIGH, airTarget + TEMPERATURE_SPRINT_MAX_EXTRA_C),
+  );
+}
+
 export function temperatureStaminaMultipliers(temp: number): {
   drain: number;
   regen: number;
@@ -514,7 +542,13 @@ export function tickCoreTemperature(
   if (state.thirst <= 0 && target > acc.core) rate *= 1.3;
   acc.core += (target - acc.core) * rate * Math.max(0, dt);
   if (opts.sprinting) {
-    acc.core += TEMPERATURE_SPRINT_HEAT_PER_SEC * Math.max(0, dt);
+    const cap = sprintHeatCapC(opts.feltAirC, opts.infection);
+    if (acc.core < cap) {
+      acc.core = Math.min(
+        cap,
+        acc.core + TEMPERATURE_SPRINT_HEAT_PER_SEC * Math.max(0, dt),
+      );
+    }
   }
   acc.core = clampTemperature(acc.core);
 

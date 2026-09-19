@@ -1,12 +1,14 @@
 import bs58 from "bs58";
 import { isNativeApp, SolanaMWA } from "../native";
-import appIcon from "../brand/deadtiles-icon.png?inline";
 
-/** Phantom fetches `icon` itself. A data URI always works; a site path 500s today. */
+/**
+ * MWA identity.icon must be a path relative to `uri` (not a data URI or
+ * absolute URL). Phantom fetches https://play.deadtiles.com + icon.
+ */
 const APP_IDENTITY = {
   name: "Deadtiles",
   uri: "https://play.deadtiles.com",
-  icon: appIcon,
+  icon: "/brand/deadtiles-icon.png",
 } as const;
 
 export type MobileWalletLogin = {

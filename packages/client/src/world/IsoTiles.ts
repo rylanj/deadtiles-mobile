@@ -50,8 +50,11 @@ import {
   type BuildingCuboidObject,
 } from "./BuildingCuboid";
 import {
+  bakeZoomTierForZoom,
   evictIdleBuildingTextures,
+  lodScale,
   purgeIdleBuildingTextures,
+  setBakeZoomTier,
   type BuildingLod,
 } from "./buildingTextureCache";
 import {
@@ -88,8 +91,9 @@ import {
 } from "../sprites/FenceAssets";
 import { renderStats } from "../diagnostics/textureBudget";
 import { streetlightTextureKey } from "../sprites/PropAssets";
-import { entityFeetY } from "../sprites/EntitySprites";
+import { ensureTreeFallFrames, entityFeetY } from "../sprites/EntitySprites";
 import {
+  buildingCuboidScreenBox,
   buildingWallDepth,
   entityRenderDepth,
   groundSortDepth,
@@ -117,6 +121,7 @@ export {
   interiorFurnitureDepth,
   interiorFurnitureDepthBias,
   interiorPartitionDepth,
+  LOCAL_PLAYER_DEPTH_BIAS,
   overworldCorpseRenderDepth,
   overworldEntityRenderDepth,
   overworldPartitionDepth,
@@ -201,6 +206,24 @@ const PRIORITY_FILL_RADIUS = 14;
  * so it is budgeted like cold bakes rather than done for the whole view at once.
  */
 const BUILDING_LOD_UPDATES_PER_SYNC = IS_MOBILE ? 3 : 16;
+
+/**
+ * Screen slack around the viewport for the near (3x supersampled) bake tier.
+ *
+ * Distance alone is a poor proxy for "can the player see this": the camera rect
+ * maps to a diamond in tile space, so a Chebyshev square around the player is
+ * roughly three times the area actually on screen and two thirds of the 3x bake
+ * budget went to buildings nobody could see. That is what exhausted the budget
+ * and pushed the buildings at your feet onto the flat fallback.
+ *
+ * Promote is the smaller ring so detail arrives before a building scrolls in
+ * (128px is ~0.7s of sprint, and the tier pass runs every sync). Demote is
+ * wider so a building hovering at the edge cannot re-bake every sync; the gap
+ * between the two is pure hysteresis. Both are only ever tightenings of the
+ * distance rule, never a widening, so no screen size can do worse than before.
+ */
+const NEAR_BAKE_PROMOTE_PAD_PX = 128;
+const NEAR_BAKE_DEMOTE_PAD_PX = 256;
 
 /**
  * Hard cap on how far tiles can be drawn from the player (Chebyshev).
@@ -987,6 +1010,11 @@ type TrackedBuilding = {
   h: number;
 };
 
+/** Supersampling a tier would be painted at right now. `far` is never baked. */
+function bakeScaleFor(lod: BuildingLod): number {
+  return lodScale(lod === "far" ? "mid" : lod);
+}
+
 /** Higher is more detailed. Used so a better bake is never thrown away. */
 function lodRank(lod: BuildingLod): number {
   if (lod === "near") return 2;
@@ -1069,6 +1097,14 @@ export class WorldTileManager {
   /** Last drawn/culled view AABB. */
   private view: ViewRect = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
   private lastView: ViewRect = { minX: NaN, maxX: NaN, minY: NaN, maxY: NaN };
+  /**
+   * Camera rect in world pixels from the last sync, for the near-bake screen
+   * test. Tile rects cannot serve: the screen maps to a diamond in tile space,
+   * which is the whole reason distance overspent the bake budget.
+   */
+  private cameraView: ViewRect | null = null;
+  /** True while an interior is showing, so nothing exterior is on screen. */
+  private overworldHidden = false;
   /** True while the render square still has undrawn tile keys. */
   private tilesRemainingInRegion = true;
   /** Resume point for incremental full-region sync. */
@@ -1089,6 +1125,7 @@ export class WorldTileManager {
   }
 
   setOverworldVisible(visible: boolean) {
+    this.overworldHidden = !visible;
     this.groundLayer.setVisible(visible);
     for (const chunk of this.streetChunks.values()) chunk.graphics.setVisible(visible);
     for (const b of this.buildingObjects.values()) b.cuboid.display.setVisible(visible);
@@ -1388,6 +1425,18 @@ export class WorldTileManager {
    * Mark a tree felled and play Falling_0001–0008 (holds on 0008).
    * `animate=false` snaps to the final frame (join sync / off-screen).
    */
+  /**
+   * A chop started here: make sure this tree's fall frames are resident.
+   *
+   * Called on the first axe swing, several seconds before the tree moves, so the
+   * animation is ready without paying for it at boot.
+   */
+  prepareTreeFall(tx: number, ty: number) {
+    const tree = getTreeAt(tx, ty);
+    if (!tree) return;
+    ensureTreeFallFrames(this.scene, tree.variant);
+  }
+
   applyTreeFelled(tx: number, ty: number, animate = true) {
     markTreeFelled(tx, ty);
     const tree = getTreeAt(tx, ty);
@@ -1412,6 +1461,20 @@ export class WorldTileManager {
       );
       return;
     }
+    // Fall frames not resident: the chop began before we were watching (join,
+    // or a rejoin mid-chop), so there was no prepareTreeFall. Snap to the
+    // resting frame rather than flickering the standing sprite through eight
+    // steps, and request the frames for the next tree.
+    if (!this.scene.textures.exists(treeFallTextureKey(tree.variant, 1))) {
+      ensureTreeFallFrames(this.scene, tree.variant);
+      applyTreeTexture(
+        this.scene,
+        img,
+        resolveTreeFallTexture(this.scene, tree.variant, TREE_FALL_FRAMES),
+      );
+      return;
+    }
+
     let frame = 1;
     const step = () => {
       if (!this.treeObjects.has(key) || this.treeObjects.get(key) !== img) return;
@@ -1756,8 +1819,17 @@ export class WorldTileManager {
     // cull/fill do not restart on sub-tile camera noise.
     this.lodTile = { x: cx, y: cy };
 
+    if (camera) setBakeZoomTier(bakeZoomTierForZoom(camera.zoom));
+
     let region: ViewRect;
     if (!IS_MOBILE && camera) {
+      const world = camera.worldView;
+      this.cameraView = {
+        minX: world.x,
+        maxX: world.x + world.width,
+        minY: world.y,
+        maxY: world.y + world.height,
+      };
       region = clampRegionToPlayerRadius(
         cameraVisibleTileRegion(camera, CAMERA_TILE_PADDING),
         cx,
@@ -1923,6 +1995,23 @@ export class WorldTileManager {
     return Number.isFinite(this.lastView.minX);
   }
 
+  /**
+   * Run the building tier pass on its own, for interiors.
+   *
+   * The normal sync is skipped while indoors, which used to mean the whole
+   * exterior city sat on full-resolution bakes nobody could see for as long as
+   * the player stayed inside. Every building is off screen here, so this drops
+   * them to the cheaper textured tier; stepping back out promotes the handful
+   * that are actually visible within a sync or two.
+   *
+   * Deliberately a smaller budget than the outdoor pass: nothing is waiting on
+   * these bytes, and re-tiering a whole city at 16 per frame would stutter
+   * through the door fade for no gain.
+   */
+  releaseOffscreenBuildingDetail() {
+    this.refreshBuildingLods(IS_MOBILE ? 1 : 4);
+  }
+
   /** Force the next syncAroundPlayer to recompute view (zoom / resize). */
   invalidateRenderView() {
     this.lastView = { minX: NaN, maxX: NaN, minY: NaN, maxY: NaN };
@@ -1938,14 +2027,42 @@ export class WorldTileManager {
     return Math.max(dx, dy);
   }
 
-  private lodForBuilding(
-    bld: { ox: number; oy: number; w: number; h: number },
-    current?: BuildingLod,
-  ): BuildingLod {
-    return buildingLodForDistance(
+  /**
+   * Is any part of this building's cuboid within `padPx` of the viewport?
+   *
+   * Interiors report false for everything: the overworld is hidden, so the whole
+   * exterior city is invisible and has no claim on the bake budget.
+   */
+  private buildingOnScreen(bld: BuildingInfo, padPx: number): boolean {
+    if (this.overworldHidden) return false;
+    const view = this.cameraView;
+    // No camera rect yet (join, mobile fixed-radius path). Assume visible rather
+    // than stripping detail from buildings we have not measured.
+    if (!view) return true;
+    const box = buildingCuboidScreenBox(bld);
+    return (
+      box.maxX >= view.minX - padPx &&
+      box.minX <= view.maxX + padPx &&
+      box.maxY >= view.minY - padPx &&
+      box.minY <= view.maxY + padPx
+    );
+  }
+
+  /** Far enough outside the viewport that dropping its bake tier cannot be seen. */
+  private buildingOffScreen(bld: BuildingInfo): boolean {
+    return !this.buildingOnScreen(bld, NEAR_BAKE_DEMOTE_PAD_PX);
+  }
+
+  private lodForBuilding(bld: BuildingInfo, current?: BuildingLod): BuildingLod {
+    const want = buildingLodForDistance(
       this.buildingDistance(bld.ox, bld.oy, bld.w, bld.h),
       current,
     );
+    if (want !== "near") return want;
+    // Near is only worth its 9x pixels on something the player can see.
+    const pad =
+      current === "near" ? NEAR_BAKE_DEMOTE_PAD_PX : NEAR_BAKE_PROMOTE_PAD_PX;
+    return this.buildingOnScreen(bld, pad) ? "near" : "mid";
   }
 
   /**
@@ -1988,26 +2105,66 @@ export class WorldTileManager {
 
     // Closest first so leftover far solids from an older session promote on
     // the street in front of you, not the horizon.
-    type Pending = { key: string; tracked: TrackedBuilding; want: BuildingLod; healing: boolean; dist: number };
+    type Pending = {
+      key: string;
+      tracked: TrackedBuilding;
+      bld: BuildingInfo;
+      want: BuildingLod;
+      healing: boolean;
+      dist: number;
+    };
     const pending: Pending[] = [];
     for (const [key, tracked] of this.buildingObjects) {
       const cuboid = tracked.cuboid;
-      const want = this.lodForBuilding(tracked, cuboid.lod);
+      const bld = getBuildingAt(tracked.ox, tracked.oy);
+      if (!bld) continue;
+      const want = this.lodForBuilding(bld, cuboid.lod);
       const healing = cuboid.fallback || cuboid.lod === "far";
-      if (want === cuboid.lod && !healing) continue;
-      // Keep a better bake (near while we only need mid). Do not queue a
-      // downgrade that can only make the building worse.
-      if (!healing && lodRank(want) < lodRank(cuboid.lod)) continue;
+      // Zoom moved the bake resolution out from under this building. Only
+      // textured cuboids carry a scale; a flat one is already covered by
+      // `healing`.
+      const staleScale =
+        !healing &&
+        cuboid.bakeScale != null &&
+        cuboid.bakeScale !== bakeScaleFor(want);
+      if (want === cuboid.lod && !healing && !staleScale) continue;
+      // Keep a better bake (near while we only need mid): softening a building
+      // the player is looking at is a visible downgrade. Off screen it is not
+      // visible at all, and those held 3x bakes are exactly what starves the
+      // buildings underfoot into flat fallbacks, so there the swap is allowed.
+      if (
+        !healing &&
+        !staleScale &&
+        lodRank(want) < lodRank(cuboid.lod) &&
+        !this.buildingOffScreen(bld)
+      ) {
+        continue;
+      }
       pending.push({
         key,
         tracked,
+        bld,
         want,
         healing,
         dist: this.buildingDistance(tracked.ox, tracked.oy, tracked.w, tracked.h),
       });
     }
     if (pending.length === 0) return;
-    pending.sort((a, b) => a.dist - b.dist);
+    // Heals are a visible defect (a flat block on the street) so they take the
+    // budget first, and so does a bake now coarser than the screen needs, which
+    // reads as a blurry building after zooming in. Anything that hands bytes
+    // back comes next even though nobody can see it, because running those
+    // before promotions lets the promotion land this pass instead of being
+    // refused and retried. Distance orders within each group, nearest first.
+    const rank = (p: Pending) => {
+      if (p.healing) return 0;
+      const current = p.tracked.cuboid.bakeScale;
+      const wanted = bakeScaleFor(p.want);
+      if (current != null && current < wanted) return 0;
+      if (current != null && current > wanted) return 1;
+      return lodRank(p.want) < lodRank(p.tracked.cuboid.lod) ? 1 : 2;
+    };
+    pending.sort((a, b) => rank(a) - rank(b) || a.dist - b.dist);
 
     const nearbyPending = pending.some(
       (p) => p.dist <= BUILDING_LOD_NEAR_TILES,
@@ -2017,10 +2174,8 @@ export class WorldTileManager {
     }
 
     let remaining = budget;
-    for (const { key, tracked, want, healing, dist } of pending) {
+    for (const { key, tracked, bld, want, healing, dist } of pending) {
       if (remaining <= 0) break;
-      const bld = getBuildingAt(tracked.ox, tracked.oy);
-      if (!bld) continue;
 
       remaining -= 1;
       const depth = buildingWallDepth(bld);

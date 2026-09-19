@@ -80,9 +80,29 @@ export const BUILDING_TEXTURE_VRAM_BUDGET = IS_MOBILE
   ? 40 * 1024 * 1024
   : 192 * 1024 * 1024;
 
-/** Supersampling factor for each baked building LOD tier. */
+/** Supersampling factor for each baked building LOD tier at normal zoom. */
 export const BUILDING_LOD_NEAR_SCALE = IS_MOBILE ? 2 : 3;
 export const BUILDING_LOD_MID_SCALE = IS_MOBILE ? 1 : 2;
+
+/**
+ * Zoom, as a fraction of the default zoom, at which bakes keep full detail and
+ * at which they step down again.
+ *
+ * A bake stores worldSize * scale pixels while the camera only rasterises
+ * worldSize * zoom of them, so the real supersampling is scale / zoom. With a
+ * fixed scale that ratio swings from 1.5x zoomed right in to 7.5x fully zoomed
+ * out, where a building is tiny on screen and 56x more texels are stored than
+ * are ever drawn. That is what saturated the bake budget in a zoomed-out city,
+ * and it is the one case the screen-visibility gate cannot help with, because
+ * when you zoom out the buildings really are all on screen.
+ *
+ * Expressed against the default zoom so the normal view is full detail on both
+ * platforms (desktop default is 1, mobile is ~0.65). Coarse, because crossing a
+ * threshold re-bakes, and the resulting scales are integers because wall strips
+ * tile at source resolution.
+ */
+export const BUILDING_BAKE_ZOOM_FULL_FRAC = 0.85;
+export const BUILDING_BAKE_ZOOM_STEP_FRAC = 0.55;
 
 /** Chebyshev tile distance where buildings drop from the near bake to the mid bake. */
 export const BUILDING_LOD_NEAR_TILES = 40;

@@ -19,9 +19,12 @@ import {
   applyBuildingTreeDepth,
   applyFurnitureEntityDepth,
   applyOverworldStructureEntityDepth,
+  BUILDING_OCCLUSION_SEARCH_REACH,
+  buildingCuboidCoversSprite,
   buildingWallDepth,
   entityRenderDepth,
   interiorPartitionDepth,
+  LOCAL_PLAYER_DEPTH_BIAS,
   overworldEntityRenderDepth,
   overworldPartitionDepth,
   type FurnitureDepthFootprint,
@@ -118,33 +121,41 @@ function checkScenario(
       if (!overlaps(wBox, entityScreenBox(ent.x, ent.y))) continue;
       pairsChecked++;
       const entityDepth = entityDepthAt(ent);
-      const entityOnTop = entityDepth > wallDepth;
-      if (entityOnTop === truth > 0) continue;
-      // Street tiles clearing a cuboid may sit above a wall that was left under
-      // that cuboid — the house face wins; skip those pairs.
-      if (
-        opts?.allowEntityOverWallsUnderBuildings &&
-        truth < 0 &&
-        entityOnTop
-      ) {
-        let underCuboid = false;
-        for (const b of getBuildingsNearTile(ent.x, ent.y, 8)) {
-          if (!isInFrontOfBuilding(ent.x, ent.y, b)) continue;
-          if (wallDepth < buildingWallDepth(b)) {
-            underCuboid = true;
-            break;
+      // The local player's tie-break bump is added after every clamp, so it is
+      // its own case: a bump as large as the step a clamp uses cancels that
+      // clamp and the player paints over the wall it stands behind.
+      for (const [who, depth] of [
+        ["remote sprite", entityDepth],
+        ["local player", entityDepth + LOCAL_PLAYER_DEPTH_BIAS],
+      ] as const) {
+        const entityOnTop = depth > wallDepth;
+        if (entityOnTop === truth > 0) continue;
+        // Street tiles clearing a cuboid may sit above a wall that was left
+        // under that cuboid — the house face wins; skip those pairs.
+        if (
+          opts?.allowEntityOverWallsUnderBuildings &&
+          truth < 0 &&
+          entityOnTop
+        ) {
+          let underCuboid = false;
+          for (const b of getBuildingsNearTile(ent.x, ent.y, 8)) {
+            if (!isInFrontOfBuilding(ent.x, ent.y, b)) continue;
+            if (wallDepth < buildingWallDepth(b)) {
+              underCuboid = true;
+              break;
+            }
           }
+          if (underCuboid) continue;
         }
-        if (underCuboid) continue;
+        failures.push({
+          scenario: `${scenario} [${who}]`,
+          wall,
+          entity: ent,
+          wallDepth,
+          entityDepth: depth,
+          expected: truth > 0 ? "entity" : "wall",
+        });
       }
-      failures.push({
-        scenario,
-        wall,
-        entity: ent,
-        wallDepth,
-        entityDepth,
-        expected: truth > 0 ? "entity" : "wall",
-      });
     }
   }
 }
@@ -433,10 +444,15 @@ for (const b of overworldSample) {
 // Report
 // ---------------------------------------------------------------------------
 
-// Player on the west wall / NW diagonal of a house must sit above that cuboid
-// (the regression for "tile north-west of a building"). Trees on the same
-// tiles stay under the roof. North-face tiles (not the NW diagonal) stay under
-// so the player does not walk onto the roof.
+// The tiles up-screen of a lot (west column = its top-left face, north row =
+// its top-right face, plus the NW diagonal) are behind the cuboid, so sprites
+// there must sort under it — the local player is still readable through the
+// occlusion outline. The one exception is the SW street apron: the southmost
+// row carries the pavement that wraps the corner, and that lifts.
+//
+// Sprites must also agree with their neighbours further out: an adjacent tile
+// that lifts while the tile behind it sinks makes the sprite pop over the wall
+// for one step (the "north-west adjacent tile" report).
 let westFaceChecked = 0;
 const westFaceFailures: string[] = [];
 let northFaceChecked = 0;
@@ -447,19 +463,19 @@ const westTreeFailures: string[] = [];
 for (const b of sampleBySize(buildings, 16)) {
   const bd = buildingWallDepth(b);
   const lot = `${b.w}x${b.h} ${b.buildingType} @ (${b.ox},${b.oy})`;
+  // West face + NW diagonal, down to and including the southernmost footprint
+  // row. Only rows strictly south of the footprint are street apron.
   for (let ty = b.oy - 1; ty < b.oy + b.h; ty++) {
-    const tx = b.ox - 1;
-    if (getBuildingAt(tx, ty)) continue;
-    westFaceChecked++;
-    const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
-    if (entityDepth <= bd) {
-      westFaceFailures.push(
-        `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} under ${lot} depth ${bd.toFixed(4)}`,
-      );
-    }
-    // SW-apron trees already lift (same street rule as entities). Only the
-    // west wall / NW diagonal must keep canopies under the roof.
-    if (ty < b.oy + b.h - 1) {
+    for (let dx = 1; dx <= 3; dx++) {
+      const tx = b.ox - dx;
+      if (getBuildingAt(tx, ty)) continue;
+      westFaceChecked++;
+      const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
+      if (entityDepth > bd) {
+        westFaceFailures.push(
+          `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} over west face of ${lot} depth ${bd.toFixed(4)}`,
+        );
+      }
       westTreeChecked++;
       const treeDepth = applyBuildingTreeDepth(
         entityRenderDepth(tx + 0.5, ty + 0.5),
@@ -474,14 +490,43 @@ for (const b of sampleBySize(buildings, 16)) {
     }
   }
   for (let tx = b.ox; tx < b.ox + b.w; tx++) {
-    const ty = b.oy - 1;
-    if (getBuildingAt(tx, ty)) continue;
-    northFaceChecked++;
-    const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
-    if (entityDepth > bd) {
-      northFaceFailures.push(
-        `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} over north face of ${lot} depth ${bd.toFixed(4)}`,
+    for (let dy = 1; dy <= 3; dy++) {
+      const ty = b.oy - dy;
+      if (getBuildingAt(tx, ty)) continue;
+      northFaceChecked++;
+      const entityDepth = overworldEntityRenderDepth(tx + 0.5, ty + 0.5);
+      if (entityDepth > bd) {
+        northFaceFailures.push(
+          `  entity (${tx},${ty}) depth ${entityDepth.toFixed(4)} over north face of ${lot} depth ${bd.toFixed(4)}`,
+        );
+      }
+    }
+  }
+}
+
+// A sprite hidden by a cuboid must be inside the occlusion search reach, or the
+// player vanishes with no silhouette (tall lots reach far up-screen).
+let outlineChecked = 0;
+const outlineFailures: string[] = [];
+
+for (const b of sampleBySize(buildings, 12)) {
+  const bd = buildingWallDepth(b);
+  const reach = BUILDING_OCCLUSION_SEARCH_REACH;
+  for (let ty = b.oy - reach - 2; ty < b.oy + b.h + 2; ty++) {
+    for (let tx = b.ox - reach - 2; tx < b.ox + b.w + 2; tx++) {
+      if (getBuildingAt(tx, ty)) continue;
+      if (overworldEntityRenderDepth(tx + 0.5, ty + 0.5) >= bd) continue;
+      if (!buildingCuboidCoversSprite(tx, ty, b)) continue;
+      outlineChecked++;
+      const dist = Math.max(
+        Math.max(b.ox - tx, 0, tx - (b.ox + b.w - 1)),
+        Math.max(b.oy - ty, 0, ty - (b.oy + b.h - 1)),
       );
+      if (dist > reach) {
+        outlineFailures.push(
+          `  sprite (${tx},${ty}) dist ${dist} hidden by ${b.w}x${b.h} ${b.buildingType} L${b.exteriorLevels} @ (${b.ox},${b.oy}) with no outline`,
+        );
+      }
     }
   }
 }
@@ -499,11 +544,14 @@ console.log(`entity under building while in front: ${buildingFrontFailures.lengt
 for (const s of buildingFrontFailures.slice(0, 8)) console.log(s);
 
 console.log(`west-face / NW-diagonal entity vs cuboid: ${westFaceChecked}`);
-console.log(`entity under cuboid on west/NW: ${westFaceFailures.length}`);
+console.log(`entity over cuboid on west/NW: ${westFaceFailures.length}`);
 for (const s of westFaceFailures.slice(0, 8)) console.log(s);
 console.log(`north-face entity vs cuboid: ${northFaceChecked}`);
 console.log(`entity over cuboid on north face: ${northFaceFailures.length}`);
 for (const s of northFaceFailures.slice(0, 8)) console.log(s);
+console.log(`sprites hidden by a cuboid: ${outlineChecked}`);
+console.log(`hidden with no occlusion outline: ${outlineFailures.length}`);
+for (const s of outlineFailures.slice(0, 8)) console.log(s);
 console.log(`west-face tree vs cuboid: ${westTreeChecked}`);
 console.log(`tree over cuboid on west/NW: ${westTreeFailures.length}`);
 for (const s of westTreeFailures.slice(0, 8)) console.log(s);
@@ -527,7 +575,8 @@ if (
   buildingFrontFailures.length ||
   westFaceFailures.length ||
   northFaceFailures.length ||
-  westTreeFailures.length
+  westTreeFailures.length ||
+  outlineFailures.length
 ) {
   process.exitCode = 1;
 } else console.log("OK");

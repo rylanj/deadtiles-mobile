@@ -612,7 +612,7 @@ export function isMapItem(itemId: string): boolean {
 }
 
 /** Channel duration for Wear / Remove clothing. */
-export const CLOTHING_CHANGE_DURATION_MS = 10_000;
+export const CLOTHING_CHANGE_DURATION_MS = 5_000;
 
 /** Synced on the player while a clothing Wear/Remove channel is active. */
 export type ClothingChangeAction = "wear" | "remove";
@@ -1478,7 +1478,55 @@ export function generateSearchLoot(
     }
   }
 
+  // Dead officer: one body per station. Desk-style 1% pistol rolls left them empty.
+  if (objectType === "deadofficer") {
+    return applyDeadOfficerLoot(results, scale);
+  }
+
   return results;
+}
+
+/** Same sidearm rate as a police-officer zombie. These bodies are rare. */
+const DEAD_OFFICER_PISTOL_CHANCE = 0.25;
+
+function applyDeadOfficerLoot(
+  results: InventoryEntry[],
+  scale: number,
+): InventoryEntry[] {
+  const out = results.slice();
+  if (
+    !out.some((e) => e.id === "weapon_pistol") &&
+    Math.random() < Math.min(1, DEAD_OFFICER_PISTOL_CHANCE * scale)
+  ) {
+    out.push({ id: "weapon_pistol", quantity: 1 });
+  }
+  if (
+    out.some((e) => e.id === "weapon_pistol") &&
+    !out.some((e) => e.id === "ammo_9x19")
+  ) {
+    out.push({
+      id: "ammo_9x19",
+      quantity: 1 + Math.floor(Math.random() * 17),
+    });
+  }
+  if (out.length === 0) {
+    const fallback: { id: string; minQty: number; maxQty: number }[] = [
+      { id: "ammo_9x19", minQty: 3, maxQty: 17 },
+      { id: "rags", minQty: 1, maxQty: 4 },
+      { id: "bandages", minQty: 1, maxQty: 2 },
+      { id: "blue_cigarettes", minQty: 1, maxQty: 1 },
+      { id: "banknote", minQty: 2, maxQty: 20 },
+      { id: "lighter", minQty: 1, maxQty: 1 },
+    ];
+    const pick = fallback[Math.floor(Math.random() * fallback.length)]!;
+    out.push({
+      id: pick.id,
+      quantity:
+        pick.minQty +
+        Math.floor(Math.random() * (pick.maxQty - pick.minQty + 1)),
+    });
+  }
+  return out;
 }
 
 /** 50% of zombies carry nothing; otherwise category rolls at normal spawn rates. */

@@ -27,6 +27,7 @@ export * from "./quests.js";
 export * from "./worldClock.js";
 export * from "./buildCosts.js";
 export * from "./structureFence.js";
+export * from "./buildPlacement.js";
 export * from "./birchport.js";
 export * from "./birchportBarracks.js";
 export * from "./onboarding.js";

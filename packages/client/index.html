@@ -43,6 +43,14 @@
         background: #1a2332;
         touch-action: manipulation;
         -webkit-text-size-adjust: 100%;
+        --browser-bottom-inset: 0px;
+        --hud-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+      }
+      /* Mobile browser chrome is not in safe-area-inset-bottom. APK uses safe-area only. */
+      body.is-mobile:not(.is-native) {
+        --hud-bottom: calc(
+          12px + max(env(safe-area-inset-bottom, 0px), var(--browser-bottom-inset, 56px))
+        );
       }
       #game {
         position: fixed;
@@ -231,13 +239,18 @@
       #temp-fill {
         background: #5a7a52;
       }
+      /*
+       * Full-viewport vignette. Only opacity is transitioned: animating the
+       * 90px inset shadow re-rasterises the whole viewport every frame of the
+       * fade, and the opacity fade already reads the same.
+       */
       #temperature-fx {
         position: fixed;
         inset: 0;
         z-index: 45;
         pointer-events: none;
         opacity: 0;
-        transition: opacity 0.4s ease, box-shadow 0.4s ease;
+        transition: opacity 0.4s ease;
       }
       #temperature-fx.temp-fx-cold {
         opacity: 1;
@@ -2133,7 +2146,7 @@
       #weapon-hotbar,
       .weapon-hotbar {
         position: fixed;
-        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        bottom: var(--hud-bottom);
         left: 50%;
         transform: translateX(-50%);
         z-index: 55;
@@ -3118,7 +3131,7 @@
         gap: 8px;
         position: fixed;
         right: max(12px, env(safe-area-inset-right, 0px));
-        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        bottom: var(--hud-bottom);
         z-index: 70;
       }
       body.game-ready:not(.main-menu-open) #mobile-hud-stack .mobile-hud-btn {
@@ -3196,7 +3209,7 @@
         width: 96px;
       }
       body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar {
-        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        bottom: var(--hud-bottom);
         left: max(12px, env(safe-area-inset-left, 0px));
         right: auto;
         transform: none;
@@ -3295,7 +3308,7 @@
           display: flex !important;
           left: max(12px, env(safe-area-inset-left, 0px));
           right: max(12px, env(safe-area-inset-right, 0px));
-          bottom: max(12px, env(safe-area-inset-bottom, 0px));
+          bottom: var(--hud-bottom);
           width: auto;
         }
         #chat-input {

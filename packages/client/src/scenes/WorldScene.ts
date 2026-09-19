@@ -39,6 +39,7 @@ import {
   searchableFootprint,
   buildingKey,
   computePlayerSkillMods,
+  type PlayerSkillMods,
   craftDurationForSkill,
   ACTION_SFX_HEAR_RADIUS,
   UNLOAD_DURATION_MS,
@@ -130,6 +131,10 @@ import {
   structureOccupiedTiles,
   nextStructureFenceFacing,
   isStructurePanelKind,
+  BUILD_DENIAL_MESSAGES,
+  interiorBuildDenial,
+  overworldBuildDenial,
+  type BuildDenialReason,
   BIRCHPORT_BARRACKS_CORNERS,
   BIRCHPORT_BARRACKS_PANELS,
   BIRCHPORT_BARRACKS_BARGATE,
@@ -176,6 +181,7 @@ import {
   interiorCorpseRenderDepth,
   interiorEntityRenderDepth,
   interiorFurnitureDepthBias,
+  LOCAL_PLAYER_DEPTH_BIAS,
   overworldCorpseRenderDepth,
   overworldEntityRenderDepth,
   applyOverworldStructureEntityDepth,
@@ -245,6 +251,7 @@ import {
   entityFeetY,
   guardIdleAKKey,
   playerManIdleKey,
+  resetTreeFallFrameRequests,
   updateEntityVisual,
   zombieIdleKey,
 } from "../sprites/EntitySprites";
@@ -287,6 +294,7 @@ import { getItemIconPath } from "../ui/itemIcons";
 import { playerAvatarSrc } from "../ui/playerAvatar";
 import type { OnboardingStepId } from "@zombie/shared";
 import { PlayerOcclusionHighlight } from "../sprites/PlayerOcclusionHighlight";
+import { PlayerOccludedGhost } from "../sprites/PlayerOccludedGhost";
 import {
   nearestManhattanTile,
   pickTopOpaqueImageAtWorld,
@@ -370,6 +378,8 @@ const ZOMBIE_RENDER_LERP = 0.35;
 const MAX_FRAME_DELTA_MS = TICK_MS;
 /** Tiles around an entity searched for placed walls when resolving depth. */
 const OVERWORLD_STRUCTURE_DEPTH_REACH = 3;
+/** How often the "Air x°C" readout is recomputed (it is shown to 0.1 °C). */
+const FELT_AIR_REFRESH_MS = 250;
 
 type BloodConfig = {
   count: number;
@@ -802,6 +812,8 @@ export class WorldScene extends Phaser.Scene {
     "ashen" | "ashenMilitia" | "redOrder"
   >();
   private playerOcclusionHighlight?: PlayerOcclusionHighlight;
+  /** Mobile replacement for the outline (no BitmapMask). */
+  private playerOccludedGhost?: PlayerOccludedGhost;
   private entityActionLabels?: EntityActionLabelManager;
   private tabKey?: Phaser.Input.Keyboard.Key;
   private mKey?: Phaser.Input.Keyboard.Key;
@@ -814,9 +826,51 @@ export class WorldScene extends Phaser.Scene {
   private zeroWasDown = false;
   private hotbarWasDown = [false, false];
   private lastInventoryRenderKey = "";
+  /** Vitals half of the inventory refresh (detail panel only, no grid rebuild). */
+  private lastInventoryVitalsKey = "";
   private lastHotbarRenderKey = "";
+  /** Memo for {@link readLocalInventory} (read-only sharers). */
+  private parsedLocalInventory: {
+    json: string;
+    inventory: ReturnType<typeof parseInventory>;
+  } | null = null;
+  /** Memo for {@link localSkillMods}, keyed on the skill json. */
+  private cachedSkillMods: { json: string; mods: PlayerSkillMods } | null = null;
+  /** Last values pushed to the HUD bars / labels (skip no-op DOM writes). */
+  private lastHudBars = {
+    healthPct: -1,
+    capPct: -1,
+    lostPct: -1,
+    staminaPct: -1,
+    hungerPct: -1,
+    thirstPct: -1,
+    tempPct: -1,
+    tempColor: "",
+    tempLabel: "",
+    hungerCritical: null as boolean | null,
+    thirstCritical: null as boolean | null,
+    tempCritical: null as boolean | null,
+    tempFx: "",
+  };
+  /** Last strings pushed to the world clock (time / core / air readouts). */
+  private lastWorldClock = {
+    time: "",
+    phase: "",
+    core: "",
+    air: "",
+    clockHidden: null as boolean | null,
+    timeHidden: null as boolean | null,
+  };
+  /** Next time (ms) the felt-air readout is recomputed. */
+  private nextFeltAirAt = 0;
   private lastQuestUiKey = "";
+  /**
+   * Quests and skills are owner-only: the server pushes them over questSync /
+   * skillSync rather than broadcasting them on PlayerState, so these are the
+   * only copies the client has.
+   */
   private cachedQuestsJson = "";
+  private localSkillsJson = "";
   /** Cached settlement labels for the open M map (recomputed when tile center moves). */
   private mapSettlementCache: {
     tx: number;
@@ -1710,8 +1764,11 @@ export class WorldScene extends Phaser.Scene {
       },
     });
     this.setupStructureBuildHud();
-    // Bitmap-mask player outline is too heavy for mobile GPUs (tab OOM reload).
-    if (!IS_MOBILE) {
+    // Bitmap-mask player outline is too heavy for mobile GPUs (tab OOM reload),
+    // so phones get the mask-free ghost copy instead of no feedback at all.
+    if (IS_MOBILE) {
+      this.playerOccludedGhost = new PlayerOccludedGhost(this);
+    } else {
       this.playerOcclusionHighlight = new PlayerOcclusionHighlight(this);
     }
     this.entityActionLabels = new EntityActionLabelManager(this);
@@ -1997,9 +2054,6 @@ export class WorldScene extends Phaser.Scene {
         this.syncWorldTiles(true);
         this.refreshAllVisuals(0);
       });
-      // Server combat is live from onJoin — clear join invulnerability now that
-      // the local sprite / canvas are actually visible.
-      this.room.send("action", { type: "clientReady" });
       this.ensureWorldBarracksFences();
       this.syncOverworldFenceSprites();
       this.syncOverworldFenceCornerSprites();
@@ -2087,6 +2141,8 @@ export class WorldScene extends Phaser.Scene {
           this.openNpcDialog(msg.payload);
         } else if (msg.type === "questSync") {
           this.applyQuestSync(msg.payload.questsJson);
+        } else if (msg.type === "skillSync") {
+          this.applySkillSync(msg.payload.skillsJson);
         } else if (msg.type === "dialogTaskComplete") {
           this.closeRedOrderDialog();
           this.closeAshenMilitiaDialog();
@@ -2176,6 +2232,11 @@ export class WorldScene extends Phaser.Scene {
         }
       });
 
+      // Last: clientReady makes the server re-send the syncs it pushed during
+      // onJoin (inventory, structures, quests, skills). Sending it before the
+      // handlers above are bound is what drops them. It also clears join
+      // invulnerability, which is fine now that the canvas is visible.
+      this.room.send("action", { type: "clientReady" });
     } catch (err) {
       // Always drop the live room on failure so the server does not keep a
       // ghost session (next Enter world → "Signed in from another session").
@@ -2484,6 +2545,34 @@ export class WorldScene extends Phaser.Scene {
     this.sessionId = "";
     this.lastInteriorKey = "";
     this.lastBoundsKey = "";
+    this.parsedLocalInventory = null;
+    this.cachedSkillMods = null;
+    // HUD elements live in the page, not the scene: forget the written values
+    // so a rejoin repaints them instead of trusting the last session's state.
+    this.lastHudBars = {
+      healthPct: -1,
+      capPct: -1,
+      lostPct: -1,
+      staminaPct: -1,
+      hungerPct: -1,
+      thirstPct: -1,
+      tempPct: -1,
+      tempColor: "",
+      tempLabel: "",
+      hungerCritical: null,
+      thirstCritical: null,
+      tempCritical: null,
+      tempFx: "",
+    };
+    this.lastWorldClock = {
+      time: "",
+      phase: "",
+      core: "",
+      air: "",
+      clockHidden: null,
+      timeHidden: null,
+    };
+    this.nextFeltAirAt = 0;
     this.clearGroundBackpackSprites();
     try {
       this.interiorView?.hide();
@@ -2498,6 +2587,7 @@ export class WorldScene extends Phaser.Scene {
     this.tileManager = undefined;
     setCuboidStatsProvider(null);
     resetBuildingTextureCache(this);
+    resetTreeFallFrameRequests();
     this.inventoryUI?.destroy();
     this.journalUI?.destroy();
     this.containerLootUI?.destroy();
@@ -2527,6 +2617,8 @@ export class WorldScene extends Phaser.Scene {
     this.onboardingUI?.destroy();
     this.onboardingUI = undefined;
     this.playerOcclusionHighlight?.destroy();
+    this.playerOccludedGhost?.destroy();
+    this.playerOccludedGhost = undefined;
     this.clearShotTraces();
     this.entityActionLabels?.destroy();
     this.moveTargetOcclusionMask?.destroy();
@@ -3787,13 +3879,28 @@ export class WorldScene extends Phaser.Scene {
     if (this.structureBuildMode) this.updateBuildModeHover();
   }
 
+  /**
+   * Local inventory parsed once per distinct json string, for the readers that
+   * run every frame (world clock, hotbar map check).
+   *
+   * READ ONLY: the array is shared between callers. Anything that edits slots
+   * must call {@link parseInventory} itself to get its own copy.
+   */
+  private readLocalInventory(json: string): ReturnType<typeof parseInventory> {
+    const cache = this.parsedLocalInventory;
+    if (cache && cache.json === json) return cache.inventory;
+    const inventory = parseInventory(json);
+    this.parsedLocalInventory = { json, inventory };
+    return inventory;
+  }
+
   /** True when the local player has a Map in the Map slot. */
   private playerHasMapItem(): boolean {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me) return false;
     const inventoryJson =
       this.localInventorySync?.inventoryJson ?? me.inventoryJson;
-    const slot = parseInventory(inventoryJson)[MAP_SLOT_INDEX];
+    const slot = this.readLocalInventory(inventoryJson)[MAP_SLOT_INDEX];
     return !!slot && isMapItem(slot.id);
   }
 
@@ -3924,22 +4031,34 @@ export class WorldScene extends Phaser.Scene {
     const temperature = Math.round((me.temperature ?? TEMPERATURE_CORE_DEFAULT) * 10) / 10;
     const infected = me.infected ? 1 : 0;
     const infection = me.infection ?? 0;
-    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}|${health}|${hunger}|${thirst}|${temperature}|${infected}|${infection}`;
-    if (key === this.lastInventoryRenderKey) return;
+    const stats = {
+      health: me.health,
+      hunger: me.hunger,
+      thirst: me.thirst,
+      temperature: me.temperature ?? TEMPERATURE_CORE_DEFAULT,
+      maxHealth: playerMaxHealthFromInfection(infection, !!me.infected),
+      maxHunger: HUNGER_MAX,
+      maxThirst: THIRST_MAX,
+      infected: !!me.infected,
+    };
+    // Vitals are kept out of the render key: they drift continuously (core
+    // temperature every 0.1 °C) and only feed the detail panel, so rebuilding
+    // every slot cell for them was wasted work.
+    const vitalsKey = `${health}|${hunger}|${thirst}|${temperature}|${infected}|${infection}`;
+    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}`;
+    if (key === this.lastInventoryRenderKey) {
+      if (vitalsKey !== this.lastInventoryVitalsKey) {
+        this.lastInventoryVitalsKey = vitalsKey;
+        this.inventoryUI.updateStats(stats);
+      }
+      return;
+    }
     this.lastInventoryRenderKey = key;
+    this.lastInventoryVitalsKey = vitalsKey;
     this.inventoryUI.render(
       inventoryJson,
       equippedSlot,
-      {
-        health: me.health,
-        hunger: me.hunger,
-        thirst: me.thirst,
-        temperature: me.temperature ?? TEMPERATURE_CORE_DEFAULT,
-        maxHealth: playerMaxHealthFromInfection(infection, !!me.infected),
-        maxHunger: HUNGER_MAX,
-        maxThirst: THIRST_MAX,
-        infected: !!me.infected,
-      },
+      stats,
       equippedClothingSlot,
       magazinesJson,
       magazineRounds,
@@ -3952,15 +4071,18 @@ export class WorldScene extends Phaser.Scene {
     this.refreshQuestPanels();
   }
 
+  /** Owner-only skill tree, pushed by the server (never in the schema). */
+  private applySkillSync(skillsJson: string) {
+    this.localSkillsJson = skillsJson;
+    this.lastQuestUiKey = "";
+    this.refreshQuestPanels();
+  }
+
   private refreshQuestPanels() {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me) return;
-    const schemaQuests = me.questsJson ?? "";
-    if (this.cachedQuestsJson && schemaQuests === this.cachedQuestsJson) {
-      this.cachedQuestsJson = "";
-    }
-    const questsJson = this.cachedQuestsJson || schemaQuests;
-    const skillsJson = me.skillsJson ?? "";
+    const questsJson = this.localQuestsJson();
+    const skillsJson = this.localSkillsJson;
     this.journalUI?.render(questsJson, skillsJson);
     const key = `${questsJson}|${skillsJson}`;
     if (key === this.lastQuestUiKey) return;
@@ -4028,7 +4150,14 @@ export class WorldScene extends Phaser.Scene {
   private syncWorldTiles(force = false) {
     if (!this.tileManager || !this.room?.state?.players) return;
     const me = this.room.state.players.get(this.sessionId);
-    if (!me || me.inInterior) return;
+    if (!me) return;
+    if (me.inInterior) {
+      // No overworld draw indoors, but the exterior cuboids are still alive and
+      // were still holding full-resolution bakes for a city behind a wall. This
+      // hands those bytes back; they promote again once you step out.
+      this.tileManager.releaseOffscreenBuildingDetail();
+      return;
+    }
     if (!Number.isFinite(me.x) || !Number.isFinite(me.y)) return;
 
     const bounds = {
@@ -4113,6 +4242,7 @@ export class WorldScene extends Phaser.Scene {
         }
         this.tileManager.highlightBuilding(null, null);
         this.playerOcclusionHighlight?.hide();
+        this.playerOccludedGhost?.hide();
         this.clearCombatTarget();
         this.clearInteractTarget();
         this.clearLootTarget();
@@ -4338,8 +4468,8 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * Procedural interior walls plus admin /build extras and persistent
-   * player-built structures. Doors only count as blocking while closed;
-   * fireplaces and fences always block movement. Used for collision / placement.
+   * player-built structures. Doors only count as blocking while closed, fences
+   * always block, and fireplaces are walkable. Used for collision / placement.
    */
   private mergedInteriorWalls(
     buildingX: number,
@@ -4352,7 +4482,6 @@ export class WorldScene extends Phaser.Scene {
     const closedDoors = (this.structureDoorsByBuilding.get(key) ?? []).filter(
       (d) => !d.isOpen,
     );
-    const fireplaces = this.structureFireplacesByBuilding.get(key) ?? [];
     const fences = this.structureFencesByBuilding.get(key) ?? [];
     const fenceTiles = fences.flatMap((f) =>
       structureOccupiedTiles({
@@ -4367,7 +4496,6 @@ export class WorldScene extends Phaser.Scene {
       extras.length === 0 &&
       structWalls.length === 0 &&
       closedDoors.length === 0 &&
-      fireplaces.length === 0 &&
       fenceTiles.length === 0 &&
       fenceCorners.length === 0
     ) {
@@ -4379,7 +4507,6 @@ export class WorldScene extends Phaser.Scene {
       ...extras,
       ...structWalls,
       ...closedDoors,
-      ...fireplaces,
       ...fenceTiles,
       ...fenceCorners,
     ]) {
@@ -6061,7 +6188,6 @@ export class WorldScene extends Phaser.Scene {
         !this.tempOverworldWallKeys.has(`${nx},${ny}`) &&
         !this.structureWallKeysOverworld.has(`${nx},${ny}`) &&
         !this.structureDoorsOverworld.has(`${nx},${ny}`) &&
-        !this.structureFireplacesOverworld.has(`${nx},${ny}`) &&
         !this.structureFenceOccupancyOverworld.has(`${nx},${ny}`) &&
         !this.structureFenceCornersOverworld.has(`${nx},${ny}`) &&
         !worldChainlinkOccupiesTile(nx, ny);
@@ -6676,6 +6802,8 @@ export class WorldScene extends Phaser.Scene {
     for (const t of tiles) {
       if (!this.isFreeBuildCell(me, t.x, t.y)) return false;
     }
+    // Doorway / Birchport rules are player-build only; admin /build stays free.
+    if (this.structureBuildMode && this.buildDenialAt(me, tiles)) return false;
     if (
       this.structureBuildMode &&
       this.structureBuildKind === "door" &&
@@ -6687,6 +6815,26 @@ export class WorldScene extends Phaser.Scene {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Doorway apron / Birchport rules, mirrored from the server so the ghost goes
+   * red instead of the click being swallowed. Returns the reason to show.
+   */
+  private buildDenialAt(
+    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    tiles: { x: number; y: number }[],
+  ): BuildDenialReason | null {
+    const kind = this.structureBuildKind;
+    if (kind === "deconstruct") return null;
+    if (me.inInterior) {
+      return interiorBuildDenial(me.buildingX, me.buildingY, kind);
+    }
+    for (const t of tiles) {
+      const denial = overworldBuildDenial(t.x, t.y, kind);
+      if (denial) return denial;
+    }
+    return null;
   }
 
   /** One-tile occupancy check used by placement (and expanded for 3×1 fences). */
@@ -7057,7 +7205,25 @@ export class WorldScene extends Phaser.Scene {
     const cart = isoToCartesian(worldPt.x, worldPt.y);
     const tx = Math.floor(cart.x);
     const ty = Math.floor(cart.y);
-    if (!this.isValidBuildTile(tx, ty)) return true;
+    if (!this.isValidBuildTile(tx, ty)) {
+      // An occupied tile reads as obvious, but "doorway" and "Birchport" do
+      // not, so say why rather than letting the click do nothing.
+      if (this.structureBuildMode) {
+        const denial = this.buildDenialAt(
+          me,
+          isStructurePanelKind(this.structureBuildKind)
+            ? structureFenceTiles(tx, ty, this.structureFenceFacing)
+            : [{ x: tx, y: ty }],
+        );
+        if (denial) {
+          this.showChatBubble(
+            this.sessionId,
+            `[build] ${BUILD_DENIAL_MESSAGES[denial]}`,
+          );
+        }
+      }
+      return true;
+    }
 
     if (this.buildMode) {
       const message: ClientMessage = {
@@ -7222,9 +7388,24 @@ export class WorldScene extends Phaser.Scene {
     // Probe the neighbourhood rather than scanning every placed tile — a base
     // can be hundreds of tiles and this runs per entity per frame.
     const reach = OVERWORLD_STRUCTURE_DEPTH_REACH;
+    // The server ships every overworld structure to every client, so the fence
+    // maps hold the whole world. Probing the occupancy index while walking the
+    // box tells us whether iterating them can produce anything at all: it lists
+    // every tile a 3-tile panel covers, which is the same overlap test the loops
+    // below run. Order of `out` matters (the final pass in
+    // applyOverworldStructureEntityDepth assigns, not clamps), so the loops stay
+    // as they were and only get skipped when nothing is in range.
+    let fenceInRange = false;
+    let cornerInRange = false;
     for (let y = ty - reach; y <= ty + reach; y++) {
       for (let x = tx - reach; x <= tx + reach; x++) {
         const key = `${x},${y}`;
+        if (!fenceInRange && this.structureFenceOccupancyOverworld.has(key)) {
+          fenceInRange = true;
+        }
+        if (!cornerInRange && this.structureFenceCornersOverworld.has(key)) {
+          cornerInRange = true;
+        }
         if (
           !this.structureWallKeysOverworld.has(key) &&
           !this.tempOverworldWallKeys.has(key) &&
@@ -7246,30 +7427,34 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     // 3-tile panels: AABB against the probe box (origin can sit 2 tiles off).
-    for (const fence of this.structureFencesOverworld.values()) {
-      const { w, h } = structureFenceFootprint(fence.facing);
-      if (
-        fence.x + w - 1 < tx - reach ||
-        fence.x > tx + reach ||
-        fence.y + h - 1 < ty - reach ||
-        fence.y > ty + reach
-      ) {
-        continue;
+    if (fenceInRange) {
+      for (const fence of this.structureFencesOverworld.values()) {
+        const { w, h } = structureFenceFootprint(fence.facing);
+        if (
+          fence.x + w - 1 < tx - reach ||
+          fence.x > tx + reach ||
+          fence.y + h - 1 < ty - reach ||
+          fence.y > ty + reach
+        ) {
+          continue;
+        }
+        out.push(
+          chainLinkFenceDepthFootprint(fence.x, fence.y, fence.facing, true),
+        );
       }
-      out.push(
-        chainLinkFenceDepthFootprint(fence.x, fence.y, fence.facing, true),
-      );
     }
-    for (const corner of this.structureFenceCornersOverworld.values()) {
-      if (
-        corner.x < tx - reach ||
-        corner.x > tx + reach ||
-        corner.y < ty - reach ||
-        corner.y > ty + reach
-      ) {
-        continue;
+    if (cornerInRange) {
+      for (const corner of this.structureFenceCornersOverworld.values()) {
+        if (
+          corner.x < tx - reach ||
+          corner.x > tx + reach ||
+          corner.y < ty - reach ||
+          corner.y > ty + reach
+        ) {
+          continue;
+        }
+        out.push(chainLinkFenceCornerDepthFootprint(corner.x, corner.y, true));
       }
-      out.push(chainLinkFenceCornerDepthFootprint(corner.x, corner.y, true));
     }
     return out;
   }
@@ -8749,9 +8934,18 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", { type: "reloadStart" });
   }
 
-  private localSkillMods() {
-    const me = this.room?.state?.players?.get(this.sessionId);
-    return computePlayerSkillMods(me?.skillsJson);
+  /**
+   * Local skill multipliers, memoised on the skill json (same trick the server
+   * uses): computing them parses the whole tree, and callers on the update loop
+   * ask for them every frame while a timed action runs.
+   */
+  private localSkillMods(): PlayerSkillMods {
+    const json = this.localSkillsJson;
+    const cache = this.cachedSkillMods;
+    if (cache && cache.json === json) return cache.mods;
+    const mods = computePlayerSkillMods(json);
+    this.cachedSkillMods = { json, mods };
+    return mods;
   }
 
   private beginOptimisticSearch(
@@ -9808,41 +10002,71 @@ export class WorldScene extends Phaser.Scene {
     if (this.worldClockEl) {
       const inventoryJson =
         this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
-      const inventory = parseInventory(inventoryJson);
+      const inventory = this.readLocalInventory(inventoryJson);
       const wornWatch = inventory[WATCH_SLOT_INDEX];
       const showClock = !!wornWatch && isWatchItem(wornWatch.id);
-      this.worldClockEl.hidden = !me;
+      const clock = this.lastWorldClock;
+      const clockHidden = !me;
+      if (clock.clockHidden !== clockHidden) {
+        clock.clockHidden = clockHidden;
+        this.worldClockEl.hidden = clockHidden;
+      }
       if (this.worldClockTimeEl) {
-        this.worldClockTimeEl.hidden = !showClock;
-        this.worldClockTimeEl.textContent = showClock ? look.clockLabel : "";
+        if (clock.timeHidden !== !showClock) {
+          clock.timeHidden = !showClock;
+          this.worldClockTimeEl.hidden = !showClock;
+        }
+        const timeText = showClock ? look.clockLabel : "";
+        if (clock.time !== timeText) {
+          clock.time = timeText;
+          this.worldClockTimeEl.textContent = timeText;
+        }
       }
-      if (showClock) {
-        this.worldClockEl.dataset.phase = look.phase;
-      } else {
-        delete this.worldClockEl.dataset.phase;
-        delete this.worldClockEl.dataset.weather;
+      const phase = showClock ? look.phase : "";
+      if (clock.phase !== phase) {
+        clock.phase = phase;
+        if (phase) {
+          this.worldClockEl.dataset.phase = phase;
+        } else {
+          delete this.worldClockEl.dataset.phase;
+          delete this.worldClockEl.dataset.weather;
+        }
       }
+      // Felt air needs the clothing stats, the nearest fire and the shelter
+      // model. It is displayed to 0.1 °C and drifts slowly, so recompute a few
+      // times a second instead of every frame.
+      const nowMs = Date.now();
       if (me && this.worldClockCoreEl && this.worldClockAirEl) {
-        const equippedSlot =
-          this.localInventorySync?.equippedClothingSlot ??
-          me.equippedClothingSlot ??
-          -1;
-        const worn = wornClothingStats(inventory, equippedSlot);
-        const fireHeat = this.localPlayerFireHeat(me);
-        const airC = computeFeltAmbient({
-          worldTimeMs,
-          sky,
-          precip,
-          indoor,
-          buildingX: indoor ? me.buildingX : undefined,
-          buildingY: indoor ? me.buildingY : undefined,
-          fireHeat,
-          insulation: worn.insulation,
-          wornWetness: worn.wetness,
-        });
-        const coreC = me.temperature ?? TEMPERATURE_CORE_DEFAULT;
-        this.worldClockCoreEl.textContent = `Core ${coreC.toFixed(1)}°C`;
-        this.worldClockAirEl.textContent = `Air ${airC.toFixed(1)}°C`;
+        if (nowMs >= this.nextFeltAirAt) {
+          this.nextFeltAirAt = nowMs + FELT_AIR_REFRESH_MS;
+          const equippedSlot =
+            this.localInventorySync?.equippedClothingSlot ??
+            me.equippedClothingSlot ??
+            -1;
+          const worn = wornClothingStats(inventory, equippedSlot);
+          const fireHeat = this.localPlayerFireHeat(me);
+          const airC = computeFeltAmbient({
+            worldTimeMs,
+            sky,
+            precip,
+            indoor,
+            buildingX: indoor ? me.buildingX : undefined,
+            buildingY: indoor ? me.buildingY : undefined,
+            fireHeat,
+            insulation: worn.insulation,
+            wornWetness: worn.wetness,
+          });
+          const coreText = `Core ${(me.temperature ?? TEMPERATURE_CORE_DEFAULT).toFixed(1)}°C`;
+          const airText = `Air ${airC.toFixed(1)}°C`;
+          if (clock.core !== coreText) {
+            clock.core = coreText;
+            this.worldClockCoreEl.textContent = coreText;
+          }
+          if (clock.air !== airText) {
+            clock.air = airText;
+            this.worldClockAirEl.textContent = airText;
+          }
+        }
       }
     }
 
@@ -9957,18 +10181,46 @@ export class WorldScene extends Phaser.Scene {
       me.temperature ?? TEMPERATURE_CORE_DEFAULT,
     );
 
-    if (this.healthFillEl) this.healthFillEl.style.width = `${healthPct}%`;
-    if (this.healthCapEl) this.healthCapEl.style.width = `${capPct}%`;
-    if (this.healthLostEl) this.healthLostEl.style.width = `${lostPct}%`;
+    // Bars sit in a DOM layer over the canvas, so every write costs a style
+    // recalc. Vitals only move every few seconds: write on change only.
+    const bars = this.lastHudBars;
+    if (this.healthFillEl && bars.healthPct !== healthPct) {
+      bars.healthPct = healthPct;
+      this.healthFillEl.style.width = `${healthPct}%`;
+    }
+    if (this.healthCapEl && bars.capPct !== capPct) {
+      bars.capPct = capPct;
+      this.healthCapEl.style.width = `${capPct}%`;
+    }
+    if (this.healthLostEl && bars.lostPct !== lostPct) {
+      bars.lostPct = lostPct;
+      this.healthLostEl.style.width = `${lostPct}%`;
+    }
     this.logInfectionStatus(me);
-    if (this.staminaFillEl) this.staminaFillEl.style.width = `${staminaPct}%`;
-    if (this.hungerFillEl) this.hungerFillEl.style.width = `${hungerPct}%`;
-    if (this.thirstFillEl) this.thirstFillEl.style.width = `${thirstPct}%`;
-    if (this.tempFillEl) {
+    if (this.staminaFillEl && bars.staminaPct !== staminaPct) {
+      bars.staminaPct = staminaPct;
+      this.staminaFillEl.style.width = `${staminaPct}%`;
+    }
+    if (this.hungerFillEl && bars.hungerPct !== hungerPct) {
+      bars.hungerPct = hungerPct;
+      this.hungerFillEl.style.width = `${hungerPct}%`;
+    }
+    if (this.thirstFillEl && bars.thirstPct !== thirstPct) {
+      bars.thirstPct = thirstPct;
+      this.thirstFillEl.style.width = `${thirstPct}%`;
+    }
+    if (this.tempFillEl && bars.tempPct !== tempLook.percent) {
+      bars.tempPct = tempLook.percent;
       this.tempFillEl.style.width = `${tempLook.percent}%`;
+    }
+    if (this.tempFillEl && bars.tempColor !== tempLook.fillColor) {
+      bars.tempColor = tempLook.fillColor;
       this.tempFillEl.style.background = tempLook.fillColor;
     }
-    if (this.tempLabelEl) this.tempLabelEl.textContent = tempLook.label;
+    if (this.tempLabelEl && bars.tempLabel !== tempLook.label) {
+      bars.tempLabel = tempLook.label;
+      this.tempLabelEl.textContent = tempLook.label;
+    }
 
     const clothingSkin =
       this.localInventorySync?.clothingSkin ?? me.clothingSkin ?? 1;
@@ -9982,14 +10234,26 @@ export class WorldScene extends Phaser.Scene {
 
     const hungerCritical = hungerPct <= 0;
     const thirstCritical = thirstPct <= 0;
-    this.hungerTrackEl?.classList.toggle("player-bar-track--critical", hungerCritical);
-    this.hungerLabelEl?.classList.toggle("player-bar-label--critical", hungerCritical);
-    this.thirstTrackEl?.classList.toggle("player-bar-track--critical", thirstCritical);
-    this.thirstLabelEl?.classList.toggle("player-bar-label--critical", thirstCritical);
-    this.tempTrackEl?.classList.toggle("player-bar-track--critical", tempLook.critical);
-    this.tempLabelEl?.classList.toggle("player-bar-label--critical", tempLook.critical);
-    this.temperatureFxEl?.classList.toggle("temp-fx-cold", tempLook.fx === "cold");
-    this.temperatureFxEl?.classList.toggle("temp-fx-hot", tempLook.fx === "hot");
+    if (bars.hungerCritical !== hungerCritical) {
+      bars.hungerCritical = hungerCritical;
+      this.hungerTrackEl?.classList.toggle("player-bar-track--critical", hungerCritical);
+      this.hungerLabelEl?.classList.toggle("player-bar-label--critical", hungerCritical);
+    }
+    if (bars.thirstCritical !== thirstCritical) {
+      bars.thirstCritical = thirstCritical;
+      this.thirstTrackEl?.classList.toggle("player-bar-track--critical", thirstCritical);
+      this.thirstLabelEl?.classList.toggle("player-bar-label--critical", thirstCritical);
+    }
+    if (bars.tempCritical !== tempLook.critical) {
+      bars.tempCritical = tempLook.critical;
+      this.tempTrackEl?.classList.toggle("player-bar-track--critical", tempLook.critical);
+      this.tempLabelEl?.classList.toggle("player-bar-label--critical", tempLook.critical);
+    }
+    if (bars.tempFx !== tempLook.fx) {
+      bars.tempFx = tempLook.fx;
+      this.temperatureFxEl?.classList.toggle("temp-fx-cold", tempLook.fx === "cold");
+      this.temperatureFxEl?.classList.toggle("temp-fx-hot", tempLook.fx === "hot");
+    }
 
     const moving =
       me.anim === "walk" || me.anim === "sprint" || me.anim === "run";
@@ -10601,6 +10865,7 @@ export class WorldScene extends Phaser.Scene {
       (msg: { x?: number; y?: number }) => {
         if (msg.x == null || msg.y == null) return;
         AudioManager.get().playTreeChop(msg.x, msg.y);
+        this.tileManager?.prepareTreeFall(msg.x, msg.y);
       },
     );
 
@@ -11168,11 +11433,10 @@ export class WorldScene extends Phaser.Scene {
     return isInBirchportBarracksYard(ptx, pty);
   }
 
-  /** Player-built overworld blockers, including fireplaces (matches server movement). */
+  /** Player-built overworld blockers (matches server movement — fireplaces are walkable). */
   private isOverworldMovementBlocked(tx: number, ty: number): boolean {
     if (this.localCanPassBarracksBargate(tx, ty)) return false;
-    if (this.isOverworldStructureBlocking(tx, ty)) return true;
-    return this.structureFireplacesOverworld.has(`${tx},${ty}`);
+    return this.isOverworldStructureBlocking(tx, ty);
   }
 
   /** Overworld click / WASD walkable probe: not a tree/building wall, not a player structure. */
@@ -12263,10 +12527,11 @@ export class WorldScene extends Phaser.Scene {
             data.buildingY,
           )
         : this.overworldEntityDepth(renderPos.x, renderPos.y);
-    // Local player: tiny tie-break only — a full +1 leaps over entities up to
-    // ~0.1 tiles south with continuous (x+y)*10 depth.
+    // Local player: tie-break only — a full +1 leaps over entities up to ~0.1
+    // tiles south with continuous (x+y)*10 depth, and anything as big as the
+    // step a wall clamp uses cancels that clamp (see LOCAL_PLAYER_DEPTH_BIAS).
     if (entityId === this.sessionId && kind === "player" && !isDead) {
-      depth += 0.001;
+      depth += LOCAL_PLAYER_DEPTH_BIAS;
     }
     sprite.setPosition(iso.x, entityFeetY(iso.y));
     sprite.setDepth(depth);
@@ -12274,8 +12539,15 @@ export class WorldScene extends Phaser.Scene {
     if (entityId === this.sessionId && kind === "player") {
       if (data.inInterior) {
         this.playerOcclusionHighlight?.hide();
+        this.playerOccludedGhost?.hide();
       } else {
         this.playerOcclusionHighlight?.update(
+          sprite,
+          Math.floor(renderPos.x),
+          Math.floor(renderPos.y),
+          depth,
+        );
+        this.playerOccludedGhost?.update(
           sprite,
           Math.floor(renderPos.x),
           Math.floor(renderPos.y),
@@ -13089,7 +13361,7 @@ export class WorldScene extends Phaser.Scene {
       dogtagCount: this.localDogtagCount(),
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
-      questsJson: me?.questsJson ?? "",
+      questsJson: this.localQuestsJson(),
     });
   }
 
@@ -13120,12 +13392,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private localQuestsJson(): string {
-    const me = this.room?.state?.players?.get(this.sessionId);
-    const schemaQuests = me?.questsJson ?? "";
-    if (this.cachedQuestsJson && schemaQuests === this.cachedQuestsJson) {
-      this.cachedQuestsJson = "";
-    }
-    return this.cachedQuestsJson || schemaQuests;
+    return this.cachedQuestsJson;
   }
 
   private openAshenTraderDialog(payload: {
@@ -13182,7 +13449,7 @@ export class WorldScene extends Phaser.Scene {
       playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
       playerInfected: !!me?.infected,
       taskCompletionsJson: payload.taskCompletionsJson,
-      questsJson: me?.questsJson ?? "",
+      questsJson: this.localQuestsJson(),
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
       doctorHealCost: this.localSkillMods().doctorHealCost,

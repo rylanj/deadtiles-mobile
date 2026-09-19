@@ -24,12 +24,14 @@ npm run dev
 - Client: http://localhost:5173
 - Server: ws://localhost:2567
 
+Put `VITE_SERVER_URL=http://192.168.0.184:2567` in gitignored `packages/client/.env` so the local client talks to your LAN Colyseus. The VPS has no `.env`, so a production build uses `https://play.deadtiles.com`.
+
 ## Android APK
 
 The phone app is a Capacitor shell that **bundles** the Vite client. Do not set `server.url` in `capacitor.config.ts` (that would load a website).
 
 1. Install [Android Studio](https://developer.android.com/studio) (JDK + Android SDK). This machine needs that before an APK will compile.
-2. Copy `packages/client/.env.example` to `packages/client/.env` and set `VITE_SERVER_URL` to a host the phone can reach (your PC LAN IP for local tests, or a hosted Colyseus URL).
+2. Copy `packages/client/.env.example` to `packages/client/.env` only when the APK should hit your PC. Leave `.env` off the VPS / store build so it uses `https://play.deadtiles.com`.
 3. From the repo root:
 
 ```bash

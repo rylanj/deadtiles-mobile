@@ -135,8 +135,8 @@ const CHAINLINK_FACING_DEPTH_BIAS: Record<StructureFenceFacing, number> = {
 };
 
 /**
- * Local player depth gets +0.001 as a tie-break. Behind-clamps must be
- * larger than that or the local player pops back in front of the panel.
+ * Panels are one sprite over 3 tiles, so an entity steps a whole sub-unit
+ * clear of the mesh rather than the hair's breadth flat walls use.
  */
 const CHAINLINK_ENTITY_STEP = 0.01;
 
@@ -449,6 +449,74 @@ function buildingCoversTileOnScreen(
 }
 
 /**
+ * How far an occlusion search has to look for cuboids that can paint over a
+ * tile. A cuboid is drawn from its footprint upward, and one tile north or
+ * west is only {@link HALF_TILE_H} up-screen, so the tallest exterior (4
+ * storeys plus roof extras) reaches ~27 tile rows. Candidates are then culled
+ * by {@link buildingCuboidCoversSprite} / {@link buildingCuboidCoversTile},
+ * which is pure arithmetic, so the wide search stays cheap.
+ */
+export const BUILDING_OCCLUSION_SEARCH_REACH = Math.ceil(
+  (WALL_DEPTH * 4 + 40) / (TILE_HEIGHT / 2),
+);
+
+/** Screen box of a sprite standing on a tile. Generous: the mask clips it. */
+function spriteScreenBox(tileX: number, tileY: number): Box {
+  return {
+    minX: (tileX - tileY - 1) * HALF_TILE_W,
+    maxX: (tileX - tileY + 1) * HALF_TILE_W,
+    minY: (tileX + tileY + 1) * HALF_TILE_H - SPRITE_TOP,
+    maxY: (tileX + tileY + 2) * HALF_TILE_H,
+  };
+}
+
+/** Screen box of a ground tile diamond (move / search indicators). */
+function groundTileScreenBox(tileX: number, tileY: number): Box {
+  return {
+    minX: (tileX - tileY - 1) * HALF_TILE_W,
+    maxX: (tileX - tileY + 1) * HALF_TILE_W,
+    minY: (tileX + tileY) * HALF_TILE_H,
+    maxY: (tileX + tileY + 2) * HALF_TILE_H,
+  };
+}
+
+/** Can this cuboid paint over a sprite standing on (tileX, tileY)? */
+export function buildingCuboidCoversSprite(
+  tileX: number,
+  tileY: number,
+  bld: BuildingInfo,
+): boolean {
+  return buildingCoversBoxOnScreen(spriteScreenBox(tileX, tileY), bld);
+}
+
+/** Can this cuboid paint over the ground diamond of (tileX, tileY)? */
+export function buildingCuboidCoversTile(
+  tileX: number,
+  tileY: number,
+  bld: BuildingInfo,
+): boolean {
+  return buildingCoversBoxOnScreen(groundTileScreenBox(tileX, tileY), bld);
+}
+
+/**
+ * Screen-space AABB of a building's whole cuboid, in camera world pixels.
+ *
+ * The footprint diamond swept up by the cuboid height, then bounded. Unlike
+ * {@link buildingCuboidCoversTile} this deliberately keeps the empty NW/NE
+ * corners of that box: the caller uses it to decide whether a building is worth
+ * a full-resolution bake, so over-claiming spends VRAM on something marginal
+ * rather than stripping detail from something the player can see.
+ */
+export function buildingCuboidScreenBox(bld: BuildingInfo): Box {
+  return {
+    minX: (bld.ox - (bld.oy + bld.h)) * HALF_TILE_W,
+    maxX: (bld.ox + bld.w - bld.oy) * HALF_TILE_W,
+    minY: (bld.ox + bld.oy) * HALF_TILE_H - buildingCuboidScreenDepth(bld),
+    maxY: (bld.ox + bld.w + bld.oy + bld.h) * HALF_TILE_H,
+  };
+}
+
+/**
  * Overworld wall depth vs building cuboids.
  *
  * A building is one graphics object keyed off its SE corner tip, so a large
@@ -529,10 +597,24 @@ function buildingFootprintInFrontOf(
 }
 
 /**
+ * Resolved cuboid depths, keyed by footprint origin.
+ *
+ * Buildings come from worldgen, so a given origin always has the same footprint
+ * and the same neighbours: the answer can never change within a session. Only
+ * whole (top-level) resolutions are cached — never the values seen mid-walk,
+ * which depend on the entry point when the neighbour graph has a cycle.
+ */
+const buildingWallDepthCache = new Map<string, number>();
+const BUILDING_WALL_DEPTH_CACHE_MAX = 20_000;
+
+/**
  * Cuboid depth for a multi-tile building. Starts from the SE corner (frontmost
  * tip), then pulls behind any neighbour that is iso-in-front but has a lower
  * SE-corner key — otherwise a large warehouse can paint over a smaller house
  * on its east/south face.
+ *
+ * Resolving one building walks its neighbours (and theirs), so the result is
+ * memoised: this runs per candidate building, per sprite, per frame.
  */
 export function buildingWallDepth(bld: {
   ox: number;
@@ -540,7 +622,15 @@ export function buildingWallDepth(bld: {
   w: number;
   h: number;
 }): number {
-  return resolveBuildingWallDepth(bld, new Set());
+  const key = `${bld.ox},${bld.oy}`;
+  const cached = buildingWallDepthCache.get(key);
+  if (cached !== undefined) return cached;
+  const depth = resolveBuildingWallDepth(bld, new Set());
+  if (buildingWallDepthCache.size >= BUILDING_WALL_DEPTH_CACHE_MAX) {
+    buildingWallDepthCache.clear();
+  }
+  buildingWallDepthCache.set(key, depth);
+  return depth;
 }
 
 function resolveBuildingWallDepth(
@@ -632,6 +722,18 @@ const PARTITION_DEPTH_REACH = 3;
  * would jump clean over the neighbouring segments of the same wall run.
  */
 const PARTITION_ENTITY_STEP = 1e-6;
+
+/**
+ * Tie-break so the local player draws over other sprites sharing its depth.
+ *
+ * Applied after the clamps below, so it has to stay under
+ * {@link PARTITION_ENTITY_STEP}: behind-a-wall clamps land exactly one step
+ * under the wall, and a bigger bump lifted the local player back over every
+ * wall it stood behind — most visible beside a building, where the lift/sink
+ * bands compress walls and entities together so the clamp is what decides the
+ * order (in the open field the natural iso gap is ~1024 and hides it).
+ */
+export const LOCAL_PLAYER_DEPTH_BIAS = PARTITION_ENTITY_STEP / 10;
 
 function isInFrontOfFurniture(
   tx: number,
@@ -1078,43 +1180,25 @@ export function interiorCorpseRenderDepth(
 export const ENTITY_BUILDING_DEPTH_REACH = 8;
 
 /**
- * West of the south face / southernmost footprint row — same SW street apron
- * walls pin via {@link buildingPinsTile}. Without this, a south-apron tree
- * lifts above the cuboid while a screen-nearer SW-corner neighbour keeps a
- * lower natural depth, so the farther tree paints over the nearer one.
+ * SW street apron: west of the footprint and strictly south of it, the same
+ * band walls pin via {@link buildingPinsTile}, and the same rule fences use.
+ * Without it, a south-apron tree lifts above the cuboid while a screen-nearer
+ * SW-corner neighbour keeps a lower natural depth, so the farther tree paints
+ * over the nearer one.
+ *
+ * The southernmost footprint row itself is *not* apron. A tile west of that
+ * row is beside the building, behind its west wall, and its screen box
+ * straddles the cuboid's left silhouette edge, so lifting it painted the
+ * sprite over the wall on exactly that one tile.
  */
 function isBuildingSwApronTile(
   tx: number,
   ty: number,
   bld: { ox: number; oy: number; w: number; h: number },
 ): boolean {
-  if (ty < bld.oy + bld.h - 1) return false;
+  if (ty < bld.oy + bld.h) return false;
   const westOf = bld.ox - tx;
   return westOf > 0 && westOf <= 4;
-}
-
-/**
- * Immediate west neighbour of the cuboid, including the NW diagonal.
- *
- * The SW street apron only lifts the southmost row. One tile further north
- * (west wall, or the tile north-west of the footprint) the cuboid's west edge
- * still covers the sprite, but natural iso order leaves the player under it.
- * Trees and lamps stay on the default behind path so canopies do not paint
- * over the roof.
- */
-function isBuildingWestAdjacentEntityTile(
-  tx: number,
-  ty: number,
-  bld: { ox: number; oy: number; w: number; h: number },
-): boolean {
-  const westOf = bld.ox - tx;
-  // Include the westmost footprint column: interpolated feet can overshoot
-  // one tile into the wall and would otherwise behind-clamp under the cuboid.
-  if (westOf === 1) {
-    return ty >= bld.oy - 1 && ty < bld.oy + bld.h;
-  }
-  if (westOf !== 0) return false;
-  return ty >= bld.oy && ty < bld.oy + bld.h;
 }
 
 /**
@@ -1158,15 +1242,6 @@ function applyBuildingObjectDepth(
     ) => boolean;
     /** Re-assert west/north behind after front lifts (entities + trees). */
     reassertWestNorth?: boolean;
-    /**
-     * Extra front-lift (entities only). Must also be skipped in the
-     * west/north reassert or that pass sinks the lift again.
-     */
-    extraLift?: (
-      tx: number,
-      ty: number,
-      bld: { ox: number; oy: number; w: number; h: number },
-    ) => boolean;
   } = {},
 ): number {
   const natural = depth;
@@ -1180,8 +1255,7 @@ function applyBuildingObjectDepth(
       opts.shouldLift?.(tx, ty, bld) ??
       (isInFrontOfBuilding(tx, ty, bld) ||
         isBuildingSwApronTile(tx, ty, bld) ||
-        isBuildingFrontFootprintEdge(tx, ty, bld) ||
-        !!opts.extraLift?.(tx, ty, bld));
+        isBuildingFrontFootprintEdge(tx, ty, bld));
     if (lift) {
       frontFloor = Math.max(
         frontFloor,
@@ -1203,7 +1277,6 @@ function applyBuildingObjectDepth(
       if (!isWestOrNorthWallOutlineRange(tx, ty, bld)) continue;
       if (isBuildingSwApronTile(tx, ty, bld)) continue;
       if (isBuildingFrontFootprintEdge(tx, ty, bld)) continue;
-      if (opts.extraLift?.(tx, ty, bld)) continue;
       const buildingDepth = buildingWallDepth(bld);
       if (result >= buildingDepth) {
         result = Math.min(
@@ -1222,12 +1295,9 @@ function applyBuildingEntityDepth(
   ty: number,
 ): number {
   // Clamp behind first, then front lifts win so SE/SW street tiles stay
-  // above the cuboid. North-face overhang is handled in a final pass so a
-  // front-lift from another lot can't paint over that wall. West neighbours
-  // are entity-only (see extraLift) so trees stay under the roof.
-  return applyBuildingObjectDepth(depth, tx, ty, {
-    extraLift: isBuildingWestAdjacentEntityTile,
-  });
+  // above the cuboid. West/north overhang is re-asserted in a final pass so a
+  // front-lift from another lot cannot paint the sprite over that wall.
+  return applyBuildingObjectDepth(depth, tx, ty);
 }
 
 /**
@@ -1327,8 +1397,12 @@ function wallSunkBehindBuildingInFrontOfEntity(
   f: FurnitureDepthFootprint,
   tx: number,
   ty: number,
+  memo?: Map<FurnitureDepthFootprint, boolean>,
 ): boolean {
+  const cached = memo?.get(f);
+  if (cached !== undefined) return cached;
   const wd = footprintSortDepth(f);
+  let sunk = false;
   for (const bld of getBuildingsNearTile(
     f.ox,
     f.oy,
@@ -1337,9 +1411,11 @@ function wallSunkBehindBuildingInFrontOfEntity(
     if (!isInFrontOfBuilding(tx, ty, bld)) continue;
     if (wd >= buildingWallDepth(bld)) continue;
     if (!buildingCoversTileOnScreen(f.ox, f.oy, bld)) continue;
-    return true;
+    sunk = true;
+    break;
   }
-  return false;
+  memo?.set(f, sunk);
+  return sunk;
 }
 
 /**
@@ -1362,11 +1438,16 @@ export function applyOverworldStructureEntityDepth(
 ): number {
   let result = applyFurnitureEntityDepth(depth, tx, ty, footprints);
 
+  // Four passes below ask the same question about the same footprints, and each
+  // answer costs a building search. (tx, ty) is fixed for this call, so one
+  // answer per footprint is enough.
+  const sunkMemo = new Map<FurnitureDepthFootprint, boolean>();
+
   for (const f of footprints) {
     if (!f.partition) continue;
     if (!isBuildingAdjustedPartition(f)) continue;
     if (!isWestOrNorthOfFurniture(tx, ty, f, PARTITION_DEPTH_REACH)) continue;
-    if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty)) continue;
+    if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty, sunkMemo)) continue;
     const wd = footprintSortDepth(f);
     if (result > wd) result = wd - PARTITION_ENTITY_STEP;
   }
@@ -1378,16 +1459,33 @@ export function applyOverworldStructureEntityDepth(
   // the side of a building that never actually stood over its cuboid — which
   // then wins over a legitimate, closer wall clamp resolved above.
   let frontFloor = Number.NEGATIVE_INFINITY;
+  let pinnedCuboid = Number.NEGATIVE_INFINITY;
   const natural = entityRenderDepth(tx + 0.5, ty + 0.5);
   for (const bld of getBuildingsNearTile(tx, ty, ENTITY_BUILDING_DEPTH_REACH)) {
     if (!buildingPinsTile(tx, ty, bld)) continue;
+    const buildingDepth = buildingWallDepth(bld);
+    pinnedCuboid = Math.max(pinnedCuboid, buildingDepth);
     frontFloor = Math.max(
       frontFloor,
-      buildingFrontEntityDepth(bld, buildingWallDepth(bld), natural),
+      buildingFrontEntityDepth(bld, buildingDepth, natural),
     );
   }
   if (frontFloor > Number.NEGATIVE_INFINITY && result < frontFloor) {
-    result = frontFloor;
+    // A wall standing on the same apron is lifted into 0.25..0.75 above the
+    // cuboid while entities lift to 1.0..1.5, so the rescue would paint the
+    // sprite over a wall it stands west/north of. Rescue only as far as that
+    // wall allows, while still clearing the cuboid so the sprite does not sink
+    // into the house it is standing in front of.
+    let cap = frontFloor;
+    for (const f of footprints) {
+      if (!f.partition) continue;
+      if (!isWestOrNorthOfFurniture(tx, ty, f, PARTITION_DEPTH_REACH)) continue;
+      if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty, sunkMemo)) continue;
+      const ceiling = footprintSortDepth(f) - partitionEntityStep(f);
+      if (ceiling <= pinnedCuboid) continue;
+      cap = Math.min(cap, ceiling);
+    }
+    if (result < cap) result = cap;
   }
 
   // East/south cuboid pins sit in front of a tent gable and west of the
@@ -1396,7 +1494,7 @@ export function applyOverworldStructureEntityDepth(
     if (!f.partition) continue;
     if (f.entityStep !== CHAINLINK_ENTITY_STEP) continue;
     if (!isWestOrNorthOfFurniture(tx, ty, f, PARTITION_DEPTH_REACH)) continue;
-    if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty)) continue;
+    if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty, sunkMemo)) continue;
     const wd = footprintSortDepth(f);
     if (result > wd) result = wd - partitionEntityStep(f);
   }
@@ -1417,7 +1515,10 @@ export function applyOverworldStructureEntityDepth(
     for (const g of footprints) {
       if (!g.partition) continue;
       if (!isWestOrNorthOfFurniture(tx, ty, g, PARTITION_DEPTH_REACH)) continue;
-      if (isBuildingAdjustedPartition(g) && wallSunkBehindBuildingInFrontOfEntity(g, tx, ty)) {
+      if (
+        isBuildingAdjustedPartition(g) &&
+        wallSunkBehindBuildingInFrontOfEntity(g, tx, ty, sunkMemo)
+      ) {
         continue;
       }
       const gd = footprintSortDepth(g);
@@ -1433,9 +1534,9 @@ export function applyOverworldStructureEntityDepth(
 
 /**
  * Overworld entity depth — bump above the building cuboid on street-facing
- * tiles (south / east / SW apron) and on the immediate west wall / NW
- * diagonal. Clamp below on the north face so higher iso depth does not draw
- * over the roof.
+ * tiles (south / east / SW apron). Clamp below on the west and north faces so
+ * a sprite standing up-screen of the lot does not draw over the wall it is
+ * actually behind (the local player still gets the occlusion outline).
  */
 export function overworldEntityRenderDepth(worldX: number, worldY: number) {
   const tx = Math.floor(worldX);

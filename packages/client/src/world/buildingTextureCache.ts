@@ -1,9 +1,12 @@
 import Phaser from "phaser";
 import {
+  BUILDING_BAKE_ZOOM_FULL_FRAC,
+  BUILDING_BAKE_ZOOM_STEP_FRAC,
   BUILDING_LOD_MID_SCALE,
   BUILDING_LOD_NEAR_SCALE,
   BUILDING_TEXTURE_VRAM_BUDGET,
   BUILDING_VARIANT_BUCKETS,
+  getDefaultCameraZoom,
 } from "../gameConfig";
 import { renderStats } from "../diagnostics/textureBudget";
 
@@ -26,9 +29,67 @@ import { renderStats } from "../diagnostics/textureBudget";
 
 export type BuildingLod = "near" | "mid" | "far";
 
-/** Supersampling factor for a textured tier. `far` is never baked. */
-export function lodScale(lod: Exclude<BuildingLod, "far">): number {
-  return lod === "near" ? BUILDING_LOD_NEAR_SCALE : BUILDING_LOD_MID_SCALE;
+/**
+ * Coarse zoom tier for bake resolution. 2 is full detail (the historical fixed
+ * scale), 0 is the widest zoom-out.
+ */
+export type BakeZoomTier = 0 | 1 | 2;
+
+/** Hysteresis on the way back to more detail, in fractions of default zoom. */
+const BAKE_ZOOM_HYSTERESIS_FRAC = 0.05;
+
+export function bakeZoomTierForZoom(zoom: number): BakeZoomTier {
+  const frac = zoom / (getDefaultCameraZoom() || 1);
+  if (!Number.isFinite(frac)) return 2;
+  // Climbing to a sharper tier has to clear the threshold by a margin: every
+  // tier change repaints every live building, so wheel-zooming back and forth
+  // across a boundary must not be able to thrash a whole city of re-bakes.
+  const current = bakeZoomTier;
+  const full =
+    BUILDING_BAKE_ZOOM_FULL_FRAC +
+    (current < 2 ? BAKE_ZOOM_HYSTERESIS_FRAC : 0);
+  const step =
+    BUILDING_BAKE_ZOOM_STEP_FRAC +
+    (current < 1 ? BAKE_ZOOM_HYSTERESIS_FRAC : 0);
+  if (frac >= full) return 2;
+  if (frac >= step) return 1;
+  return 0;
+}
+
+/**
+ * Zoom tier new bakes are painted for.
+ *
+ * Module state rather than a threaded parameter so the signature and the paint
+ * cannot disagree: both read it inside one synchronous createBuildingCuboid
+ * call, and only the sync pass ever moves it.
+ */
+let bakeZoomTier: BakeZoomTier = 2;
+
+export function setBakeZoomTier(tier: BakeZoomTier) {
+  bakeZoomTier = tier;
+}
+
+export function getBakeZoomTier(): BakeZoomTier {
+  return bakeZoomTier;
+}
+
+/**
+ * Supersampling factor for a textured tier. `far` is never baked.
+ *
+ * Zoomed out, a near building is small on screen and can give up a step while
+ * still supersampling ~2.4x or better. Mid only steps down at the widest zoom:
+ * one step from 2 would leave it at 1.2x at the top of the middle bucket, which
+ * is barely above screen resolution. Never returns less than 1, so a bake is
+ * never coarser than the pixels it covers.
+ */
+export function lodScale(
+  lod: Exclude<BuildingLod, "far">,
+  tier: BakeZoomTier = bakeZoomTier,
+): number {
+  const full = lod === "near" ? BUILDING_LOD_NEAR_SCALE : BUILDING_LOD_MID_SCALE;
+  if (tier === 2) return full;
+  if (tier === 1) return lod === "near" ? Math.max(1, full - 1) : full;
+  return 1;
 }
 
 /** Geometry of a bake, relative to the building's iso origin. */
@@ -112,6 +173,15 @@ export type BuildingSignatureParts = {
   boarded: boolean;
 };
 
+/**
+ * Cache key for a bake.
+ *
+ * The supersampling factor is part of the key, not just the tier: zooming out
+ * repaints at a lower scale, and a handle carries the scale the sprite is drawn
+ * back down by, so sharing one key across two scales would draw a building at
+ * the wrong size. Distinct keys also mean the old bake simply goes idle and the
+ * existing eviction reclaims it.
+ */
 export function buildingSignature(
   parts: BuildingSignatureParts,
   lod: BuildingLod,
@@ -119,6 +189,7 @@ export function buildingSignature(
   return [
     "bld",
     lod,
+    lod === "far" ? 0 : lodScale(lod),
     parts.buildingType,
     parts.w,
     parts.h,

@@ -3,8 +3,6 @@ import {
   getBuildingsNearTile,
   getTreesNearTile,
   isInFrontOfBuilding,
-  isWestOrNorthWallOutlineRange,
-  PLAYER_WEST_NORTH_OUTLINE_REACH,
   treeAsBuilding,
   type TreeInfo,
 } from "@zombie/shared";
@@ -14,34 +12,57 @@ import {
   drawBuildingCuboidMask,
   treeRenderDepth,
 } from "./IsoTiles";
+import {
+  BUILDING_OCCLUSION_SEARCH_REACH,
+  buildingCuboidCoversSprite,
+  buildingCuboidCoversTile,
+} from "./depthSort";
 
 /** Renders above all building cuboids (occluded portions of overlays). */
 export const OCCLUSION_OVERLAY_DEPTH = 2_000_000;
 
+/**
+ * Cuboids that paint over this tile. Depth decides that, not tile-side rules:
+ * anything further than the behind-clamp reach is already under the cuboid by
+ * plain iso order, and a wall clamp can leave a sprite under a cuboid it is
+ * nominally in front of.
+ */
 export function getOccludingBuildings(
   tileX: number,
   tileY: number,
   sortDepth: number,
 ) {
-  return getBuildingsNearTile(tileX, tileY, 2).filter((bld) => {
-    if (isInFrontOfBuilding(tileX, tileY, bld)) return false;
+  return getBuildingsNearTile(
+    tileX,
+    tileY,
+    BUILDING_OCCLUSION_SEARCH_REACH,
+  ).filter((bld) => {
+    // Coverage first: pure arithmetic, and it rejects most of the wide search
+    // before the cuboid depth walk runs.
+    if (!buildingCuboidCoversTile(tileX, tileY, bld)) return false;
     return sortDepth < buildingWallDepth(bld);
   });
 }
 
-/** Player outline — extended west/north reach where feet clip the cuboid. */
+/**
+ * Player outline: same rule, with a sprite-height box. A tall block hides the
+ * player from well beyond the adjacent tiles (a 3-storey hospital reaches ~18
+ * rows up-screen), so the search has to cover the whole cuboid or the player
+ * vanishes with no silhouette.
+ */
 export function getOccludingBuildingsForPlayerOutline(
   tileX: number,
   tileY: number,
   sortDepth: number,
 ) {
-  const searchDist = PLAYER_WEST_NORTH_OUTLINE_REACH + 2;
-  return getBuildingsNearTile(tileX, tileY, searchDist).filter((bld) => {
+  return getBuildingsNearTile(
+    tileX,
+    tileY,
+    BUILDING_OCCLUSION_SEARCH_REACH,
+  ).filter((bld) => {
+    if (!buildingCuboidCoversSprite(tileX, tileY, bld)) return false;
     // Already painting in front of this cuboid: no silhouette.
-    if (sortDepth >= buildingWallDepth(bld)) return false;
-    if (isWestOrNorthWallOutlineRange(tileX, tileY, bld)) return true;
-    if (isInFrontOfBuilding(tileX, tileY, bld)) return false;
-    return true;
+    return sortDepth < buildingWallDepth(bld);
   });
 }
 

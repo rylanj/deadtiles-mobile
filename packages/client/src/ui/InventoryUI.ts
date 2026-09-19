@@ -282,6 +282,17 @@ export class InventoryUI {
     return this.visible;
   }
 
+  /**
+   * Refresh the vitals the detail panel reads (a drink is greyed out when the
+   * player is not thirsty) without rebuilding the slot grid. Health, hunger,
+   * thirst and core temperature all drift while the bag sits open.
+   */
+  updateStats(playerStats: InventoryPlayerStats) {
+    this.playerStats = playerStats;
+    if (!this.visible) return;
+    this.updateDetail();
+  }
+
   render(
     inventoryJson: string,
     equippedInventorySlot: number,

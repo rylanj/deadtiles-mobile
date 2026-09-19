@@ -500,6 +500,50 @@ export function isBuildingEntranceTile(tx: number, ty: number, bld: BuildingInfo
   return buildingEntranceTiles(bld).some((t) => t.x === tx && t.y === ty);
 }
 
+/**
+ * How far out from a doorway the keep-clear apron reaches. Depth 1 is the tile
+ * the player steps on to enter; depth 2 stops a wall being parked just past it.
+ */
+export const BUILDING_ENTRANCE_CLEARANCE_DEPTH = 2;
+
+/**
+ * True for the doorway tiles and the apron directly outside them. Nothing may
+ * be built here or one wall would lock everyone out of the building.
+ *
+ * The apron widens by one tile to each side past the façade, because entities
+ * move diagonally and would otherwise squeeze around a single blocking tile.
+ */
+export function tileInBuildingEntranceClearance(
+  tx: number,
+  ty: number,
+  bld: Pick<
+    BuildingInfo,
+    "ox" | "oy" | "w" | "h" | "entranceX" | "entranceY" | "entranceSpan"
+  >,
+): boolean {
+  const span = buildingEntranceSpan(bld);
+  const face = buildingEntranceFace(bld);
+  // SE doorways open east (+x) and run along y; SW open south (+y), run along x.
+  const depth = face === "SE" ? tx - bld.entranceX : ty - bld.entranceY;
+  if (depth < 0 || depth > BUILDING_ENTRANCE_CLEARANCE_DEPTH) return false;
+  const spread = depth === 0 ? 0 : 1;
+  const along = face === "SE" ? ty : tx;
+  const start = face === "SE" ? bld.entranceY : bld.entranceX;
+  return along >= start - spread && along <= start + span - 1 + spread;
+}
+
+/** True when any nearby building's doorway apron covers this tile. */
+export function isBuildingEntranceClearanceTile(tx: number, ty: number): boolean {
+  for (const bld of getBuildingsNearTile(
+    tx,
+    ty,
+    BUILDING_ENTRANCE_CLEARANCE_DEPTH,
+  )) {
+    if (tileInBuildingEntranceClearance(tx, ty, bld)) return true;
+  }
+  return false;
+}
+
 function tileInBuildingFootprint(
   tx: number,
   ty: number,
@@ -4136,12 +4180,26 @@ export function getTreesNearTile(
   maxDist = 2,
 ): TreeInfo[] {
   const trees: TreeInfo[] = [];
-  for (let dy = -maxDist; dy <= maxDist; dy++) {
-    for (let dx = -maxDist; dx <= maxDist; dx++) {
-      const tree = getTreeAt(tx + dx, ty + dy);
+  // Only one tile per TREE_CELL block can hold a tree, so walk the cells (like
+  // countStandingTreesNear) instead of probing every tile in the square. Same
+  // result set, an order of magnitude fewer worldgen probes — this runs per
+  // occlusion mask, per frame.
+  const gx0 = Math.floor((tx - maxDist) / TREE_CELL);
+  const gy0 = Math.floor((ty - maxDist) / TREE_CELL);
+  const gx1 = Math.floor((tx + maxDist) / TREE_CELL);
+  const gy1 = Math.floor((ty + maxDist) / TREE_CELL);
+  for (let gy = gy0; gy <= gy1; gy++) {
+    for (let gx = gx0; gx <= gx1; gx++) {
+      const rng = seededRandom(`tree:${gx},${gy}`);
+      const lx = gx * TREE_CELL + Math.floor(rng() * TREE_CELL);
+      const ly = gy * TREE_CELL + Math.floor(rng() * TREE_CELL);
+      if (Math.abs(lx - tx) > maxDist || Math.abs(ly - ty) > maxDist) continue;
+      const tree = getTreeAt(lx, ly);
       if (tree) trees.push(tree);
     }
   }
+  // Row-major tile order, as the per-tile scan produced.
+  trees.sort((a, b) => (a.oy === b.oy ? a.ox - b.ox : a.oy - b.oy));
   return trees;
 }
 

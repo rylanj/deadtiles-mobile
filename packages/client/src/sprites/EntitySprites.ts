@@ -32,6 +32,7 @@ import {
   idleWeaponKeyFromIndex,
   normalizeRedManSkin,
   RED_MAN_SKIN_COUNT,
+  TREE_FALL_FRAMES,
   type DirectionLabel,
   type IdleWeaponKey,
 } from "@zombie/shared";
@@ -512,16 +513,65 @@ export function loadSurvivorAssets(scene: Phaser.Scene) {
   scene.load.image("tile-hospital", "GroundHospital.png");
   scene.load.image("tile-motel", "GroundMotel.png");
 
+  // Standing sprite plus the resting frame of the fall, per variant.
+  //
+  // The in-between frames are only on screen while a tree is actually coming
+  // down, so they load on the chop instead (see ensureTreeFallFrames): at
+  // 256x256 they were ~9MB of permanent boot VRAM for an animation a session
+  // may never play. The resting frame stays eager because treesSync paints
+  // already-felled trees with no animation, and a felled tree that still looks
+  // like it is standing is worse than a brief load.
   for (let n = 1; n <= 5; n++) {
     scene.load.image(`tree-${n}`, `Tree/Tree${n}/Tree${n}.png`);
-    for (let f = 1; f <= 8; f++) {
-      const tag = String(f).padStart(4, "0");
-      scene.load.image(
-        `tree-${n}-fall-${f}`,
-        `Tree/Tree${n}/Tree${n}_Falling_${tag}.png`,
-      );
-    }
+    scene.load.image(
+      treeFallFrameKey(n, TREE_FALL_FRAMES),
+      treeFallFramePath(n, TREE_FALL_FRAMES),
+    );
   }
+}
+
+function treeFallFrameKey(variant: number, frame: number): string {
+  return `tree-${variant}-fall-${frame}`;
+}
+
+function treeFallFramePath(variant: number, frame: number): string {
+  const tag = String(frame).padStart(4, "0");
+  return `Tree/Tree${variant}/Tree${variant}_Falling_${tag}.png`;
+}
+
+/** Variants whose in-between fall frames are loaded or in flight. */
+const treeFallFramesRequested = new Set<number>();
+
+/**
+ * Load the in-between frames of one tree variant's fall animation.
+ *
+ * Called when a chop starts, which is several seconds of axe swings before the
+ * tree moves, so the frames are resident well before they are drawn. If a load
+ * is somehow still pending, resolveTreeFallTexture falls back to the standing
+ * sprite for those frames while the eager resting frame still lands, so the
+ * tree ends up correctly felled either way.
+ */
+export function ensureTreeFallFrames(scene: Phaser.Scene, variant: number) {
+  const idx = (((variant % 5) + 5) % 5) + 1;
+  if (treeFallFramesRequested.has(idx)) return;
+  treeFallFramesRequested.add(idx);
+
+  let queued = 0;
+  const prevPath = scene.load.path;
+  scene.load.setPath("/assets");
+  for (let f = 1; f < TREE_FALL_FRAMES; f++) {
+    const key = treeFallFrameKey(idx, f);
+    if (scene.textures.exists(key)) continue;
+    scene.load.image(key, treeFallFramePath(idx, f));
+    queued += 1;
+  }
+  scene.load.setPath(prevPath);
+  if (queued > 0 && !scene.load.isLoading()) scene.load.start();
+}
+
+/** Scene teardown: the next scene re-requests against a fresh texture manager. */
+export function resetTreeFallFrameRequests() {
+  treeFallFramesRequested.clear();
 }
 
 function applyDisplaySizeFromWH(

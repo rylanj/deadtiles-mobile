@@ -1,6 +1,5 @@
 import { Client, Room } from "colyseus.js";
 import {
-  DEFAULT_SERVER_PORT,
   WORLD_FULL_MESSAGE,
   WORLD_ROOM_NAME,
   type FreeAimSurface,
@@ -20,6 +19,7 @@ import type { WalletOption } from "./walletOptions";
 
 const SESSION_KEY = "deatiles_session";
 const SESSION_META_KEY = "deatiles_session_meta";
+const DEFAULT_GAME_SERVER_URL = "https://play.deadtiles.com";
 
 export type PlayerPreview = {
   exists: boolean;
@@ -62,26 +62,12 @@ function configuredServerUrl(): string | null {
 }
 
 /**
- * Browser: same host in production, localhost:2567 in Vite dev.
- * Android APK: Capacitor's host is the WebView (`localhost`), so the Colyseus
- * URL must be baked in at build time via VITE_SERVER_URL.
+ * Local: set VITE_SERVER_URL in gitignored packages/client/.env
+ * (e.g. http://192.168.0.184:2567). VPS builds have no .env, so this falls
+ * back to the public Colyseus host.
  */
 export function serverUrl() {
-  const configured = configuredServerUrl();
-  if (configured) return configured;
-
-  if (isNativeApp()) {
-    throw new Error(
-      "This Android build has no game server URL. Rebuild with VITE_SERVER_URL set to your Colyseus host (use your PC LAN IP for local testing).",
-    );
-  }
-
-  const host = window.location.hostname || "localhost";
-  if (import.meta.env.DEV) {
-    return `http://${host}:${DEFAULT_SERVER_PORT}`;
-  }
-  const protocol = window.location.protocol === "https:" ? "https" : "http";
-  return `${protocol}://${window.location.host}`;
+  return configuredServerUrl() ?? DEFAULT_GAME_SERVER_URL;
 }
 
 export function loadStoredSessionToken(): string | null {
@@ -401,8 +387,6 @@ export type PlayerSchema = {
   ashenMilitiaReputation: number;
   ashenMilitiaRepCheckMs: number;
   redOrderReputation: number;
-  skillsJson: string;
-  questsJson: string;
   radioChannel: number;
   isBuilding: boolean;
   buildEndTime: number;
@@ -622,6 +606,12 @@ export type QuestSyncEvent = {
   payload: { questsJson: string };
 };
 
+/** Skills are owner-only state, pushed here instead of riding the schema. */
+export type SkillSyncEvent = {
+  type: "skillSync";
+  payload: { skillsJson: string };
+};
+
 export type CraftOpenEvent = {
   type: "craftOpen";
   payload: {
@@ -839,6 +829,7 @@ export type ServerEvent =
   | DialogTaskCompleteEvent
   | DialogHealCompleteEvent
   | QuestSyncEvent
+  | SkillSyncEvent
   | CraftOpenEvent
   | CraftSyncEvent
   | FireplaceOpenEvent

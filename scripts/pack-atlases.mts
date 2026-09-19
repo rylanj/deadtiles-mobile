@@ -49,10 +49,12 @@ type Profile = {
 
 const PROFILES: Profile[] = [
   // Entities render at ENTITY_RENDER_HEIGHT (80px) and CAMERA_ZOOM_MAX is 2, so
-  // nothing is ever drawn taller than ~160px. 192 keeps desktop above native at
-  // full zoom; the original 256px art was pure VRAM waste.
+  // nothing is ever drawn taller than 160px. Desktop sits exactly on that
+  // ceiling: 192 was 20% above what any pixel could use, and it also forced a
+  // 2.4:1 minification at zoom 1. At 160 the common case is an exact 2:1 and
+  // full zoom is 1:1. The original 256px art was pure VRAM waste.
   { name: "mobile", maxFrameSize: 128 },
-  { name: "desktop", maxFrameSize: 192 },
+  { name: "desktop", maxFrameSize: 160 },
 ];
 
 type PreparedFrame = {

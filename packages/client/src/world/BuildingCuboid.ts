@@ -75,7 +75,6 @@ import {
   acquireBuildingTexture,
   buildingSignature,
   buildingVariantSeed,
-  lodScale,
   releaseBuildingTexture,
   type BuildingLod,
 } from "./buildingTextureCache";
@@ -3203,6 +3202,12 @@ export type BuildingCuboidObject = {
   /** Which detail tier this cuboid was built for. */
   lod: BuildingLod;
   /**
+   * Supersampling the bake was painted at. The tier alone is not enough: zoom
+   * changes the scale within a tier, and a stale scale is what the refresh pass
+   * looks for to repaint after a zoom.
+   */
+  bakeScale?: number;
+  /**
    * True when the flat solid is standing in for a bake that could not happen
    * (no budget, no art). Distinct from an intentional `far` tier: fallbacks are
    * re-baked once budget frees up, and are never parked in the soft cache.
@@ -3307,6 +3312,7 @@ export function createBuildingCuboid(
       display: image,
       textureKey: handle.key,
       lod,
+      bakeScale: handle.scale,
       fallback: false,
     };
   }
