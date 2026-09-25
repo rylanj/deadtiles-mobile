@@ -240,6 +240,9 @@ const WATERCOOLER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.05);
 const TRASHCAN_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.55 * 0.7);
 /** TrashCan1 — raise by 30% of display height. */
 const TRASHCAN_BOTTOM_PAD = -Math.round(TRASHCAN_RENDER_HEIGHT * 0.3);
+/** Lantern1 — trash-can sit, then raised 10% of display height. */
+const LANTERN_BOTTOM_PAD =
+  TRASHCAN_BOTTOM_PAD - Math.round(TRASHCAN_RENDER_HEIGHT * 0.1);
 /** Checkout1 — 50% larger than generic furniture. */
 const CHECKOUT_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.5);
 /** Checkout1 — lower by 20% of display height. */
@@ -374,6 +377,7 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "footlocker") return FOOTLOCKER_RENDER_HEIGHT;
   if (objectType === "kitbag") return KITBAG_RENDER_HEIGHT;
   if (objectType === "militarybasket") return MILITARYBASKET_RENDER_HEIGHT;
+  if (objectType === "lantern1") return TRASHCAN_RENDER_HEIGHT;
   if (objectType === "range") return RANGE_RENDER_HEIGHT;
   if (objectType === "hotdisplay") return COUNTER_RENDER_HEIGHT;
   if (objectType === "drinkdisplay") return DRINKDISPLAY_RENDER_HEIGHT;
@@ -438,6 +442,7 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "footlocker") return FOOTLOCKER_BOTTOM_PAD;
   if (objectType === "kitbag") return KITBAG_BOTTOM_PAD;
   if (objectType === "militarybasket") return MILITARYBASKET_BOTTOM_PAD;
+  if (objectType === "lantern1") return LANTERN_BOTTOM_PAD;
   if (objectType === "range") return RANGE_BOTTOM_PAD;
   if (objectType === "hotdisplay") return HOTDISPLAY_BOTTOM_PAD;
   if (objectType === "drinkdisplay") return DRINKDISPLAY_BOTTOM_PAD;
@@ -490,6 +495,7 @@ export class InteriorView {
   /** Last cubicle fade key — skip redundant rebuild when tile unchanged. */
   private lastCubicleFadeKey = "";
   private objectSprites = new Map<string, ObjectSprite>();
+  private lanternIds = new Set<string>();
   /** Campchair tiles currently occupied by a sitting guard (Sit frame includes the chair). */
   private occupiedCampchairTiles: ReadonlySet<string> = new Set();
   /** Floor-bag tile coords — refreshed with placeable depths when walls change. */
@@ -574,6 +580,20 @@ export class InteriorView {
    * Lit fireplaces currently shown in this interior. `x,y` are sprite screen
    * positions (iso), used as night light origins.
    */
+  /**
+   * Floor lanterns in this interior. `x,y` are screen positions near the
+   * flame, used as night light origins.
+   */
+  forEachLantern(cb: (x: number, y: number) => void) {
+    if (!this.visible) return;
+    for (const id of this.lanternIds) {
+      const sprite = this.objectSprites.get(id);
+      if (!sprite || !("x" in sprite) || !sprite.visible) continue;
+      const height = "displayHeight" in sprite ? sprite.displayHeight : 0;
+      cb(sprite.x, sprite.y - height * 0.62);
+    }
+  }
+
   forEachLitFireplace(
     nowMs: number,
     cb: (x: number, y: number) => void,
@@ -916,6 +936,7 @@ export class InteriorView {
     }
     for (const sprite of this.objectSprites.values()) sprite.destroy();
     this.objectSprites.clear();
+    this.lanternIds.clear();
     this.groundBagTiles.clear();
     this.searchedState.clear();
     this.searchingState.clear();
@@ -1442,6 +1463,7 @@ export class InteriorView {
         this.searchedState.delete(id);
         this.searchingState.delete(id);
         this.groundBagTiles.delete(id);
+        this.lanternIds.delete(id);
       }
     }
 
@@ -1780,6 +1802,7 @@ export class InteriorView {
   }
 
   private upsertSearchable(item: SearchableVisual, isSearching = false) {
+    if (item.objectType === "lantern1") this.lanternIds.add(item.id);
     if (
       (item.objectType === "campchair" || item.objectType === "canteenchair") &&
       this.occupiedCampchairTiles.has(`${item.x},${item.y}`)

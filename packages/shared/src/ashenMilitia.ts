@@ -52,13 +52,16 @@ export type AshenMilitiaCaptainDialogLine = {
 export type AshenMilitiaTask = {
   id: string;
   dialogLineId: string;
-  requireItemId: string;
-  requireQty: number;
+  /** Item turn-in. Omit on kill / clear / visit jobs. */
+  requireItemId?: string;
+  requireQty?: number;
   rewardBanknotes: number;
   rewardReputation: number;
   /** Short label under the Task heading. */
   label: string;
-  requireItemLabel: string;
+  requireItemLabel?: string;
+  /** Icon in the jobs list when it is not the required item (map, etc.). */
+  displayItemId?: string;
   /** Max completions in a rolling window (omit = unlimited). */
   maxCompletionsPerWindow?: number;
   /** Rolling window length in ms when {@link maxCompletionsPerWindow} is set. */
@@ -217,9 +220,9 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       id: "jobs",
       player: "Do you have any work for me?",
       npc: [
-        "Yes. I've got a turn-in board: ammo, smokes, lighters. Pick what you can carry. Bandages and water go to Clark at the hospital.",
-        "I do. Standing needs for this barracks: 7.62, cigarettes, and lighters. Bring any of it and I'll pay, plus put in a word with the militia. If you've got bandages or water, take them to Doctor Clark.",
-        "Look at the board. Three standing turn-ins right now. Banknotes and reputation for whatever you can spare. Ward stock is Clark's problem, not mine.",
+        "Yes. Standing board: ammo, smokes, lighters, wood for the night watch, scrap for the bargate. I've also got a building in town to clear, a motel we lost on the radio, and walkers on the roads outside town. Bandages and water go to Clark.",
+        "I do. Bring 7.62, cigarettes, lighters, wood, or scrap and I'll pay. If you can handle a building sweep, a motel check, or thinning walkers outside Birchport, those are posted too. Ward stock is Clark's.",
+        "Look at the board. Supply turn-ins and a few field jobs. Banknotes and reputation for what you finish. Clark still takes the ward list at the hospital.",
       ],
     },
     {
@@ -300,12 +303,84 @@ export const ASHEN_MILITIA_LIGHTER_TASK: AshenMilitiaTask = {
   rewardReputation: 50,
   label: "Firestarter",
   requireItemLabel: "Lighter",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Turn-in: wood for street braziers after dark. */
+export const ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_night_watch_fuel",
+  dialogLineId: "jobs",
+  requireItemId: "wood",
+  requireQty: 8,
+  rewardBanknotes: 40,
+  rewardReputation: 80,
+  label: "Night Watch Fuel",
+  requireItemLabel: "Wood",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Clear walkers from a marked Birchport building. */
+export const ASHEN_MILITIA_QUIET_STRETCH_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_quiet_stretch",
+  dialogLineId: "jobs",
+  rewardBanknotes: 120,
+  rewardReputation: 250,
+  label: "Quiet Stretch",
+  displayItemId: "map",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Check a motel south of town for two troopers who missed radio. */
+export const ASHEN_MILITIA_MISSING_PAIR_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_missing_pair",
+  dialogLineId: "jobs",
+  rewardBanknotes: 180,
+  rewardReputation: 350,
+  label: "Missing Pair",
+  displayItemId: "map",
+};
+
+/** Spare 7.62 from the pair's kit when the motel was not empty. */
+export const QUEST_MISSING_PAIR_BONUS_AMMO = 15;
+
+/** Turn-in: scrap for the barracks chain-link. */
+export const ASHEN_MILITIA_BARGATE_SCRAP_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_bargate_scrap",
+  dialogLineId: "jobs",
+  requireItemId: "scrap_metal",
+  requireQty: 10,
+  rewardBanknotes: 70,
+  rewardReputation: 120,
+  label: "Bargate Scrap",
+  requireItemLabel: "Scrap Metal",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Kill walkers on the roads outside Birchport. Town kills do not count. */
+export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_dont_feed_them",
+  dialogLineId: "jobs",
+  rewardBanknotes: 100,
+  rewardReputation: 200,
+  label: "Don't Feed Them",
+  displayItemId: "map",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 export const ASHEN_MILITIA_CAPTAIN_TASKS: readonly AshenMilitiaTask[] = [
   ASHEN_MILITIA_AMMO_TASK,
   ASHEN_MILITIA_CIGARETTES_TASK,
   ASHEN_MILITIA_LIGHTER_TASK,
+  ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK,
+  ASHEN_MILITIA_BARGATE_SCRAP_TASK,
+  ASHEN_MILITIA_QUIET_STRETCH_TASK,
+  ASHEN_MILITIA_MISSING_PAIR_TASK,
+  ASHEN_MILITIA_DONT_FEED_THEM_TASK,
 ];
 
 /** True if Clark's paid treatment should be offered (missing HP or infection). */

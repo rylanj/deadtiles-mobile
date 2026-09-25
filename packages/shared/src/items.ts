@@ -19,6 +19,11 @@ export const RADIO_SLOT_INDEX = CLOTHING_SLOT_INDEX + 2;
 export const MAP_SLOT_INDEX = CLOTHING_SLOT_INDEX + 3;
 export const WATCH_ITEM_ID = "watch";
 export const RADIO_ITEM_ID = "handheld_radio";
+/** Lowest channel a player can dial. 1 and 2 are listen-only world nets. */
+export const RADIO_FREQ_MIN = 1;
+export const RADIO_FREQ_MAX = 3000;
+export const RADIO_FREQ_BIRCHPORT_GLOBAL = 1;
+export const RADIO_FREQ_BIRCHPORT_TRADE = 2;
 export const MAP_ITEM_ID = "map";
 export const BASE_INVENTORY_SLOTS =
   WEAPON_SLOT_COUNT +
@@ -75,6 +80,12 @@ export type InventoryEntry = {
    * Only clothing stores this; wearing it is what affects temperature.
    */
   wetness?: number;
+  /**
+   * Tuned channel stored on this radio. Survives drop and loot.
+   * 1 = Birchport global (listen only), 2 = Birchport trade (listen only),
+   * 3-3000 = player nets. Missing = untuned.
+   */
+  radioFreq?: number;
 };
 
 export function isItemRarity(value: unknown): value is ItemRarity {
@@ -117,6 +128,8 @@ export function withNormalizedItemMeta(entry: InventoryEntry): InventoryEntry {
   ) {
     next.wetness = Math.max(0, Math.min(1, entry.wetness));
   }
+  const freq = normalizeRadioFreq(entry.radioFreq);
+  if (freq != null) next.radioFreq = freq;
   return next;
 }
 /** One inventory cell — null when empty. */
@@ -585,7 +598,7 @@ export function setEntryWetness(entry: InventoryEntry, wetness: number): void {
 
 export type InventoryEntryMeta = Pick<
   InventoryEntry,
-  "rarity" | "condition" | "durability" | "wetness"
+  "rarity" | "condition" | "durability" | "wetness" | "radioFreq"
 >;
 
 export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
@@ -596,7 +609,38 @@ export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
   if (entry.durability != null) meta.durability = entry.durability;
   const wet = getEntryWetness(entry);
   if (wet > 0) meta.wetness = wet;
+  const freq = getEntryRadioFreq(entry);
+  if (freq > 0) meta.radioFreq = freq;
   return meta;
+}
+
+/** Stored channel on a radio, or 0 when missing / not a radio. */
+export function normalizeRadioFreq(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.floor(value);
+  if (n < 1 || n > RADIO_FREQ_MAX) return undefined;
+  return n;
+}
+
+export function getEntryRadioFreq(entry: InventoryEntry | null | undefined): number {
+  if (!entry || !isRadioItem(entry.id)) return 0;
+  return normalizeRadioFreq(entry.radioFreq) ?? 0;
+}
+
+/** Channel a player may dial, including listen-only nets 1 and 2. */
+export function isPlayerRadioFreq(value: number): boolean {
+  return (
+    Number.isInteger(value) &&
+    value >= RADIO_FREQ_MIN &&
+    value <= RADIO_FREQ_MAX
+  );
+}
+
+/** Birchport global and trade. Players can tune here, but cannot transmit. */
+export function isListenOnlyRadioFreq(value: number): boolean {
+  return (
+    value === RADIO_FREQ_BIRCHPORT_GLOBAL || value === RADIO_FREQ_BIRCHPORT_TRADE
+  );
 }
 
 export function isWatchItem(itemId: string): boolean {
@@ -746,6 +790,21 @@ export function canAddToInventory(
   return remainingAddCapacity(inventory, itemId) >= quantity;
 }
 
+/**
+ * Inventory after handing in quest items. Null when the stack is short.
+ * Callers then check payout space on this result, so a full bag can still
+ * turn in once those items free a pocket.
+ */
+export function inventoryAfterTurnIn(
+  inventory: Inventory,
+  itemId: string | undefined,
+  quantity: number | undefined,
+): Inventory | null {
+  if (!itemId || quantity == null || quantity <= 0) return inventory;
+  if (countItemInInventory(inventory, itemId) < quantity) return null;
+  return removeItemFromInventory(inventory, itemId, quantity);
+}
+
 export function addToInventory(
   inventory: Inventory,
   itemId: string,
@@ -842,6 +901,7 @@ export function makeInventoryEntry(
     condition?: number;
     durability?: number;
     wetness?: number;
+    radioFreq?: number;
   },
 ): InventoryEntry {
   const { rarity, condition } = normalizeItemMeta(meta ?? {});
@@ -871,6 +931,10 @@ export function makeInventoryEntry(
   }
   if (isClothingItem(itemId)) {
     setEntryWetness(entry, typeof meta?.wetness === "number" ? meta.wetness : 0);
+  }
+  if (isRadioItem(itemId)) {
+    const freq = normalizeRadioFreq(meta?.radioFreq);
+    if (freq != null) entry.radioFreq = freq;
   }
   return entry;
 }
@@ -1336,6 +1400,7 @@ const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: 
   old_teddy: { chance: 0.1, minQty: 1, maxQty: 1 },
   teddy: { chance: 0.08, minQty: 1, maxQty: 1 },
   map: { chance: 0.08, minQty: 1, maxQty: 1 },
+  [RADIO_ITEM_ID]: { chance: 0.05, minQty: 1, maxQty: 1 },
   canned_beans: { chance: 0.05, minQty: 1, maxQty: 2 },
   canned_peaches: { chance: 0.08, minQty: 1, maxQty: 2 },
   canned_tuna: { chance: 0.05, minQty: 1, maxQty: 2 },
@@ -1488,6 +1553,8 @@ export function generateSearchLoot(
 
 /** Same sidearm rate as a police-officer zombie. These bodies are rare. */
 const DEAD_OFFICER_PISTOL_CHANCE = 0.25;
+/** Extra radio roll on the station body, independent of the junk pool. */
+const DEAD_OFFICER_RADIO_CHANCE = 0.25;
 
 function applyDeadOfficerLoot(
   results: InventoryEntry[],
@@ -1499,6 +1566,12 @@ function applyDeadOfficerLoot(
     Math.random() < Math.min(1, DEAD_OFFICER_PISTOL_CHANCE * scale)
   ) {
     out.push({ id: "weapon_pistol", quantity: 1 });
+  }
+  if (
+    !out.some((e) => e.id === RADIO_ITEM_ID) &&
+    Math.random() < Math.min(1, DEAD_OFFICER_RADIO_CHANCE * scale)
+  ) {
+    out.push({ id: RADIO_ITEM_ID, quantity: 1 });
   }
   if (
     out.some((e) => e.id === "weapon_pistol") &&
@@ -1892,6 +1965,8 @@ export function serializeInventory(inventory: Inventory) {
     }
     const wet = getEntryWetness(slot);
     if (wet > 0) serialized.wetness = wet;
+    const freq = getEntryRadioFreq(slot);
+    if (freq > 0) serialized.radioFreq = freq;
     slots[i] = serialized;
   }
   return JSON.stringify(slots);
@@ -1946,6 +2021,7 @@ export function addToContainerInventory(
     condition?: number;
     durability?: number;
     wetness?: number;
+    radioFreq?: number;
   },
 ): Inventory {
   if (quantity <= 0 || !getItemDefinition(itemId)) return inventory;

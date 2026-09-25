@@ -14,8 +14,8 @@ export type BuildDenialReason = "entrance" | "birchport";
 
 /** Player-facing reason, shown through the same [build] feedback line. */
 export const BUILD_DENIAL_MESSAGES: Record<BuildDenialReason, string> = {
-  entrance: "Keep building doorways clear.",
-  birchport: "Birchport only allows fireplaces.",
+  entrance: "You cannot obstruct entrances.",
+  birchport: "You do not have permission to build in Birchport.",
 };
 
 /**

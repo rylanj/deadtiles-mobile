@@ -72,7 +72,7 @@ export const ONBOARDING_STEPS: readonly OnboardingStepDef[] = [
 
 export const ONBOARDING_CONTROLS_LEGEND = [
   { key: "Click / WASD", action: "Move" },
-  { key: "Double-click", action: "Sprint" },
+  { key: "Dbl Click / Shift", action: "Sprint" },
   { key: "CTRL", action: "Aim" },
   { key: "Click (aimed)", action: "Fire" },
   { key: "R", action: "Reload" },
@@ -83,5 +83,7 @@ export const ONBOARDING_CONTROLS_LEGEND = [
   { key: "1 / 2", action: "Weapon hotbar" },
   { key: "B", action: "Build (hammer)" },
   { key: "Enter", action: "Chat" },
+  { key: "/freq 1-3000", action: "Tune radio" },
+  { key: "/radio message", action: "Radio chat" },
   { key: "Esc", action: "Close / controls" },
 ] as const;

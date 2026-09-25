@@ -409,6 +409,10 @@
         color: #c8e0c8;
         font: 13px/1.4 system-ui, sans-serif;
       }
+      .quest-stage--done {
+        text-decoration: line-through;
+        text-decoration-thickness: 1px;
+      }
       .journal-quest-actions {
         display: flex;
         gap: 8px;
@@ -1113,6 +1117,7 @@
         flex: 1 1 0;
         max-width: 360px;
         min-width: 0;
+        min-height: 0;
         display: flex;
         flex-direction: column;
         max-height: min(520px, 78vh);
@@ -1134,7 +1139,7 @@
       }
       .red-dialog-body {
         flex: 1 1 auto;
-        min-height: 180px;
+        min-height: 0;
         overflow: auto;
         padding: 12px;
         box-sizing: border-box;
@@ -1438,6 +1443,51 @@
       .craft-recipe--ready {
         border-color: rgba(100, 220, 100, 0.4);
       }
+      /* NPC job list: accepted jobs read as in-progress; open jobs stay quieter. */
+      .red-dialog-task-list .craft-recipe--available {
+        border-style: dashed;
+        border-color: rgba(180, 120, 120, 0.5);
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .red-dialog-task-list .craft-recipe--available .craft-recipe-summary-name {
+        color: #c4a8a8;
+        font-weight: 600;
+      }
+      .red-dialog-task-list .craft-recipe--accepted {
+        border-color: rgba(140, 190, 140, 0.6);
+        background: rgba(18, 36, 22, 0.55);
+        box-shadow: inset 3px 0 0 #7dcea0;
+      }
+      .red-dialog-task-list .craft-recipe--accepted .craft-recipe-summary-name {
+        color: #e8ffe8;
+      }
+      .red-dialog-task-list .craft-recipe--accepted:not(.craft-recipe--ready) .craft-recipe-summary-meta {
+        color: #b7d4b7;
+      }
+      .red-dialog-task-list .craft-recipe--accepted.craft-recipe--ready {
+        border-color: rgba(100, 220, 100, 0.7);
+        box-shadow: inset 3px 0 0 #88ff88;
+      }
+      .quest-status-chip {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font: 700 9px/1.4 system-ui, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        vertical-align: 1px;
+      }
+      .quest-status-chip--accepted {
+        color: #d8f5d8;
+        background: rgba(40, 90, 48, 0.9);
+        border: 1px solid rgba(120, 200, 130, 0.55);
+      }
+      .quest-status-chip--available {
+        color: #d8c0c0;
+        background: rgba(48, 28, 28, 0.8);
+        border: 1px solid rgba(180, 100, 100, 0.45);
+      }
       .craft-recipe-summary {
         appearance: none;
         -webkit-appearance: none;
@@ -1578,9 +1628,20 @@
         flex-direction: column;
       }
       .container-loot-layout .inventory-grid-wrap {
-        overflow: visible;
+        overflow-y: auto;
         min-height: 0;
-        flex: 0 0 auto;
+        flex: 1 1 auto;
+        max-height: min(70vh, 640px);
+      }
+      .container-loot-pile + .container-loot-pile {
+        margin-top: 12px;
+      }
+      .container-loot-pile-label {
+        margin-bottom: 6px;
+        font: 700 11px/1.2 system-ui, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #9a7070;
       }
       .container-loot-player-grids {
         display: flex;
@@ -1845,6 +1906,19 @@
         pointer-events: none;
         user-select: none;
       }
+      .inventory-cell-freq {
+        position: absolute;
+        left: 4px;
+        top: 3px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #f0c040;
+        pointer-events: none;
+        user-select: none;
+        text-shadow:
+          0 0 3px rgba(0, 0, 0, 0.95),
+          0 1px 2px rgba(0, 0, 0, 0.9);
+      }
       .inventory-cell-qty {
         position: absolute;
         right: 4px;
@@ -2054,6 +2128,11 @@
         border-radius: 2px;
         overflow: hidden;
         background: #1a221a;
+        cursor: grab;
+        touch-action: none;
+      }
+      .map-frame.is-dragging {
+        cursor: grabbing;
       }
       .map-terrain,
       .map-markers {
@@ -2097,6 +2176,82 @@
         font-weight: 600;
         color: #dce8d0;
         opacity: 0.95;
+      }
+      .map-quest-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 3;
+      }
+      .map-quest-pin {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        transform: translate(-50%, -50%);
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      .map-radio-pin .map-quest-pin-dot {
+        background: #4ec8ff;
+        border-color: #e8f7ff;
+        transform: none;
+        border-radius: 50%;
+      }
+      .map-quest-pin-dot {
+        display: block;
+        width: 10px;
+        height: 10px;
+        margin: 3px;
+        background: #f0c040;
+        border: 1.5px solid #fff6c8;
+        transform: rotate(45deg);
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.85);
+      }
+      .map-quest-pin--offmap .map-quest-pin-dot {
+        background: #c9a030;
+        opacity: 0.9;
+      }
+      .map-quest-pin-tip {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 4px);
+        transform: translate(-50%, 0);
+        padding: 3px 7px;
+        border-radius: 3px;
+        background: rgba(10, 14, 10, 0.92);
+        border: 1px solid rgba(240, 192, 64, 0.55);
+        color: #fff4c8;
+        font: 700 11px/1.2 system-ui, sans-serif;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+      }
+      .map-quest-pin--below .map-quest-pin-tip {
+        bottom: auto;
+        top: calc(100% + 4px);
+      }
+      .map-quest-pin--right .map-quest-pin-tip {
+        left: calc(100% + 6px);
+        bottom: 50%;
+        transform: translate(0, 50%);
+      }
+      .map-quest-pin--left .map-quest-pin-tip {
+        left: auto;
+        right: calc(100% + 6px);
+        bottom: 50%;
+        transform: translate(0, 50%);
+      }
+      .map-quest-pin:hover .map-quest-pin-tip,
+      .map-quest-pin:focus-visible .map-quest-pin-tip,
+      .map-quest-pin.is-open .map-quest-pin-tip {
+        opacity: 1;
+        visibility: visible;
       }
 
       /* ── Search progress overlay ────────────────────────────────────────── */
@@ -2377,6 +2532,34 @@
         flex-shrink: 0;
       }
 
+      #radio-caption {
+        position: fixed;
+        left: 50%;
+        bottom: 72px;
+        transform: translateX(-50%);
+        z-index: 80;
+        max-width: min(420px, 90vw);
+        padding: 6px 10px;
+        border-radius: 4px;
+        background: rgba(10, 14, 10, 0.82);
+        border: 1px solid rgba(78, 200, 255, 0.55);
+        color: #e8f7ff;
+        font: 600 13px/1.3 system-ui, sans-serif;
+        text-align: center;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.25s ease;
+      }
+      #radio-caption.is-on {
+        opacity: 1;
+      }
+      #radio-caption.is-action {
+        color: #b7bdb4;
+        font-style: italic;
+        font-size: 11px;
+        font-weight: 500;
+        border-color: rgba(160, 168, 156, 0.4);
+      }
       /* ── Chat bar ─────────────────────────────────────────────────────────── */
       #chat-bar {
         position: fixed;

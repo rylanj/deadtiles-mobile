@@ -720,6 +720,12 @@ export const DIRECTIONS = {
   NORTH_WEST: 7,
 } as const;
 
+export type LootPilePayload = {
+  containerId: string;
+  objectType: string;
+  containerJson: string;
+};
+
 export type ServerMessage =
   | { type: "lootFound"; payload: { items: { id: string; quantity: number; name: string }[] } }
   | { type: "searchDenied"; payload: { reason: string } }
@@ -729,6 +735,8 @@ export type ServerMessage =
         containerId: string;
         objectType: string;
         containerJson: string;
+        /** Every container and corpse opened by this search. */
+        piles?: LootPilePayload[];
       };
     }
   | {
@@ -1077,6 +1085,11 @@ export type ServerMessage =
   | {
       type: "skillLevelUp";
       payload: { label: string; subId: string; level: number };
+    }
+  | {
+      /** Owner-only note. Shown as a popup, not a chat bubble. */
+      type: "playerNote";
+      payload: { text: string };
     };
 
 /** One-shot / channelled world audio other clients in earshot should play. */
@@ -1131,5 +1144,7 @@ export type ChatBroadcast = {
   senderName: string;
   text: string;
   channel?: "global" | "radio";
+  /** Action captions (pings) stay italic and grey. Speech stays white. */
+  tone?: "action";
   radioChannel?: number;
 };

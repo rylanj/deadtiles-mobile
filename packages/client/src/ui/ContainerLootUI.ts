@@ -10,6 +10,7 @@ import {
   WATCH_SLOT_INDEX,
   WEAPON_SLOT_COUNT,
   getEntryDurability,
+  getEntryRadioFreq,
   getItemDefinition,
   getMaxDurability,
   isRadioSlot,
@@ -17,6 +18,7 @@ import {
   isMapSlot,
   itemFitsInSlot,
   maxStackForItem,
+  containerInventoryIsEmpty,
   parseContainerInventory,
   parseInventory,
   type Inventory,
@@ -107,9 +109,15 @@ function furnitureDisplayName(objectType: string): string {
   return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export type LootPileView = {
+  containerId: string;
+  objectType: string;
+  inventory: Inventory;
+};
+
 export type ContainerLootUIHandlers = {
-  onTakeFromContainer: (fromSlot: number, toSlot: number) => void;
-  onMoveInContainer: (fromSlot: number, toSlot: number) => void;
+  onTakeFromContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
+  onMoveInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onMovePlayerSlot: (fromSlot: number, toSlot: number) => void;
   onClose: () => void;
 };
@@ -138,6 +146,7 @@ export class ContainerLootUI {
   private visible = false;
   private containerId = "";
   private objectType = "";
+  private piles: LootPileView[] = [];
   private containerInventory: Inventory = [];
   private playerInventory: Inventory = [];
   private dragFromSlot = -1;
@@ -186,7 +195,7 @@ export class ContainerLootUI {
     const sourceBody = document.createElement("div");
     sourceBody.className = "inventory-grid-wrap";
     this.containerSlotsEl = document.createElement("div");
-    this.containerSlotsEl.className = "inventory-grid inventory-grid--container";
+    this.containerSlotsEl.className = "container-loot-piles";
     sourceBody.appendChild(this.containerSlotsEl);
     sourcePanel.append(sourceHeader, sourceBody);
 
@@ -258,13 +267,27 @@ export class ContainerLootUI {
     objectType: string,
     containerJson: string,
     playerInventoryJson: string,
+    piles?: { containerId: string; objectType: string; containerJson: string }[],
   ) {
-    this.containerId = containerId;
-    this.objectType = objectType;
+    const source =
+      piles && piles.length > 0
+        ? piles
+        : [{ containerId, objectType, containerJson }];
+    this.piles = source.map((pile) => ({
+      containerId: pile.containerId,
+      objectType: pile.objectType,
+      inventory: parseContainerInventory(pile.containerJson),
+    }));
+    this.containerId = this.piles[0]?.containerId ?? containerId;
+    this.objectType = this.piles.length > 1 ? "" : (this.piles[0]?.objectType ?? objectType);
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("container-loot-open");
-    this.render(containerJson, playerInventoryJson);
+    this.playerInventory = parseInventory(playerInventoryJson);
+    this.containerInventory = this.piles[0]?.inventory ?? [];
+    this.titleEl.textContent =
+      this.piles.length > 1 ? "Loot" : furnitureDisplayName(this.objectType);
+    this.rebuildGrids();
     resetDialogScroll(this.overlay);
   }
 
@@ -274,6 +297,7 @@ export class ContainerLootUI {
     this.visible = false;
     this.overlay.hidden = true;
     this.containerId = "";
+    this.piles = [];
     this.dragFromSlot = -1;
     this.dragFromSource = null;
     this.lastTap = null;
@@ -289,9 +313,28 @@ export class ContainerLootUI {
     return this.containerId;
   }
 
+  getContainerIds() {
+    return this.piles.map((pile) => pile.containerId);
+  }
+
   syncContainer(containerId: string, containerJson: string) {
-    if (!this.visible || this.containerId !== containerId) return;
-    this.containerInventory = parseContainerInventory(containerJson);
+    if (!this.visible) return;
+    const pile = this.piles.find((entry) => entry.containerId === containerId);
+    if (!pile) return;
+    const inventory = parseContainerInventory(containerJson);
+    if (containerInventoryIsEmpty(inventory)) {
+      this.piles = this.piles.filter((entry) => entry.containerId !== containerId);
+      this.containerId = this.piles[0]?.containerId ?? "";
+      if (this.piles.length === 0) {
+        this.close();
+        return;
+      }
+    } else {
+      pile.inventory = inventory;
+    }
+    this.containerInventory = this.piles[0]?.inventory ?? [];
+    this.titleEl.textContent =
+      this.piles.length > 1 ? "Loot" : furnitureDisplayName(this.piles[0]?.objectType ?? "");
     this.rebuildGrids();
   }
 
@@ -311,15 +354,35 @@ export class ContainerLootUI {
   private rebuildGrids() {
     cancelAllSlotDrags();
     this.containerSlotsEl.replaceChildren();
+    const showLabels = this.piles.length > 1;
+    for (const pile of this.piles) {
+      const block = document.createElement("div");
+      block.className = "container-loot-pile";
+      if (showLabels) {
+        const label = document.createElement("div");
+        label.className = "container-loot-pile-label";
+        label.textContent = furnitureDisplayName(pile.objectType);
+        block.appendChild(label);
+      }
+      const grid = document.createElement("div");
+      grid.className = "inventory-grid inventory-grid--container";
+      for (let i = 0; i < CONTAINER_INVENTORY_SLOTS; i++) {
+        grid.appendChild(
+          this.createCell(
+            "container",
+            i,
+            pile.inventory[i] ?? null,
+            pile.containerId,
+          ),
+        );
+      }
+      block.appendChild(grid);
+      this.containerSlotsEl.appendChild(block);
+    }
     this.playerWeaponsEl.replaceChildren();
     this.playerEquipmentEl.replaceChildren();
     this.playerPocketsEl.replaceChildren();
 
-    for (let i = 0; i < CONTAINER_INVENTORY_SLOTS; i++) {
-      this.containerSlotsEl.appendChild(
-        this.createCell("container", i, this.containerInventory[i] ?? null),
-      );
-    }
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       this.playerWeaponsEl.appendChild(
         this.createCell("player", i, this.playerInventory[i] ?? null),
@@ -363,11 +426,13 @@ export class ContainerLootUI {
     source: DragSource,
     index: number,
     slot: Inventory[number],
+    containerId = "",
   ): HTMLElement {
     const cell = document.createElement("div");
     cell.className = "inventory-cell";
     cell.dataset.slotIndex = String(index);
     cell.dataset.source = source;
+    if (containerId) cell.dataset.containerId = containerId;
     cell.setAttribute("role", "button");
     cell.tabIndex = 0;
 
@@ -416,12 +481,21 @@ export class ContainerLootUI {
         qty.textContent = String(slot.quantity);
         cell.appendChild(qty);
       }
+      const radioFreq = getEntryRadioFreq(slot);
+      if (radioFreq > 0) {
+        const freqEl = document.createElement("span");
+        freqEl.className = "inventory-cell-freq";
+        freqEl.textContent = String(radioFreq);
+        cell.appendChild(freqEl);
+      }
       appendItemDurabilityBar(cell, slot);
       appendItemWetnessBar(cell, slot);
 
       cell.setAttribute(
         "aria-label",
         `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${
+          getEntryRadioFreq(slot) > 0 ? ` · freq ${getEntryRadioFreq(slot)}` : ""
+        }${
           getMaxDurability(slot.id) != null
             ? ` · ${getEntryDurability(slot)}/${getMaxDurability(slot.id)}`
             : ""
@@ -432,13 +506,13 @@ export class ContainerLootUI {
         if (source !== "container") return;
         const toSlot = this.findFirstFittingPlayerSlot(slot.id);
         if (toSlot < 0) return;
-        this.handlers.onTakeFromContainer(index, toSlot);
+        this.handlers.onTakeFromContainer(containerId, index, toSlot);
       };
 
       bindSlotPointerDnD({
         cell,
         root: this.overlay,
-        tapKey: `${source}:${index}`,
+        tapKey: `${source}:${containerId}:${index}`,
         getLastTap: () => this.lastTap,
         setLastTap: (tap) => {
           this.lastTap = tap;
@@ -451,20 +525,46 @@ export class ContainerLootUI {
           const toSource = target.dataset.source as DragSource | undefined;
           const toSlot = Number(target.dataset.slotIndex);
           if (!toSource || !Number.isFinite(toSlot)) return false;
-          if (toSource === source && toSlot === index) return false;
+          if (
+            toSource === source &&
+            toSlot === index &&
+            (source !== "container" || target.dataset.containerId === containerId)
+          ) {
+            return false;
+          }
+          if (
+            source === "container" &&
+            toSource === "container" &&
+            target.dataset.containerId !== containerId
+          ) {
+            return false;
+          }
           return this.canDrop(source, slot.id, toSource, toSlot);
         },
         onDropOn: (target) => {
           const toSource = target.dataset.source as DragSource | undefined;
           const toSlot = Number(target.dataset.slotIndex);
           if (!toSource || !Number.isFinite(toSlot)) return;
-          if (toSource === source && toSlot === index) return;
+          if (
+            toSource === source &&
+            toSlot === index &&
+            (source !== "container" || target.dataset.containerId === containerId)
+          ) {
+            return;
+          }
+          if (
+            source === "container" &&
+            toSource === "container" &&
+            target.dataset.containerId !== containerId
+          ) {
+            return;
+          }
           if (!this.canDrop(source, slot.id, toSource, toSlot)) return;
 
           if (source === "container" && toSource === "player") {
-            this.handlers.onTakeFromContainer(index, toSlot);
+            this.handlers.onTakeFromContainer(containerId, index, toSlot);
           } else if (source === "container" && toSource === "container") {
-            this.handlers.onMoveInContainer(index, toSlot);
+            this.handlers.onMoveInContainer(containerId, index, toSlot);
           } else if (source === "player" && toSource === "player") {
             this.handlers.onMovePlayerSlot(index, toSlot);
           }

@@ -4,17 +4,23 @@
 
 import {
   ASHEN_MILITIA_AMMO_TASK,
+  ASHEN_MILITIA_BARGATE_SCRAP_TASK,
   ASHEN_MILITIA_CAPTAIN_NAME,
   ASHEN_MILITIA_CIGARETTES_TASK,
   ASHEN_MILITIA_DOCTOR_NAME,
+  ASHEN_MILITIA_DONT_FEED_THEM_TASK,
   ASHEN_MILITIA_LIGHTER_TASK,
   ASHEN_MILITIA_MEDICAL_TASK,
+  ASHEN_MILITIA_MISSING_PAIR_TASK,
+  ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK,
+  ASHEN_MILITIA_QUIET_STRETCH_TASK,
   ASHEN_MILITIA_SPICY_FINGERS_TASK,
   ASHEN_MILITIA_TASK_WINDOW_MS,
   ASHEN_MILITIA_WATER_TASK,
   type AshenMilitiaTask,
 } from "./ashenMilitia.js";
 import { RED_ORDER_FACTION } from "./constants.js";
+import { getBuildingAt } from "./worldgen.js";
 
 export type QuestFaction = "redOrder" | "ashenTraders" | "ashenMilitia" | "none";
 
@@ -96,6 +102,16 @@ export type PlayerQuestState = {
   completedAt?: number;
   /** Successful turn-ins (repeatable jobs keep counting). */
   timesCompleted?: number;
+  /** Assigned building origin for visit / clear jobs. */
+  targetX?: number;
+  targetY?: number;
+  /** Extra one-shot notes (e.g. missing pair found dead). */
+  flags?: Record<string, boolean>;
+};
+
+export type QuestAcceptAssignment = {
+  targetX?: number;
+  targetY?: number;
 };
 
 export type PlayerQuestsState = {
@@ -122,6 +138,8 @@ function questFromMilitiaTask(
     faction: QuestFaction;
   },
 ): QuestDefinition {
+  const itemId = task.requireItemId ?? "wood";
+  const itemLabel = (task.requireItemLabel ?? "supplies").toLowerCase();
   return {
     id: task.id,
     title: task.label,
@@ -134,11 +152,11 @@ function questFromMilitiaTask(
     completionWindowMs: task.completionWindowMs,
     objectives: [
       {
-        id: `turn_in_${task.requireItemId}`,
+        id: `turn_in_${itemId}`,
         kind: "turnInItem",
-        label: `Turn in ${task.requireItemLabel.toLowerCase()}`,
-        itemId: task.requireItemId,
-        quantity: task.requireQty,
+        label: `Turn in ${itemLabel}`,
+        itemId,
+        quantity: task.requireQty ?? 1,
         count: 1,
       },
     ],
@@ -212,7 +230,114 @@ export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
+  questFromMilitiaTask(ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK, {
+    description:
+      "Street braziers burn through wood after dark. Accept with Davis, then bring eight pieces to the barracks. One load a day.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
+  questFromMilitiaTask(ASHEN_MILITIA_BARGATE_SCRAP_TASK, {
+    description:
+      "The chain-link by the bargate is tired. Accept with Davis, then turn in ten scrap metal at the barracks.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
 ];
+
+export const QUEST_ID_QUIET_STRETCH = ASHEN_MILITIA_QUIET_STRETCH_TASK.id;
+export const QUEST_ID_MISSING_PAIR = ASHEN_MILITIA_MISSING_PAIR_TASK.id;
+export const QUEST_ID_DONT_FEED_THEM = ASHEN_MILITIA_DONT_FEED_THEM_TASK.id;
+
+export const QUEST_QUIET_STRETCH: QuestDefinition = {
+  id: QUEST_ID_QUIET_STRETCH,
+  title: ASHEN_MILITIA_QUIET_STRETCH_TASK.label,
+  description:
+    "Walkers are still coming out of a building in Birchport. Accept with Davis, clear that building, then report back. Ask him again if you want another address.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  repeatable: true,
+  maxCompletionsPerWindow: ASHEN_MILITIA_QUIET_STRETCH_TASK.maxCompletionsPerWindow,
+  completionWindowMs: ASHEN_MILITIA_QUIET_STRETCH_TASK.completionWindowMs,
+  objectives: [
+    {
+      id: "clear_house",
+      kind: "clearBuilding",
+      label: "Clear walkers from the marked building",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_QUIET_STRETCH_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_QUIET_STRETCH_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_MISSING_PAIR: QuestDefinition = {
+  id: QUEST_ID_MISSING_PAIR,
+  title: ASHEN_MILITIA_MISSING_PAIR_TASK.label,
+  description:
+    "Two troopers missed radio at a motel south of town. Accept with Davis, go in, confirm it is empty or clear it, then report back. If they did not make it, he will add a box of 7.62 from their kit.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  objectives: [
+    {
+      id: "visit_motel",
+      kind: "visitTile",
+      label: "Enter the marked motel",
+      buildingType: "motel",
+      count: 1,
+    },
+    {
+      id: "clear_motel",
+      kind: "clearBuilding",
+      label: "Confirm the motel is clear",
+      buildingType: "motel",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_MISSING_PAIR_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_MISSING_PAIR_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_DONT_FEED_THEM: QuestDefinition = {
+  id: QUEST_ID_DONT_FEED_THEM,
+  title: ASHEN_MILITIA_DONT_FEED_THEM_TASK.label,
+  description:
+    "Thin walkers on the roads outside Birchport. Davis will not pay for bodies dropped in town. Eight kills, then turn in at the barracks. One load a day.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  repeatable: true,
+  maxCompletionsPerWindow:
+    ASHEN_MILITIA_DONT_FEED_THEM_TASK.maxCompletionsPerWindow,
+  completionWindowMs: ASHEN_MILITIA_DONT_FEED_THEM_TASK.completionWindowMs,
+  objectives: [
+    {
+      id: "kill_walkers",
+      kind: "killNpcKind",
+      label: "Kill walkers outside Birchport",
+      npcKind: "zombie",
+      count: 8,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_DONT_FEED_THEM_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_DONT_FEED_THEM_TASK.rewardReputation,
+    },
+  ],
+};
 
 /** Stub faction / POI jobs — content fills in later phases. */
 export const QUEST_STUBS: readonly QuestDefinition[] = [
@@ -307,6 +432,9 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
 export const QUEST_REGISTRY: readonly QuestDefinition[] = [
   QUEST_ASHEN_PATROL_DOGTAGS,
   ...QUEST_ASHEN_MILITIA_LIVE,
+  QUEST_QUIET_STRETCH,
+  QUEST_MISSING_PAIR,
+  QUEST_DONT_FEED_THEM,
   ...QUEST_STUBS,
 ];
 
@@ -361,7 +489,15 @@ export function parseQuestsJson(
         }
       }
       const timesCompleted = Number(obj.timesCompleted);
-      quests[questId] = {
+      const targetX = Number(obj.targetX);
+      const targetY = Number(obj.targetY);
+      const flags: Record<string, boolean> = {};
+      if (obj.flags && typeof obj.flags === "object") {
+        for (const [k, v] of Object.entries(obj.flags as Record<string, unknown>)) {
+          if (v === true) flags[k] = true;
+        }
+      }
+      const entry: PlayerQuestState = {
         questId,
         status,
         progress,
@@ -373,7 +509,28 @@ export function parseQuestsJson(
           Number.isFinite(timesCompleted) && timesCompleted > 0
             ? Math.floor(timesCompleted)
             : undefined,
+        targetX: Number.isFinite(targetX) ? Math.floor(targetX) : undefined,
+        targetY: Number.isFinite(targetY) ? Math.floor(targetY) : undefined,
+        flags: Object.keys(flags).length > 0 ? flags : undefined,
       };
+      const def = getQuestDefinition(questId);
+      const turnedInEarlier =
+        entry.status === "active" &&
+        entry.completedAt != null &&
+        (entry.acceptedAt == null || entry.acceptedAt < entry.completedAt);
+      const itemBoard =
+        !!def?.repeatable &&
+        (def?.objectives.length ?? 0) > 0 &&
+        !!def?.objectives.every((objective) => objective.kind === "turnInItem");
+      if (def && turnedInEarlier && !itemBoard) {
+        entry.status = "completed";
+        entry.progress = {};
+        entry.acceptedAt = undefined;
+        entry.targetX = undefined;
+        entry.targetY = undefined;
+        entry.flags = undefined;
+      }
+      quests[questId] = entry;
     }
 
     const taskCompletions: Record<string, number[]> = {};
@@ -467,7 +624,22 @@ export function canAbandonQuest(
   return isQuestActive(state, questId);
 }
 
-/** True when the job is accepted and not at its rolling daily cap. */
+/** True when every non-item objective has reached its count. */
+export function questProgressObjectivesComplete(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+): boolean {
+  const prev = state.quests[def.id];
+  if (!prev) return false;
+  for (const obj of def.objectives) {
+    if (obj.kind === "turnInItem") continue;
+    const need = Math.max(1, obj.count ?? 1);
+    if ((prev.progress[obj.id] ?? 0) < need) return false;
+  }
+  return true;
+}
+
+/** True when the job is accepted, not at its daily cap, and field work is done. */
 export function canTurnInQuest(
   state: PlayerQuestsState,
   questId: string,
@@ -476,7 +648,8 @@ export function canTurnInQuest(
   const def = getQuestDefinition(questId);
   if (!def || def.stub) return false;
   if (!isQuestActive(state, questId)) return false;
-  return questCompletionsRemaining(state, def, now) !== 0;
+  if (questCompletionsRemaining(state, def, now) === 0) return false;
+  return questProgressObjectivesComplete(state, def);
 }
 
 /** NPC talk-target that can accept / turn in this job. */
@@ -492,6 +665,7 @@ export function acceptQuest(
   state: PlayerQuestsState,
   questId: string,
   now = Date.now(),
+  assignment?: QuestAcceptAssignment,
 ): PlayerQuestsState | null {
   if (!canAcceptQuest(state, questId, now)) return null;
   const prev = state.quests[questId];
@@ -506,6 +680,8 @@ export function acceptQuest(
         acceptedAt: now,
         completedAt: prev?.completedAt,
         timesCompleted: prev?.timesCompleted,
+        targetX: assignment?.targetX,
+        targetY: assignment?.targetY,
       },
     },
   };
@@ -546,7 +722,7 @@ export function abandonQuest(
   };
 }
 
-/** Mark an active quest turned in. Repeatable jobs stay accepted until abandoned. */
+/** Mark an active quest turned in. Item board jobs stay accepted. Field jobs do not. */
 export function completeAcceptedQuest(
   state: PlayerQuestsState,
   questId: string,
@@ -556,17 +732,24 @@ export function completeAcceptedQuest(
   const prev = state.quests[questId];
   if (!def || !prev || prev.status !== "active") return null;
   const timesCompleted = (prev.timesCompleted ?? 0) + 1;
+  const keepAccepted =
+    def.repeatable &&
+    def.objectives.length > 0 &&
+    def.objectives.every((obj) => obj.kind === "turnInItem");
   return {
     ...state,
     quests: {
       ...state.quests,
       [questId]: {
         questId,
-        status: def.repeatable ? "active" : "completed",
+        status: keepAccepted ? "active" : "completed",
         progress: {},
-        acceptedAt: prev.acceptedAt,
+        acceptedAt: keepAccepted ? prev.acceptedAt : undefined,
         completedAt: now,
         timesCompleted,
+        targetX: undefined,
+        targetY: undefined,
+        flags: undefined,
       },
     },
   };
@@ -587,6 +770,253 @@ export function turnInAcceptedQuest(
     next = recordTaskCompletion(next, questId, windowMs, now);
   }
   return next;
+}
+
+export function questNeedsBuildingTarget(def: QuestDefinition): boolean {
+  return def.objectives.some(
+    (obj) => obj.kind === "clearBuilding" || obj.kind === "visitTile",
+  );
+}
+
+export function assignQuestTarget(
+  state: PlayerQuestsState,
+  questId: string,
+  targetX: number,
+  targetY: number,
+): PlayerQuestsState | null {
+  const prev = state.quests[questId];
+  if (!prev || prev.status !== "active") return null;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        targetX,
+        targetY,
+        progress: {},
+        flags: undefined,
+      },
+    },
+  };
+}
+
+export function questFlag(
+  state: PlayerQuestsState,
+  questId: string,
+  flag: string,
+): boolean {
+  return state.quests[questId]?.flags?.[flag] === true;
+}
+
+export function setQuestFlag(
+  state: PlayerQuestsState,
+  questId: string,
+  flag: string,
+  value = true,
+): PlayerQuestsState | null {
+  const prev = state.quests[questId];
+  if (!prev || prev.status !== "active") return null;
+  if (prev.flags?.[flag] === value) return state;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        flags: { ...prev.flags, [flag]: value },
+      },
+    },
+  };
+}
+
+export function incrementQuestObjective(
+  state: PlayerQuestsState,
+  questId: string,
+  objectiveId: string,
+  amount = 1,
+): PlayerQuestsState | null {
+  const def = getQuestDefinition(questId);
+  const prev = state.quests[questId];
+  const obj = def?.objectives.find((o) => o.id === objectiveId);
+  if (!def || !prev || prev.status !== "active" || !obj) return null;
+  const cap = Math.max(1, obj.count ?? 1);
+  const cur = prev.progress[objectiveId] ?? 0;
+  if (cur >= cap || amount <= 0) return null;
+  const next = Math.min(cap, cur + Math.floor(amount));
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        progress: { ...prev.progress, [objectiveId]: next },
+      },
+    },
+  };
+}
+
+export function setQuestObjectiveAtLeast(
+  state: PlayerQuestsState,
+  questId: string,
+  objectiveId: string,
+  value: number,
+): PlayerQuestsState | null {
+  const def = getQuestDefinition(questId);
+  const prev = state.quests[questId];
+  const obj = def?.objectives.find((o) => o.id === objectiveId);
+  if (!def || !prev || prev.status !== "active" || !obj) return null;
+  const cap = Math.max(1, obj.count ?? 1);
+  const want = Math.max(0, Math.min(cap, Math.floor(value)));
+  const cur = prev.progress[objectiveId] ?? 0;
+  if (want <= cur) return null;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        progress: { ...prev.progress, [objectiveId]: want },
+      },
+    },
+  };
+}
+
+export function questObjectiveLine(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+  obj: QuestObjective,
+): string {
+  if (obj.kind === "turnInItem") {
+    const qty = obj.quantity && obj.quantity > 1 ? ` ×${obj.quantity}` : "";
+    return `${obj.label}${qty}`;
+  }
+  const need = Math.max(1, obj.count ?? 1);
+  const have = Math.min(need, state.quests[def.id]?.progress[obj.id] ?? 0);
+  return `${obj.label} (${have}/${need})`;
+}
+
+/** True when this stage's count is met on the current accepted run. */
+export function isQuestObjectiveDone(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+  obj: QuestObjective,
+): boolean {
+  const prev = state.quests[def.id];
+  if (!prev || prev.status !== "active" || obj.kind === "turnInItem") return false;
+  const need = Math.max(1, obj.count ?? 1);
+  return (prev.progress[obj.id] ?? 0) >= need;
+}
+
+export function questAssignedLocationLabel(
+  state: PlayerQuestsState,
+  questId: string,
+): string | null {
+  const prev = state.quests[questId];
+  if (prev?.targetX == null || prev.targetY == null) return null;
+  const bld = getBuildingAt(prev.targetX, prev.targetY);
+  const kind =
+    bld?.buildingType === "motel"
+      ? "motel"
+      : bld?.buildingType === "house"
+        ? "house"
+        : "building";
+  return `${kind} at ${prev.targetX}, ${prev.targetY}`;
+}
+
+export type QuestMapMarker = {
+  questId: string;
+  title: string;
+  x: number;
+  y: number;
+};
+
+/** Overworld point for an accepted job, or null when it has no map location. */
+export function resolveQuestMapPoint(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+): { x: number; y: number } | null {
+  const prev = state.quests[def.id];
+  if (!prev || prev.status !== "active") return null;
+  if (prev.targetX != null && prev.targetY != null) {
+    const bld = getBuildingAt(prev.targetX, prev.targetY);
+    if (bld) {
+      return { x: bld.ox + bld.w / 2, y: bld.oy + bld.h / 2 };
+    }
+    return { x: prev.targetX, y: prev.targetY };
+  }
+  if (def.mapPin?.x != null && def.mapPin?.y != null) {
+    return { x: def.mapPin.x, y: def.mapPin.y };
+  }
+  for (const obj of def.objectives) {
+    if (obj.tileX != null && obj.tileY != null) {
+      return { x: obj.tileX, y: obj.tileY };
+    }
+  }
+  return null;
+}
+
+/** Accepted jobs that have a place to mark. Dropped on abandon / complete. */
+export function listActiveQuestMapMarkers(
+  state: PlayerQuestsState,
+): QuestMapMarker[] {
+  const out: QuestMapMarker[] = [];
+  for (const prev of Object.values(state.quests)) {
+    if (prev.status !== "active") continue;
+    const def = getQuestDefinition(prev.questId);
+    if (!def || def.stub) continue;
+    const pt = resolveQuestMapPoint(state, def);
+    if (!pt) continue;
+    out.push({ questId: def.id, title: def.title, x: pt.x, y: pt.y });
+  }
+  return out;
+}
+
+/** Building origins on active jobs (quest spawn occupancy). */
+export function listActiveQuestBuildingTargets(
+  state: PlayerQuestsState,
+): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (const prev of Object.values(state.quests)) {
+    if (prev.status !== "active") continue;
+    if (prev.targetX == null || prev.targetY == null) continue;
+    out.push({ x: prev.targetX, y: prev.targetY });
+  }
+  return out;
+}
+
+/**
+ * Field objectives that just reached their count. Used for the task-updated
+ * popup. Skips first sync, accept, abandon, and turn-in.
+ */
+export function listNewlyCompletedQuestStages(
+  prev: PlayerQuestsState,
+  next: PlayerQuestsState,
+): { questId: string; title: string }[] {
+  const seen = new Set<string>();
+  const out: { questId: string; title: string }[] = [];
+  for (const [questId, after] of Object.entries(next.quests)) {
+    const before = prev.quests[questId];
+    if (!before || before.status !== "active") continue;
+    if (after.status !== "active" && after.status !== "completed") continue;
+    const def = getQuestDefinition(questId);
+    if (!def || def.stub) continue;
+    for (const obj of def.objectives) {
+      if (obj.kind === "turnInItem") continue;
+      const need = Math.max(1, obj.count ?? 1);
+      const had = before.progress[obj.id] ?? 0;
+      const have = after.progress[obj.id] ?? 0;
+      if (have < need || had >= need) continue;
+      if (seen.has(questId)) continue;
+      seen.add(questId);
+      out.push({ questId, title: def.title });
+    }
+  }
+  return out;
+}
+
+export function questHasItemTurnIn(def: QuestDefinition): boolean {
+  return def.objectives.some((obj) => obj.kind === "turnInItem");
 }
 
 /** Full catalog of jobs NPCs can offer. Unaccepted jobs stay off the journal. */

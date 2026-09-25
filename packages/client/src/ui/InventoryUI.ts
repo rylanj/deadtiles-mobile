@@ -6,7 +6,10 @@ import {
   RADIO_SLOT_INDEX,
   MAP_SLOT_INDEX,
   getEntryDurability,
+  getEntryRadioFreq,
   getEntryWetness,
+  isListenOnlyRadioFreq,
+  isRadioItem,
   getItemDefinition,
   getMaxDurability,
   WEAPON_SLOT_COUNT,
@@ -418,6 +421,13 @@ export class InventoryUI {
         qty.textContent = String(slot.quantity);
         cell.appendChild(qty);
       }
+      const radioFreq = getEntryRadioFreq(slot);
+      if (radioFreq > 0) {
+        const freqEl = document.createElement("span");
+        freqEl.className = "inventory-cell-freq";
+        freqEl.textContent = String(radioFreq);
+        cell.appendChild(freqEl);
+      }
       appendItemDurabilityBar(cell, slot);
       appendItemWetnessBar(cell, slot);
 
@@ -436,6 +446,12 @@ export class InventoryUI {
         cell.classList.add("inventory-cell--equipped");
       }
 
+      const freqLabel =
+        radioFreq > 0
+          ? isListenOnlyRadioFreq(radioFreq)
+            ? ` · freq ${radioFreq} · listen only`
+            : ` · freq ${radioFreq}`
+          : "";
       const dur =
         getMaxDurability(slot.id) != null
           ? ` · ${getEntryDurability(slot)}/${getMaxDurability(slot.id)}`
@@ -444,7 +460,7 @@ export class InventoryUI {
       const wetLabel = wet > 0.005 ? ` · ${Math.round(wet * 100)}% wet` : "";
       cell.setAttribute(
         "aria-label",
-        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${dur}${wetLabel}`,
+        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${freqLabel}${dur}${wetLabel}`,
       );
 
       const toggleEquip = () => {
@@ -581,6 +597,15 @@ export class InventoryUI {
     else if (wet > 0.005) zoneHint += ` · ${Math.round(wet * 100)}% wet`;
     const loadedRounds = this.slotLoadedRounds(this.selectedSlot, slot.id);
     if (loadedRounds > 0) zoneHint += ` · ${loadedRounds} loaded`;
+    if (isRadioItem(slot.id)) {
+      const freq = getEntryRadioFreq(slot);
+      zoneHint +=
+        freq > 0
+          ? isListenOnlyRadioFreq(freq)
+            ? ` · freq ${freq} · listen only`
+            : ` · freq ${freq}`
+          : " · untuned";
+    }
 
     this.detailEl.textContent =
       (slot.quantity > 1 ? `${name} ×${slot.quantity}` : name) + zoneHint;

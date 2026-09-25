@@ -220,10 +220,55 @@ function ambientColorFor(phase: DayPhase, sunlight: number): number {
   return AMBIENT_NIGHT;
 }
 
+/** Minutes since 00:00 on the in-game clock, in [0, 1440). */
+export function inGameMinuteOfDay(worldTimeMs: number): number {
+  const f = dayFraction(worldTimeMs);
+  const wrapped = (((CYCLE_START_HOUR / 24 + f) % 1) + 1) % 1;
+  return wrapped * 24 * 60;
+}
+
+/** Peak chase speed at 01:00. Daytime speed is each zombie's base. */
+export const ZOMBIE_NIGHT_SPEED = 1;
+
+const ZOMBIE_NIGHT_RAMP_START_MIN = 20 * 60;
+const ZOMBIE_NIGHT_PEAK_MIN = 1 * 60;
+const ZOMBIE_NIGHT_RAMP_END_MIN = 6 * 60;
+const MINUTES_PER_DAY = 24 * 60;
+const ZOMBIE_NIGHT_RISE_MIN =
+  MINUTES_PER_DAY - ZOMBIE_NIGHT_RAMP_START_MIN + ZOMBIE_NIGHT_PEAK_MIN;
+const ZOMBIE_NIGHT_FALL_MIN = ZOMBIE_NIGHT_RAMP_END_MIN - ZOMBIE_NIGHT_PEAK_MIN;
+
+/**
+ * 0 from 06:00 through 20:00. Rises linearly to 1 at 01:00, then falls
+ * linearly back to 0 at 06:00.
+ */
+export function zombieNightRamp(worldTimeMs: number): number {
+  const minutes = inGameMinuteOfDay(worldTimeMs);
+  if (minutes >= ZOMBIE_NIGHT_RAMP_START_MIN) {
+    return (minutes - ZOMBIE_NIGHT_RAMP_START_MIN) / ZOMBIE_NIGHT_RISE_MIN;
+  }
+  if (minutes <= ZOMBIE_NIGHT_PEAK_MIN) {
+    return (MINUTES_PER_DAY - ZOMBIE_NIGHT_RAMP_START_MIN + minutes) /
+      ZOMBIE_NIGHT_RISE_MIN;
+  }
+  if (minutes < ZOMBIE_NIGHT_RAMP_END_MIN) {
+    return 1 - (minutes - ZOMBIE_NIGHT_PEAK_MIN) / ZOMBIE_NIGHT_FALL_MIN;
+  }
+  return 0;
+}
+
+/** Daytime `baseSpeed` until 20:00, 1.0 at 01:00, base again at 06:00. */
+export function zombieSpeedAtTime(baseSpeed: number, worldTimeMs: number): number {
+  const base = Number.isFinite(baseSpeed) ? baseSpeed : 0;
+  const ramp = zombieNightRamp(worldTimeMs);
+  if (ramp <= 0) return base;
+  const peak = Math.max(base, ZOMBIE_NIGHT_SPEED);
+  return base + (peak - base) * ramp;
+}
+
 /** In-game clock from cycle origin (dawn = 06:00). */
 export function formatInGameClock(worldTimeMs: number): string {
-  const f = dayFraction(worldTimeMs);
-  const minutes = Math.floor((((CYCLE_START_HOUR / 24 + f) % 1) * 24) * 60);
+  const minutes = Math.floor(inGameMinuteOfDay(worldTimeMs));
   const h = Math.floor(minutes / 60) % 24;
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;

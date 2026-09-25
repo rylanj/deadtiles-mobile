@@ -61,12 +61,16 @@ import {
   CLOTHING_SLOT_INDEX,
   WATCH_SLOT_INDEX,
   MAP_SLOT_INDEX,
+  RADIO_SLOT_INDEX,
   clothingSkinFromItemId,
   isClothingItem,
   isWatchItem,
   isMapItem,
+  isRadioItem,
+  getEntryRadioFreq,
   TICK_MS,
   ZOMBIE_SPEED,
+  zombieSpeedAtTime,
   WEAPONS,
   isMeleeWeapon,
   isFullAutoWeapon,
@@ -175,6 +179,11 @@ import {
   dayNightLook,
   parseSky,
   parsePrecip,
+  parseQuestsJson,
+  listActiveQuestMapMarkers,
+  listNewlyCompletedQuestStages,
+  stepBirchportMapChart,
+  type QuestMapMarker,
 } from "@zombie/shared";
 import {
   drawProceduralWorld,
@@ -289,7 +298,11 @@ import {
 } from "../audio/AudioManager";
 import { OnboardingUI } from "../ui/OnboardingUI";
 import { EntityActionLabelManager } from "../ui/EntityActionLabel";
-import { MapOverlayUI, type MapOverlayMarker } from "../ui/MapOverlayUI";
+import {
+  MapOverlayUI,
+  type MapOverlayMarker,
+  type RadioPingMarker,
+} from "../ui/MapOverlayUI";
 import { getItemIconPath } from "../ui/itemIcons";
 import { playerAvatarSrc } from "../ui/playerAvatar";
 import type { OnboardingStepId } from "@zombie/shared";
@@ -798,6 +811,8 @@ export class WorldScene extends Phaser.Scene {
   private ashenTraderDialogUI?: AshenTraderDialogUI;
   private ashenMilitiaDialogUI?: AshenMilitiaDialogUI;
   private mapOverlayUI?: MapOverlayUI;
+  /** Last /ping from each player. Stays put until they ping again. */
+  private radioPings = new Map<string, RadioPingMarker & { freq: number }>();
   private weaponHotbar?: WeaponHotbar;
   private damageOverlay?: DamageOverlay;
   private lootPopup?: LootPopup;
@@ -875,7 +890,12 @@ export class WorldScene extends Phaser.Scene {
   private mapSettlementCache: {
     tx: number;
     ty: number;
+    span: number;
     labels: ReturnType<typeof settlementsInTileRegion>;
+  } | null = null;
+  private mapQuestMarkerCache: {
+    json: string;
+    markers: QuestMapMarker[];
   } | null = null;
   /**
    * Authoritative inventory pushed by the server over the reliable channel.
@@ -1672,10 +1692,10 @@ export class WorldScene extends Phaser.Scene {
       onAbandonQuest: (questId) => this.sendQuestAbandon(questId),
     });
     this.containerLootUI = new ContainerLootUI({
-      onTakeFromContainer: (fromSlot, toSlot) =>
-        this.takeFromContainer(fromSlot, toSlot),
-      onMoveInContainer: (fromSlot, toSlot) =>
-        this.moveInContainer(fromSlot, toSlot),
+      onTakeFromContainer: (containerId, fromSlot, toSlot) =>
+        this.takeFromContainer(containerId, fromSlot, toSlot),
+      onMoveInContainer: (containerId, fromSlot, toSlot) =>
+        this.moveInContainer(containerId, fromSlot, toSlot),
       onMovePlayerSlot: (fromSlot, toSlot) =>
         this.moveInventorySlot(fromSlot, toSlot),
       onClose: () => {},
@@ -2075,6 +2095,7 @@ export class WorldScene extends Phaser.Scene {
             msg.payload.containerId,
             msg.payload.objectType,
             msg.payload.containerJson,
+            msg.payload.piles,
           );
         } else if (msg.type === "containerSync") {
           this.containerLootUI?.syncContainer(
@@ -2143,6 +2164,15 @@ export class WorldScene extends Phaser.Scene {
           this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "skillSync") {
           this.applySkillSync(msg.payload.skillsJson);
+        } else if (msg.type === "dialogTaskDenied") {
+          this.ashenMilitiaDialogUI?.noteDenied(
+            msg.payload.taskId,
+            msg.payload.reason,
+          );
+          this.redOrderDialogUI?.noteDenied(
+            msg.payload.taskId,
+            msg.payload.reason,
+          );
         } else if (msg.type === "dialogTaskComplete") {
           this.closeRedOrderDialog();
           this.closeAshenMilitiaDialog();
@@ -2161,15 +2191,10 @@ export class WorldScene extends Phaser.Scene {
             header: msg.payload.label,
             arrow: "↑",
           });
+        } else if (msg.type === "playerNote") {
+          const text = msg.payload.text.trim();
+          if (text) this.lootPopup?.show([], { header: text });
         } else if (msg.type === "shotMissed") {
-          if (msg.payload.treeCoverMiss) {
-            this.showShotMissLabelAtImpact(
-              msg.payload.impactX,
-              msg.payload.impactY,
-            );
-          } else {
-            this.showShotMissLabel(msg.payload.targetId);
-          }
           this.spawnMissImpact(
             msg.payload.impactX,
             msg.payload.impactY,
@@ -2214,8 +2239,31 @@ export class WorldScene extends Phaser.Scene {
       });
 
       room.onMessage("chat", (msg: ChatBroadcast) => {
-        this.showChatBubble(msg.senderId, msg.text);
+        this.showChatBubble(msg.senderId, msg.text, msg.tone === "action");
+        if (msg.channel === "radio") {
+          const sprite = this.getEntitySprite(msg.senderId);
+          if (!sprite?.visible) {
+            this.showRadioCaption(
+              `${msg.senderName}: ${msg.text}`,
+              msg.tone === "action",
+            );
+          }
+        }
       });
+
+      room.onMessage(
+        "radioPing",
+        (msg: { playerId?: string; name?: string; x?: number; y?: number; freq?: number }) => {
+          const playerId = typeof msg.playerId === "string" ? msg.playerId : "";
+          const name = typeof msg.name === "string" ? msg.name : "Radio";
+          const x = typeof msg.x === "number" ? msg.x : NaN;
+          const y = typeof msg.y === "number" ? msg.y : NaN;
+          const freq = typeof msg.freq === "number" ? msg.freq : 0;
+          if (!playerId || !Number.isFinite(x) || !Number.isFinite(y) || freq <= 0) return;
+          this.radioPings.set(playerId, { playerId, name, x, y, freq });
+          this.refreshMapOverlay();
+        },
+      );
 
       room.onMessage("godmode", (msg: { enabled?: boolean }) => {
         this.godModeDebug = msg.enabled === true;
@@ -2476,6 +2524,7 @@ export class WorldScene extends Phaser.Scene {
     this.tickMoveTargetIndicator();
     this.updateDamageOverlay(frameDelta);
     this.refreshInventoryUI();
+    this.stepMapChart();
     this.refreshMapOverlay();
     this.refreshHotbar();
     this.refreshAllVisuals(frameDelta);
@@ -3157,7 +3206,22 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("chat", { text });
   }
 
-  private showChatBubble(senderId: string, text: string) {
+  private showRadioCaption(text: string, action = false) {
+    let el = document.getElementById("radio-caption");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "radio-caption";
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.classList.toggle("is-action", action);
+    el.classList.add("is-on");
+    window.setTimeout(() => {
+      if (el?.textContent === text) el.classList.remove("is-on");
+    }, 4500);
+  }
+
+  private showChatBubble(senderId: string, text: string, action = false) {
     // Destroy any existing bubble for this sender
     const existing = this.chatBubbles.get(senderId);
     if (existing) {
@@ -3166,9 +3230,10 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const bubbleText = this.add.text(0, 0, text, {
-      fontSize: "13px",
+      fontSize: action ? "11px" : "13px",
       fontFamily: "system-ui, sans-serif",
-      color: "#e8f8e8",
+      fontStyle: action ? "italic" : "normal",
+      color: action ? "#b7bdb4" : "#e8f8e8",
       backgroundColor: "rgba(10,14,10,0.78)",
       padding: { x: 6, y: 3 },
       shadow: { color: "#000", blur: 4, fill: true },
@@ -3369,22 +3434,6 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.entityActionLabels.followSprites((entityId) => this.getEntitySprite(entityId));
-  }
-
-  private showShotMissLabel(targetId: string) {
-    const chat = this.chatBubbles.get(targetId);
-    const stackBelowPx =
-      chat && chat.text.visible && chat.text.alpha > 0
-        ? chat.text.height + 4
-        : 0;
-    this.entityActionLabels?.flash(targetId, "Miss", undefined, stackBelowPx);
-  }
-
-  private showShotMissLabelAtImpact(worldX: number, worldY: number) {
-    const iso = cartesianToIso(worldX, worldY);
-    const screenX = iso.x;
-    const screenY = entityFeetY(iso.y) - 10;
-    this.entityActionLabels?.flashAtPosition(screenX, screenY, "Miss");
   }
 
   /**
@@ -3904,6 +3953,20 @@ export class WorldScene extends Phaser.Scene {
     return !!slot && isMapItem(slot.id);
   }
 
+  /** Keep charting the map. The open map view is painted ahead of the player. */
+  private stepMapChart() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    let x = me ? (me.inInterior ? me.overworldX : me.x) : 0;
+    let y = me ? (me.inInterior ? me.overworldY : me.y) : 0;
+    const mapOpen = this.mapOverlayUI?.isOpen() ?? false;
+    if (mapOpen && this.mapOverlayUI) {
+      const view = this.mapOverlayUI.viewTileBounds();
+      x = (view.minX + view.maxX) / 2;
+      y = (view.minY + view.maxY) / 2;
+    }
+    stepBirchportMapChart(mapOpen ? 8 : 4, x, y);
+  }
+
   private refreshMapOverlay() {
     if (!this.mapOverlayUI?.isOpen()) return;
     if (!this.playerHasMapItem()) {
@@ -3921,20 +3984,25 @@ export class WorldScene extends Phaser.Scene {
       { x: centerX, y: centerY, kind: "self" },
     ];
 
-    const minX = Math.floor(centerX) - RENDER_RADIUS;
-    const maxX = Math.floor(centerX) + RENDER_RADIUS;
-    const minY = Math.floor(centerY) - RENDER_RADIUS;
-    const maxY = Math.floor(centerY) + RENDER_RADIUS;
-    const tx = Math.floor(centerX);
-    const ty = Math.floor(centerY);
+    this.mapOverlayUI.syncFollow(centerX, centerY);
+    const view = this.mapOverlayUI.viewTileBounds();
+    const minX = view.minX;
+    const maxX = view.maxX;
+    const minY = view.minY;
+    const maxY = view.maxY;
+    const tx = Math.floor((minX + maxX) / 2);
+    const ty = Math.floor((minY + maxY) / 2);
+    const span = maxX - minX;
     if (
       !this.mapSettlementCache ||
       this.mapSettlementCache.tx !== tx ||
-      this.mapSettlementCache.ty !== ty
+      this.mapSettlementCache.ty !== ty ||
+      this.mapSettlementCache.span !== span
     ) {
       this.mapSettlementCache = {
         tx,
         ty,
+        span,
         labels: settlementsInTileRegion(minX, maxX, minY, maxY),
       };
     }
@@ -3945,7 +4013,41 @@ export class WorldScene extends Phaser.Scene {
       markers,
       this.tileManager?.getMinimapKinds() ?? new Map(),
       this.mapSettlementCache.labels,
+      this.activeQuestMapMarkers(),
+      this.activeRadioPings(),
     );
+  }
+
+  private localRadioFreq(): number {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me) return 0;
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me.inventoryJson;
+    const slot = this.readLocalInventory(inventoryJson)[RADIO_SLOT_INDEX];
+    if (!slot || !isRadioItem(slot.id)) return 0;
+    return getEntryRadioFreq(slot);
+  }
+
+  private activeRadioPings(): RadioPingMarker[] {
+    const freq = this.localRadioFreq();
+    if (freq <= 0) return [];
+    const pins: RadioPingMarker[] = [];
+    for (const ping of this.radioPings.values()) {
+      if (ping.freq !== freq) continue;
+      pins.push(ping);
+    }
+    return pins;
+  }
+
+  private activeQuestMapMarkers(): QuestMapMarker[] {
+    const json = this.localQuestsJson();
+    if (!this.mapQuestMarkerCache || this.mapQuestMarkerCache.json !== json) {
+      this.mapQuestMarkerCache = {
+        json,
+        markers: listActiveQuestMapMarkers(parseQuestsJson(json)),
+      };
+    }
+    return this.mapQuestMarkerCache.markers;
   }
 
   private applyInventorySync(msg: {
@@ -4066,9 +4168,17 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private applyQuestSync(questsJson: string) {
+    const prev = parseQuestsJson(this.cachedQuestsJson);
+    const next = parseQuestsJson(questsJson);
     this.cachedQuestsJson = questsJson;
     this.lastQuestUiKey = "";
     this.refreshQuestPanels();
+    for (const stage of listNewlyCompletedQuestStages(prev, next)) {
+      this.lootPopup?.show([], {
+        header: `${stage.title} task updated`,
+        arrow: "↑",
+      });
+    }
   }
 
   /** Owner-only skill tree, pushed by the server (never in the schema). */
@@ -7216,10 +7326,9 @@ export class WorldScene extends Phaser.Scene {
             : [{ x: tx, y: ty }],
         );
         if (denial) {
-          this.showChatBubble(
-            this.sessionId,
-            `[build] ${BUILD_DENIAL_MESSAGES[denial]}`,
-          );
+          this.lootPopup?.show([], {
+            header: `${BUILD_DENIAL_MESSAGES[denial]}`,
+          });
         }
       }
       return true;
@@ -10074,6 +10183,15 @@ export class WorldScene extends Phaser.Scene {
     let firelit = false;
 
     if (indoor) {
+      this.interiorView?.forEachLantern((x, y) => {
+        lights.push({
+          x,
+          y,
+          radius: 150,
+          color: 0xffc878,
+          strength: 0.7,
+        });
+      });
       this.interiorView?.forEachLitFireplace(Date.now(), (x, y) => {
         firelit = true;
         lights.push({
@@ -11306,9 +11424,13 @@ export class WorldScene extends Phaser.Scene {
     const dy = targetY - y;
     const dist = Math.hypot(dx, dy);
     if (dist < 0.05) return;
-    sprite.setData("velX", (dx / dist) * ZOMBIE_SPEED);
-    sprite.setData("velY", (dy / dist) * ZOMBIE_SPEED);
-    sprite.setData("moveSpeed", ZOMBIE_SPEED);
+    const speed = zombieSpeedAtTime(
+      ZOMBIE_SPEED,
+      this.room?.state?.worldTimeMs ?? 0,
+    );
+    sprite.setData("velX", (dx / dist) * speed);
+    sprite.setData("velY", (dy / dist) * speed);
+    sprite.setData("moveSpeed", speed);
   }
 
   private zombieWalkTarget(next: ZombieServerSnapshot): { x: number; y: number } {
@@ -12644,6 +12766,7 @@ export class WorldScene extends Phaser.Scene {
     containerId: string,
     objectType: string,
     containerJson: string,
+    piles?: { containerId: string; objectType: string; containerJson: string }[],
   ) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
@@ -12664,6 +12787,7 @@ export class WorldScene extends Phaser.Scene {
       objectType,
       containerJson,
       inventoryJson,
+      piles,
     );
   }
 
@@ -13597,9 +13721,8 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private takeFromContainer(fromSlot: number, toSlot: number) {
+  private takeFromContainer(containerId: string, fromSlot: number, toSlot: number) {
     if (!this.room || !this.containerLootUI?.isOpen()) return;
-    const containerId = this.containerLootUI.getContainerId();
     if (!containerId) return;
 
     // Drag clothing into the clothing slot → Wear channel; close loot so the bar shows.
@@ -13620,9 +13743,8 @@ export class WorldScene extends Phaser.Scene {
     this.lastHotbarRenderKey = "";
   }
 
-  private moveInContainer(fromSlot: number, toSlot: number) {
+  private moveInContainer(containerId: string, fromSlot: number, toSlot: number) {
     if (!this.room || !this.containerLootUI?.isOpen()) return;
-    const containerId = this.containerLootUI.getContainerId();
     if (!containerId) return;
     const message: ClientMessage = {
       type: "moveInContainer",
@@ -13633,68 +13755,73 @@ export class WorldScene extends Phaser.Scene {
 
   private updateContainerLootProximity() {
     if (!this.containerLootUI?.isOpen() || !this.room) return;
-    const containerId = this.containerLootUI.getContainerId();
-    if (!containerId) return;
+    const ids = this.containerLootUI.getContainerIds();
+    if (ids.length === 0) {
+      this.containerLootUI.close();
+      return;
+    }
 
     const me = this.room.state.players.get(this.sessionId);
     if (!me) {
       this.containerLootUI.close();
       return;
     }
+    if (ids.some((id) => this.lootPileStillNear(me, id))) return;
+    this.containerLootUI.close();
+  }
 
+  private lootPileStillNear(
+    me: {
+      x: number;
+      y: number;
+      inInterior: boolean;
+      buildingX: number;
+      buildingY: number;
+    },
+    containerId: string,
+  ): boolean {
     const searchable = this.searchablesCache.find((s) => s.id === containerId);
     if (searchable) {
       const overworldBag = searchable.buildingX === OVERWORLD_BAG_BUILDING;
       if (overworldBag) {
-        if (
-          me.inInterior ||
-          !playerAdjacentToSearchable(me.x, me.y, searchable)
-        ) {
-          this.containerLootUI.close();
-        }
-      } else if (
-        !me.inInterior ||
-        searchable.buildingX !== me.buildingX ||
-        searchable.buildingY !== me.buildingY ||
-        !playerAdjacentToSearchable(me.x, me.y, searchable)
-      ) {
-        this.containerLootUI.close();
+        return !me.inInterior && playerAdjacentToSearchable(me.x, me.y, searchable);
       }
-      return;
+      return (
+        me.inInterior &&
+        searchable.buildingX === me.buildingX &&
+        searchable.buildingY === me.buildingY &&
+        playerAdjacentToSearchable(me.x, me.y, searchable)
+      );
     }
 
-    const zombie = this.room.state.zombies.get(containerId);
+    const room = this.room;
+    if (!room) return false;
+
+    const zombie = room.state.zombies.get(containerId);
     if (zombie) {
-      if (
-        !zombie.isDead ||
-        zombie.looted ||
-        me.inInterior !== zombie.inInterior ||
-        (me.inInterior &&
-          (me.buildingX !== zombie.buildingX || me.buildingY !== zombie.buildingY)) ||
-        !playerNearEntity(me.x, me.y, zombie.x, zombie.y)
-      ) {
-        this.containerLootUI.close();
-      }
-      return;
+      return (
+        zombie.isDead &&
+        !zombie.looted &&
+        me.inInterior === zombie.inInterior &&
+        (!me.inInterior ||
+          (me.buildingX === zombie.buildingX && me.buildingY === zombie.buildingY)) &&
+        playerNearEntity(me.x, me.y, zombie.x, zombie.y)
+      );
     }
 
-    const guard = this.room.state.guards.get(containerId);
+    const guard = room.state.guards.get(containerId);
     if (guard) {
-      if (
-        guard.alive ||
-        guard.looted ||
-        me.inInterior !== !!guard.inInterior ||
-        (me.inInterior &&
-          (me.buildingX !== guard.buildingX ||
-            me.buildingY !== guard.buildingY)) ||
-        !playerNearEntity(me.x, me.y, guard.x, guard.y)
-      ) {
-        this.containerLootUI.close();
-      }
-      return;
+      return (
+        !guard.alive &&
+        !guard.looted &&
+        me.inInterior === !!guard.inInterior &&
+        (!me.inInterior ||
+          (me.buildingX === guard.buildingX && me.buildingY === guard.buildingY)) &&
+        playerNearEntity(me.x, me.y, guard.x, guard.y)
+      );
     }
 
-    const corpse = this.room.state.corpses?.get(containerId);
+    const corpse = room.state.corpses?.get(containerId);
     const corpseData =
       corpse ??
       (this.corpseSprites.get(containerId)?.getData("server") as
@@ -13708,20 +13835,17 @@ export class WorldScene extends Phaser.Scene {
           }
         | undefined);
     if (corpseData) {
-      if (
-        corpseData.looted ||
-        me.inInterior !== !!corpseData.inInterior ||
-        (me.inInterior &&
-          (me.buildingX !== corpseData.buildingX ||
-            me.buildingY !== corpseData.buildingY)) ||
-        !playerNearEntity(me.x, me.y, corpseData.x, corpseData.y)
-      ) {
-        this.containerLootUI.close();
-      }
-      return;
+      return (
+        !corpseData.looted &&
+        me.inInterior === !!corpseData.inInterior &&
+        (!me.inInterior ||
+          (me.buildingX === corpseData.buildingX &&
+            me.buildingY === corpseData.buildingY)) &&
+        playerNearEntity(me.x, me.y, corpseData.x, corpseData.y)
+      );
     }
 
-    this.containerLootUI.close();
+    return false;
   }
 
   private activateHotbarSlot(hotbarIndex: number) {

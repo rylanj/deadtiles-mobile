@@ -528,6 +528,11 @@ export type ContainerOpenEvent = {
     containerId: string;
     objectType: string;
     containerJson: string;
+    piles?: {
+      containerId: string;
+      objectType: string;
+      containerJson: string;
+    }[];
   };
 };
 
@@ -576,6 +581,15 @@ export type DialogOpenEvent = {
     ashenMilitiaReputation?: number;
     inInterior?: boolean;
     taskCompletionsJson?: string;
+  };
+};
+
+export type DialogTaskDeniedEvent = {
+  type: "dialogTaskDenied";
+  payload: {
+    npcId: string;
+    taskId: string;
+    reason: string;
   };
 };
 
@@ -812,6 +826,11 @@ export type SkillLevelUpEvent = {
   payload: { label: string; subId: string; level: number };
 };
 
+export type PlayerNoteEvent = {
+  type: "playerNote";
+  payload: { text: string };
+};
+
 export type InventorySyncEvent = {
   inventoryJson: string;
   weaponMagazinesJson: string;
@@ -826,6 +845,7 @@ export type ServerEvent =
   | TradeOpenEvent
   | TradeSyncEvent
   | DialogOpenEvent
+  | DialogTaskDeniedEvent
   | DialogTaskCompleteEvent
   | DialogHealCompleteEvent
   | QuestSyncEvent
@@ -845,4 +865,5 @@ export type ServerEvent =
   | PrefabBuiltEvent
   | StructureDamagedEvent
   | DeconstructOpenEvent
-  | SkillLevelUpEvent;
+  | SkillLevelUpEvent
+  | PlayerNoteEvent;

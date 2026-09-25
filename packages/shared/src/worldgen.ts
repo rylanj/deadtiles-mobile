@@ -38,6 +38,7 @@ import {
   birchportBarracksPlacementTileKeys,
   BIRCHPORT_BARRACKS_TENTS,
   BIRCHPORT_BARRACKS_MESS_HALL,
+  BIRCHPORT_BARRACKS_BOUNDS,
   isInBirchportBarracks,
   type BarracksTentFootprint,
 } from "./birchportBarracks.js";
@@ -4955,4 +4956,267 @@ export function evictDistantCells(
       buildingAtTileCache.delete(key);
     }
   }
+}
+
+/** Precomputed map chart, in tiles on each side. Centered on Birchport. */
+export const BIRCHPORT_MAP_CHART_TILES = 10_000;
+/**
+ * Tiles around Birchport painted before the player enters. The rest of the
+ * chart fills in the background.
+ */
+export const BIRCHPORT_MAP_BOOT_RADIUS = 400;
+
+/** Chart byte values. 0 means the tile is outside the precomputed region. */
+export const MAP_CHART_EMPTY = 0;
+export const MAP_CHART_FLOOR = 1;
+export const MAP_CHART_ROAD = 2;
+export const MAP_CHART_PAVEMENT = 3;
+export const MAP_CHART_CARPARK = 4;
+export const MAP_CHART_BARRACKS = 5;
+export const MAP_CHART_BUILDING = 6;
+export const MAP_CHART_FENCE = 8;
+
+export type BirchportMapChart = {
+  minX: number;
+  minY: number;
+  width: number;
+  height: number;
+  kinds: Uint8Array;
+};
+
+type MapChartCell = { cx: number; cy: number };
+
+let birchportMapChartCache: BirchportMapChart | null = null;
+let birchportMapChartQueue: MapChartCell[] = [];
+let birchportMapChartCursor = 0;
+let birchportMapChartRev = 0;
+let birchportMapChartFocusX = Number.NaN;
+let birchportMapChartFocusY = Number.NaN;
+
+function mapChartCellNear(
+  cell: MapChartCell,
+  x: number,
+  y: number,
+  radius: number,
+): boolean {
+  const x1 = cell.cx + SETTLEMENT_CELL;
+  const y1 = cell.cy + SETTLEMENT_CELL;
+  const nx = x < cell.cx ? cell.cx : x >= x1 ? x1 - 1 : x;
+  const ny = y < cell.cy ? cell.cy : y >= y1 ? y1 - 1 : y;
+  return Math.max(Math.abs(nx - x), Math.abs(ny - y)) <= radius;
+}
+
+/** Kind byte for a tile in the Birchport chart, or 0 when it was not precomputed. */
+export function birchportMapChartKind(
+  chart: BirchportMapChart,
+  tx: number,
+  ty: number,
+): number {
+  const lx = tx - chart.minX;
+  const ly = ty - chart.minY;
+  if (lx < 0 || ly < 0 || lx >= chart.width || ly >= chart.height) return MAP_CHART_EMPTY;
+  return chart.kinds[ly * chart.width + lx] ?? MAP_CHART_EMPTY;
+}
+
+/** Bumps when background charting paints new cells, so an open map can refresh. */
+export function birchportMapChartRevision(): number {
+  return birchportMapChartRev;
+}
+
+export function birchportMapChartPending(): number {
+  return Math.max(0, birchportMapChartQueue.length - birchportMapChartCursor);
+}
+
+/**
+ * Raster of Birchport and the land around it. The full buffer exists immediately.
+ * Only the boot radius is painted here. {@link stepBirchportMapChart} fills the rest.
+ */
+export function prepareBirchportMapChart(): BirchportMapChart {
+  if (birchportMapChartCache) return birchportMapChartCache;
+
+  const hub = getPlayerSpawnHub();
+  const width = BIRCHPORT_MAP_CHART_TILES;
+  const height = BIRCHPORT_MAP_CHART_TILES;
+  const minX = Math.floor(hub.x) - Math.floor(width / 2);
+  const minY = Math.floor(hub.y) - Math.floor(height / 2);
+  const maxX = minX + width - 1;
+  const maxY = minY + height - 1;
+  const kinds = new Uint8Array(width * height);
+  kinds.fill(MAP_CHART_FLOOR);
+  birchportMapChartCache = { minX, minY, width, height, kinds };
+  const yard = BIRCHPORT_BARRACKS_BOUNDS;
+  for (let y = Math.max(minY, yard.minY); y <= Math.min(maxY, yard.maxY); y++) {
+    const row = (y - minY) * width;
+    for (let x = Math.max(minX, yard.minX); x <= Math.min(maxX, yard.maxX); x++) {
+      kinds[row + (x - minX)] = MAP_CHART_BARRACKS;
+    }
+  }
+
+  const cells = settlementCellsInRegion(
+    minX - SETTLEMENT_CELL,
+    maxX + SETTLEMENT_CELL,
+    minY - SETTLEMENT_CELL,
+    maxY + SETTLEMENT_CELL,
+  );
+  const hx = hub.x;
+  const hy = hub.y;
+  cells.sort((a, b) => {
+    const da = Math.max(Math.abs(a.cx + SETTLEMENT_CELL / 2 - hx), Math.abs(a.cy + SETTLEMENT_CELL / 2 - hy));
+    const db = Math.max(Math.abs(b.cx + SETTLEMENT_CELL / 2 - hx), Math.abs(b.cy + SETTLEMENT_CELL / 2 - hy));
+    return da - db;
+  });
+  birchportMapChartQueue = cells;
+  birchportMapChartCursor = 0;
+
+  while (birchportMapChartCursor < birchportMapChartQueue.length) {
+    const cell = birchportMapChartQueue[birchportMapChartCursor]!;
+    if (!mapChartCellNear(cell, hx, hy, BIRCHPORT_MAP_BOOT_RADIUS)) break;
+    paintBirchportMapChartCell(cell.cx, cell.cy);
+    birchportMapChartCursor++;
+  }
+  birchportMapChartRev++;
+  return birchportMapChartCache;
+}
+
+/** Chart buffer. Prepares the Birchport boot area on first use. */
+export function getBirchportMapChart(): BirchportMapChart {
+  return prepareBirchportMapChart();
+}
+
+/**
+ * Paint more of the chart. Cells near `focusX`/`focusY` jump the queue when
+ * the player or the map view moves. Returns true when the chart is finished.
+ */
+export function stepBirchportMapChart(
+  budgetMs: number,
+  focusX?: number,
+  focusY?: number,
+): boolean {
+  prepareBirchportMapChart();
+  if (
+    typeof focusX === "number" &&
+    typeof focusY === "number" &&
+    Number.isFinite(focusX) &&
+    Number.isFinite(focusY) &&
+    (Math.abs(focusX - birchportMapChartFocusX) > 64 ||
+      Math.abs(focusY - birchportMapChartFocusY) > 64)
+  ) {
+    birchportMapChartFocusX = focusX;
+    birchportMapChartFocusY = focusY;
+    const near: MapChartCell[] = [];
+    const far: MapChartCell[] = [];
+    for (let i = birchportMapChartCursor; i < birchportMapChartQueue.length; i++) {
+      const cell = birchportMapChartQueue[i]!;
+      if (mapChartCellNear(cell, focusX, focusY, 500)) near.push(cell);
+      else far.push(cell);
+    }
+    if (near.length > 0) {
+      birchportMapChartQueue = [
+        ...birchportMapChartQueue.slice(0, birchportMapChartCursor),
+        ...near,
+        ...far,
+      ];
+    }
+  }
+
+  const deadline = Date.now() + Math.max(0, budgetMs);
+  let painted = 0;
+  while (birchportMapChartCursor < birchportMapChartQueue.length && Date.now() < deadline) {
+    const cell = birchportMapChartQueue[birchportMapChartCursor]!;
+    paintBirchportMapChartCell(cell.cx, cell.cy);
+    birchportMapChartCursor++;
+    painted++;
+  }
+  if (painted > 0) birchportMapChartRev++;
+  return birchportMapChartCursor >= birchportMapChartQueue.length;
+}
+
+function paintBirchportMapChartCell(cx: number, cy: number): void {
+  const chart = birchportMapChartCache;
+  if (!chart) return;
+  if (settlementType(cx, cy) === "none") return;
+  const { minX, minY, width, height, kinds } = chart;
+  const maxX = minX + width - 1;
+  const maxY = minY + height - 1;
+
+  const fillRect = (
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    kind: number,
+    onlyFloor = false,
+  ) => {
+    const xa = Math.max(minX, x0);
+    const xb = Math.min(maxX, x1);
+    const ya = Math.max(minY, y0);
+    const yb = Math.min(maxY, y1);
+    for (let y = ya; y <= yb; y++) {
+      const row = (y - minY) * width;
+      for (let x = xa; x <= xb; x++) {
+        const i = row + (x - minX);
+        if (onlyFloor && kinds[i] !== MAP_CHART_FLOOR) continue;
+        kinds[i] = kind;
+      }
+    }
+  };
+
+  const paintBand = (
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    orient: "v" | "h",
+    widthTiles: number,
+  ) => {
+    const xa = Math.max(minX, x0);
+    const xb = Math.min(maxX, x1 - 1);
+    const ya = Math.max(minY, y0);
+    const yb = Math.min(maxY, y1 - 1);
+    for (let y = ya; y <= yb; y++) {
+      const row = (y - minY) * width;
+      for (let x = xa; x <= xb; x++) {
+        const rel = orient === "v" ? x - x0 : y - y0;
+        const side = rel < STREET_PAVEMENT || rel >= widthTiles - STREET_PAVEMENT;
+        kinds[row + (x - minX)] = side ? MAP_CHART_PAVEMENT : MAP_CHART_ROAD;
+      }
+    }
+  };
+
+  const layout = getCachedLayout(cx, cy);
+    if (layout) {
+      const { numCols, numRows, lotXStart, lotXEnd, lotYStart, lotYEnd, carPark } = layout;
+      for (let col = 0; col < numCols; col++) {
+        for (let row = 0; row < numRows; row++) {
+          if (!carPark[col]?.[row]) continue;
+          fillRect(
+            lotXStart[col]!,
+            lotYStart[row]!,
+            lotXEnd[col]! - 1,
+            lotYEnd[row]! - 1,
+            MAP_CHART_CARPARK,
+            true,
+          );
+        }
+      }
+      for (let c = 0; c < layout.vStreetXs.length; c++) {
+        const sx = layout.vStreetXs[c]!;
+        const [yFrom, yTo] = layout.vExtents[c]!;
+        paintBand(sx, yFrom, sx + STREET_TOTAL, yTo, "v", STREET_TOTAL);
+      }
+      for (let r = 0; r < layout.hStreetYs.length; r++) {
+        const sy = layout.hStreetYs[r]!;
+        const [xFrom, xTo] = layout.hExtents[r]!;
+        paintBand(xFrom, sy, xTo, sy + STREET_TOTAL, "h", STREET_TOTAL);
+      }
+      for (const road of layout.arterials) {
+        paintBand(road.x0, road.y0, road.x1, road.y1, road.orient, road.width);
+      }
+    }
+    for (const fence of settlementFences(cx, cy)) {
+      fillRect(fence.ox, fence.oy, fence.ox, fence.oy, MAP_CHART_FENCE, true);
+    }
+    for (const bld of settlementBuildings(cx, cy)) {
+      fillRect(bld.ox, bld.oy, bld.ox + bld.w - 1, bld.oy + bld.h - 1, MAP_CHART_BUILDING);
+    }
 }

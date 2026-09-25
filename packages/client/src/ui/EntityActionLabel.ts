@@ -36,7 +36,7 @@ const LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontSize: "11px",
   fontFamily: "system-ui, sans-serif",
   fontStyle: "italic",
-  color: "#e8f8e8",
+  color: "#b7bdb4",
   backgroundColor: "rgba(10,14,10,0.78)",
   padding: { x: 5, y: 2 },
   shadow: { color: "#000", blur: 3, fill: true },

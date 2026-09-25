@@ -5,11 +5,13 @@ import {
   RED_ORDER_REP_START,
   canAcceptQuest,
   canTurnInQuest,
+  getQuestDefinition,
   parseQuestsJson,
   pickDialogVariant,
   redOrderStanding,
   redOrderStandingLabel,
   normalizeRedManSkin,
+  questStatusOf,
 } from "@zombie/shared";
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
@@ -59,6 +61,8 @@ export class RedOrderDialogUI {
   private dogtagCount = 0;
   private questsJson = "";
   private activeLineId: string | null = null;
+  private denyTaskId = "";
+  private denyReason = "";
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -189,6 +193,14 @@ export class RedOrderDialogUI {
     resetDialogScroll(this.overlay);
   }
 
+  noteDenied(taskId: string, reason: string) {
+    if (!this.visible) return;
+    this.denyTaskId = taskId;
+    this.denyReason = reason;
+    this.activeLineId = "jobs";
+    this.render();
+  }
+
   /** Refresh turn-in eligibility / standing while the dialog stays open. */
   sync(opts: {
     dogtagCount?: number;
@@ -250,7 +262,12 @@ export class RedOrderDialogUI {
     this.responseEl.appendChild(reply);
 
     if (active.id === RED_ORDER_ASHEN_PATROL_TASK.dialogLineId) {
-      this.responseEl.appendChild(this.buildTaskSection());
+      const def = getQuestDefinition(RED_ORDER_ASHEN_PATROL_TASK.id);
+      const finished =
+        !!def &&
+        !def.repeatable &&
+        questStatusOf(parseQuestsJson(this.questsJson), def.id) === "completed";
+      if (!finished) this.responseEl.appendChild(this.buildTaskSection());
     }
   }
 
@@ -331,6 +348,13 @@ export class RedOrderDialogUI {
           ? "Come back later for more turn-ins."
           : "Accepted. Bring Ashen dog tags.";
       section.appendChild(hint);
+    }
+
+    if (this.denyTaskId === task.id && this.denyReason) {
+      const denied = document.createElement("div");
+      denied.className = "craft-recipe-hint";
+      denied.textContent = this.denyReason;
+      section.appendChild(denied);
     }
 
     return section;

@@ -240,7 +240,6 @@ export type MinimapTileKind =
   | "carpark"
   | "barracks"
   | "building"
-  | "tree"
   | "fence"
   | "streetlight";
 
@@ -1449,7 +1448,7 @@ export class WorldTileManager {
       if (ground) this.treeGroundTiles.set(key, ground);
       img = createTreeSprite(this.scene, tree, { felled: true });
       this.treeObjects.set(key, img);
-      this.minimapKinds.set(key, "tree");
+      this.minimapKinds.set(key, "floor");
       this.drawn.add(key);
       return;
     }
@@ -1715,7 +1714,7 @@ export class WorldTileManager {
                         felled: isTreeFelled(x, y),
                       }),
                     );
-                    this.minimapKinds.set(key, "tree");
+                    this.minimapKinds.set(key, "floor");
                   }
                 }
               }
@@ -1761,8 +1760,8 @@ export class WorldTileManager {
                 key,
                 createTreeSprite(this.scene, felledTree, { felled: true }),
               );
-              this.minimapKinds.set(key, "tree");
-            } else if (!this.treeObjects.has(key)) {
+            }
+            if (!this.treeObjects.has(key) || isTreeFelled(x, y)) {
               this.minimapKinds.set(
                 key,
                 ttype === TileType.Barracks

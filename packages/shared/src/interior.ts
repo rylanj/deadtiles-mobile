@@ -14,6 +14,25 @@ export const INTERIOR_HEIGHT = 4;
 export const INTERIOR_ZOMBIE_DENSITY_REF_TILES = 12;
 /** Hard cap on zombies inside residential (`house`) buildings. */
 export const RESIDENTIAL_ZOMBIE_MAX = 4;
+/** Forced walker count when a quest has claimed a building. */
+export const QUEST_INTERIOR_ZOMBIE_MIN = 2;
+export const QUEST_INTERIOR_ZOMBIE_MAX = 8;
+
+/** Always-on pack for a quest-held interior (never rolls empty). */
+export function rollQuestInteriorZombieCount(
+  freeTileCount: number,
+  residential: boolean,
+): number {
+  if (freeTileCount <= 0) return 0;
+  const cap = residential
+    ? RESIDENTIAL_ZOMBIE_MAX
+    : QUEST_INTERIOR_ZOMBIE_MAX;
+  const n = Math.max(
+    QUEST_INTERIOR_ZOMBIE_MIN,
+    Math.min(cap, Math.ceil(freeTileCount * 0.2) + 1),
+  );
+  return Math.min(n, freeTileCount);
+}
 
 /** Compute interior tile dimensions for the building at (bx, by). 1 exterior tile = 2 interior tiles. */
 export function interiorDimensions(bx: number, by: number): { iW: number; iH: number } {
@@ -180,6 +199,8 @@ export const FURNITURE_TYPES = [
   "canteentable2",
   "canteentable3",
   "canteenchair",
+  /** Barracks tent floor lantern. Not loot. */
+  "lantern1",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -240,6 +261,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   canteentable2: "Canteen Table",
   canteentable3: "Canteen Table",
   canteenchair: "Canteen Chair",
+  lantern1: "Lantern",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -480,6 +502,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   canteentable2: "SE",
   canteentable3: "SE",
   canteenchair: "SE",
+  lantern1: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -857,6 +880,8 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   canteentable2: 1,
   canteentable3: 1,
   canteenchair: 1,
+  /** Barracks tents only — placed by layout, never rolled. */
+  lantern1: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -5605,13 +5630,15 @@ function placeTentBunks(
     oy: number,
     facing: FurnitureFacing,
     reserveApproach: boolean,
+    doorClearance = true,
   ): boolean => {
     const { w, h } = furnitureFootprint(objectType, facing);
     if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) {
         if (occupied.has(`${tx},${ty}`)) return false;
-        if (blocksExit(tx, ty)) return false;
+        if (tx === exit.insideX && ty === exit.insideY) return false;
+        if (doorClearance && blocksExit(tx, ty)) return false;
       }
     }
     if (!reserveApproach) return true;
@@ -5636,11 +5663,12 @@ function placeTentBunks(
     ox: number,
     oy: number,
     facing?: FurnitureFacing,
-    opts?: { reserveApproach?: boolean },
+    opts?: { reserveApproach?: boolean; doorClearance?: boolean },
   ): boolean => {
     const face = facing ?? furnitureFacing(objectType);
     const reserveApproach = opts?.reserveApproach !== false;
-    if (!canPlace(objectType, ox, oy, face, reserveApproach)) return false;
+    const doorClearance = opts?.doorClearance !== false;
+    if (!canPlace(objectType, ox, oy, face, reserveApproach, doorClearance)) return false;
     const { w, h } = furnitureFootprint(objectType, face);
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) {
@@ -5686,6 +5714,38 @@ function placeTentBunks(
   commit("campchair", 6, 3, "SE", { reserveApproach: false });
   commit("campchair", 6, 4, "SE", { reserveApproach: false });
   commit("militarybasket", 5, 5, "SE");
+
+  // Beside the table, opposite the chairs (table occupies x=5, y=2 and y=3).
+  commit("lantern1", 4, 2, "SE", { reserveApproach: false }) ||
+    commit("lantern1", 4, 3, "SE", { reserveApproach: false });
+
+  // Beside the doorway, one tile off the opening. The entrance tile and the step inside stay empty.
+  const doorSides =
+    exit.face === "SE"
+      ? [
+          { x: exit.insideX, y: exit.alongMin - 1 },
+          { x: exit.insideX, y: exit.alongMax + 1 },
+        ]
+      : [
+          { x: exit.alongMin - 1, y: exit.insideY },
+          { x: exit.alongMax + 1, y: exit.insideY },
+        ];
+  doorSides.sort(
+    (a, b) =>
+      Math.abs(a.x - exit.insideX) +
+      Math.abs(a.y - exit.insideY) -
+      (Math.abs(b.x - exit.insideX) + Math.abs(b.y - exit.insideY)),
+  );
+  for (const spot of doorSides) {
+    if (
+      commit("lantern1", spot.x, spot.y, "SE", {
+        reserveApproach: false,
+        doorClearance: false,
+      })
+    ) {
+      break;
+    }
+  }
 
   return furnitures;
 }

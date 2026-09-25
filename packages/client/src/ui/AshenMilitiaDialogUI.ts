@@ -10,19 +10,32 @@ import {
   ASHEN_MILITIA_DOCTOR_HEAL_COST,
   ASHEN_MILITIA_TASK_WINDOW_MS,
   ASHEN_REP_START,
+  QUEST_MISSING_PAIR_BONUS_AMMO,
   ashenMilitiaDoctorHealReplies,
   ashenMilitiaDoctorNeedsTreatment,
   ashenMilitiaStanding,
   ashenMilitiaStandingLabel,
+  canAddToInventory,
   countItemInInventory,
+  getQuestDefinition,
+  inventoryAfterTurnIn,
   isMilitiaCaptainSkin,
   isMilitiaDoctorSkin,
+  isQuestActive,
   militiaGuardArtSkin,
   parseInventory,
   parseQuestsJson,
   canAcceptQuest,
   canTurnInQuest,
+  questAssignedLocationLabel,
+  questCompletionsRemaining,
+  questFlag,
+  questObjectiveLine,
+  isQuestObjectiveDone,
+  questStatusOf,
   pickDialogVariant,
+  type QuestDefinition,
+  type PlayerQuestsState,
   PLAYER_MAX_HEALTH,
   type AshenMilitiaTask,
 } from "@zombie/shared";
@@ -37,6 +50,23 @@ export type AshenMilitiaDialogUIHandlers = {
   onCompleteTask: (taskId: string) => void;
   onHeal?: () => void;
 };
+
+function progressQtyLabel(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+): string | undefined {
+  const objs = def.objectives.filter((o) => o.kind !== "turnInItem");
+  if (objs.length === 0) return undefined;
+  const focus =
+    objs.find((obj) => {
+      const need = Math.max(1, obj.count ?? 1);
+      return (state.quests[def.id]?.progress[obj.id] ?? 0) < need;
+    }) ?? objs[objs.length - 1];
+  if (!focus) return undefined;
+  const need = Math.max(1, focus.count ?? 1);
+  const have = Math.min(need, state.quests[def.id]?.progress[focus.id] ?? 0);
+  return `${have}/${need}`;
+}
 
 function militiaGuardAvatar(skin: number): string {
   const s = militiaGuardArtSkin(skin);
@@ -90,6 +120,8 @@ export class AshenMilitiaDialogUI {
   private activeLineId: string | null = null;
   /** Task id currently expanded on the jobs reply (null = all collapsed). */
   private expandedTaskId: string | null = null;
+  private denyTaskId = "";
+  private denyReason = "";
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -193,6 +225,15 @@ export class AshenMilitiaDialogUI {
 
   getNpcId() {
     return this.npcId;
+  }
+
+  noteDenied(taskId: string, reason: string) {
+    if (!this.visible) return;
+    this.denyTaskId = taskId;
+    this.denyReason = reason;
+    this.expandedTaskId = taskId;
+    this.activeLineId = "jobs";
+    this.render();
   }
 
   open(opts: {
@@ -387,12 +428,21 @@ export class AshenMilitiaDialogUI {
       const tasks = this.isDoctor
         ? ASHEN_MILITIA_DOCTOR_TASKS
         : ASHEN_MILITIA_CAPTAIN_TASKS;
+      const quests = parseQuestsJson(this.questsJson);
       const list = document.createElement("div");
       list.className = "craft-recipe-list red-dialog-task-list";
       for (const task of tasks) {
+        const def = getQuestDefinition(task.id);
+        if (
+          def &&
+          !def.repeatable &&
+          questStatusOf(quests, task.id) === "completed"
+        ) {
+          continue;
+        }
         list.appendChild(this.buildTaskSection(task));
       }
-      this.responseEl.appendChild(list);
+      if (list.childElementCount > 0) this.responseEl.appendChild(list);
     }
   }
 
@@ -453,61 +503,118 @@ export class AshenMilitiaDialogUI {
   }
 
   private buildTaskSection(task: AshenMilitiaTask): HTMLElement {
-    const used = this.taskCompletions[task.id] ?? 0;
-    const max = task.maxCompletionsPerWindow;
-    const cappedRemaining =
-      max != null ? Math.max(0, max - used) : null;
-    const atCap = cappedRemaining === 0;
     const quests = parseQuestsJson(this.questsJson);
-    const accepted = canTurnInQuest(quests, task.id);
-    const haveItems = this.itemCount(task.requireItemId) >= task.requireQty;
+    const def = getQuestDefinition(task.id);
+    const remaining = def ? questCompletionsRemaining(quests, def) : null;
+    const max = task.maxCompletionsPerWindow ?? def?.maxCompletionsPerWindow;
+    const used =
+      remaining != null && max != null
+        ? Math.max(0, max - remaining)
+        : (this.taskCompletions[task.id] ?? 0);
+    const atCap = remaining === 0;
+    const accepted = isQuestActive(quests, task.id);
+    const finishedOneShot =
+      questStatusOf(quests, task.id) === "completed" && !def?.repeatable;
+    const itemId = task.requireItemId;
+    const itemQty = task.requireQty ?? 1;
+    const haveItems = !itemId || this.itemCount(itemId) >= itemQty;
     const canAccept = !atCap && canAcceptQuest(quests, task.id);
-    const canComplete = accepted && haveItems;
+    const canComplete = canTurnInQuest(quests, task.id) && haveItems;
+    const afterTurnIn = inventoryAfterTurnIn(
+      parseInventory(this.inventoryJson),
+      itemId,
+      itemId ? itemQty : undefined,
+    );
+    const payoutFits =
+      !!afterTurnIn &&
+      canAddToInventory(afterTurnIn, "banknote", task.rewardBanknotes);
+    const displayItemId = task.displayItemId ?? itemId;
+    const location = questAssignedLocationLabel(quests, task.id);
     const expanded = this.expandedTaskId === task.id;
 
     const section = document.createElement("div");
     section.className = "craft-recipe";
     if (expanded) section.classList.add("craft-recipe--expanded");
     if (canComplete) section.classList.add("craft-recipe--ready");
+    if (accepted) section.classList.add("craft-recipe--accepted");
+    else if (canAccept) section.classList.add("craft-recipe--available");
 
     const summary = document.createElement("button");
     summary.type = "button";
     summary.className = "craft-recipe-summary";
     summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const statusWord = accepted ? "accepted" : canAccept ? "available" : "";
     summary.setAttribute(
       "aria-label",
-      `${expanded ? "Collapse" : "Expand"} ${task.label} task`,
+      `${expanded ? "Collapse" : "Expand"} ${task.label} task${
+        statusWord ? `, ${statusWord}` : ""
+      }`,
     );
-    summary.appendChild(
-      makeDisplayCell({
-        itemId: task.requireItemId,
-        qtyLabel: `×${task.requireQty}`,
-        ariaLabel: `${task.requireQty} ${task.requireItemLabel}`,
-      }),
-    );
+    if (displayItemId) {
+      const qtyLabel = itemId
+        ? `×${itemQty}`
+        : def
+          ? progressQtyLabel(quests, def)
+          : undefined;
+      summary.appendChild(
+        makeDisplayCell({
+          itemId: displayItemId,
+          qtyLabel,
+          ariaLabel: itemId
+            ? `${itemQty} ${task.requireItemLabel ?? displayItemId}`
+            : task.label,
+        }),
+      );
+    }
 
     const label = document.createElement("div");
     label.className = "craft-recipe-summary-text";
     const nameEl = document.createElement("span");
     nameEl.className = "craft-recipe-summary-name";
     nameEl.textContent = task.label;
+    if (accepted || canAccept) {
+      const chip = document.createElement("span");
+      chip.className = accepted
+        ? "quest-status-chip quest-status-chip--accepted"
+        : "quest-status-chip quest-status-chip--available";
+      chip.textContent = accepted ? "Accepted" : "Available";
+      nameEl.appendChild(chip);
+    }
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
-    if (atCap) {
+    if (finishedOneShot) {
+      meta.textContent = "Already reported";
+    } else if (atCap) {
       meta.textContent = `Daily limit reached (${max}/day)`;
     } else if (canComplete) {
       meta.textContent =
-        cappedRemaining != null
-          ? `Ready to turn in (${cappedRemaining} left today)`
+        remaining != null
+          ? `Ready to turn in (${remaining} left today)`
           : "Ready to turn in";
     } else if (canAccept) {
-      meta.textContent = haveItems
+      meta.textContent = itemId && haveItems
         ? "Accept this job to turn in"
         : "Available · accept to start";
-    } else if (accepted) {
-      meta.textContent = `Need ×${task.requireQty} ${task.requireItemLabel}`;
+    } else if (accepted && location) {
+      meta.textContent = location;
+    } else if (accepted && def) {
+      const stages = def.objectives.filter((obj) => obj.kind !== "turnInItem");
+      const shown = stages.length > 0 ? stages : def.objectives;
+      shown.forEach((obj, i) => {
+        if (i > 0) meta.append(" · ");
+        const stage = document.createElement("span");
+        stage.textContent = questObjectiveLine(quests, def, obj);
+        if (isQuestObjectiveDone(quests, def, obj)) {
+          stage.classList.add("quest-stage--done");
+        }
+        meta.appendChild(stage);
+      });
+    } else if (accepted && itemId) {
+      meta.textContent = `Need ×${itemQty} ${task.requireItemLabel ?? "items"}`;
+    } else if (itemId) {
+      meta.textContent = `Need ×${itemQty} ${task.requireItemLabel ?? "items"}`;
     } else {
-      meta.textContent = `Need ×${task.requireQty} ${task.requireItemLabel}`;
+      meta.textContent = "Available · accept to start";
     }
     label.append(nameEl, meta);
     summary.appendChild(label);
@@ -532,19 +639,43 @@ export class AshenMilitiaDialogUI {
 
     const needTitle = document.createElement("div");
     needTitle.className = "red-dialog-task-heading";
-    needTitle.textContent = "Turn in";
+    needTitle.textContent = itemId ? "Turn in" : "Job";
     details.appendChild(needTitle);
 
-    const needRow = document.createElement("div");
-    needRow.className = "red-dialog-task-row";
-    needRow.appendChild(
-      makeDisplayCell({
-        itemId: task.requireItemId,
-        qtyLabel: `×${task.requireQty}`,
-        ariaLabel: `${task.requireQty} ${task.requireItemLabel}`,
-      }),
-    );
-    details.appendChild(needRow);
+    if (itemId) {
+      const needRow = document.createElement("div");
+      needRow.className = "red-dialog-task-row";
+      needRow.appendChild(
+        makeDisplayCell({
+          itemId,
+          qtyLabel: `×${itemQty}`,
+          ariaLabel: `${itemQty} ${task.requireItemLabel ?? itemId}`,
+        }),
+      );
+      details.appendChild(needRow);
+    } else if (def) {
+      for (const obj of def.objectives) {
+        const line = document.createElement("div");
+        line.className = "craft-recipe-hint";
+        line.textContent = questObjectiveLine(quests, def, obj);
+        if (isQuestObjectiveDone(quests, def, obj)) {
+          line.classList.add("quest-stage--done");
+        }
+        details.appendChild(line);
+      }
+      if (location) {
+        const loc = document.createElement("div");
+        loc.className = "craft-recipe-hint";
+        loc.textContent = `Marked ${location}`;
+        details.appendChild(loc);
+      }
+      if (questFlag(quests, task.id, "foundDead")) {
+        const found = document.createElement("div");
+        found.className = "craft-recipe-hint";
+        found.textContent = "The pair did not make it. Davis will add 7.62.";
+        details.appendChild(found);
+      }
+    }
 
     const rewardTitle = document.createElement("div");
     rewardTitle.className = "red-dialog-task-heading";
@@ -565,6 +696,15 @@ export class AshenMilitiaDialogUI {
         ariaLabel: `+${task.rewardReputation} Ashen Militia reputation`,
       }),
     );
+    if (questFlag(quests, task.id, "foundDead")) {
+      rewardRow.appendChild(
+        makeDisplayCell({
+          itemId: "ammo_762x39",
+          qtyLabel: `×${QUEST_MISSING_PAIR_BONUS_AMMO}`,
+          ariaLabel: `${QUEST_MISSING_PAIR_BONUS_AMMO} 7.62x39mm rounds`,
+        }),
+      );
+    }
     details.appendChild(rewardRow);
 
     if (max != null) {
@@ -577,7 +717,12 @@ export class AshenMilitiaDialogUI {
       details.appendChild(capHint);
     }
 
-    if (canComplete) {
+    if (canComplete && !payoutFits) {
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent = "No room for the payout. Free a pocket.";
+      details.appendChild(hint);
+    } else if (canComplete) {
       const completeBtn = document.createElement("button");
       completeBtn.type = "button";
       completeBtn.className = "red-dialog-complete-btn";
@@ -599,19 +744,40 @@ export class AshenMilitiaDialogUI {
       details.appendChild(acceptBtn);
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = haveItems
-        ? "Accept this job, then turn the items in."
-        : `Missing ${task.requireItemLabel.toLowerCase()}`;
+      hint.textContent = itemId
+        ? haveItems
+          ? "Accept this job, then turn the items in."
+          : `Missing ${(task.requireItemLabel ?? "items").toLowerCase()}`
+        : "Accept this job to get the details.";
       details.appendChild(hint);
     } else {
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = atCap
-        ? "Come back later for more turn-ins"
-        : accepted
-          ? `Missing ${task.requireItemLabel.toLowerCase()}`
-          : "This job is not available right now.";
+      hint.textContent = finishedOneShot
+        ? "Already reported."
+        : atCap
+          ? "Come back later for more turn-ins"
+          : accepted
+            ? itemId
+              ? `Missing ${(task.requireItemLabel ?? "items").toLowerCase()}`
+              : "Finish the job, then report back."
+            : "This job is not available right now.";
       details.appendChild(hint);
+    }
+
+    if (
+      this.denyTaskId === task.id &&
+      this.denyReason &&
+      !(canComplete && payoutFits) &&
+      !(canComplete && !payoutFits && this.denyReason.startsWith("No room"))
+    ) {
+      const denied = document.createElement("div");
+      denied.className = "craft-recipe-hint";
+      denied.textContent = this.denyReason;
+      details.appendChild(denied);
+    } else if (this.denyTaskId === task.id && canComplete && payoutFits) {
+      this.denyTaskId = "";
+      this.denyReason = "";
     }
 
     section.appendChild(details);

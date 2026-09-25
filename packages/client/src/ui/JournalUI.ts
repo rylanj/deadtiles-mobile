@@ -9,8 +9,13 @@ import {
   listTrackedJournalQuests,
   parseQuestsJson,
   parseSkillsJson,
+  questAssignedLocationLabel,
   questCompletionsRemaining,
+  questFlag,
   questGiverLabel,
+  questHasItemTurnIn,
+  questObjectiveLine,
+  isQuestObjectiveDone,
   questStatusOf,
   xpToNextLevel,
   type ParentSkillId,
@@ -296,11 +301,27 @@ export class JournalUI {
       objList.className = "journal-quest-objectives";
       for (const obj of def.objectives) {
         const li = document.createElement("li");
-        const qty = obj.quantity && obj.quantity > 1 ? ` ×${obj.quantity}` : "";
-        li.textContent = `${obj.label}${qty}`;
+        li.textContent = questObjectiveLine(state, def, obj);
+        if (status === "completed" || isQuestObjectiveDone(state, def, obj)) {
+          li.classList.add("quest-stage--done");
+        }
         objList.appendChild(li);
       }
       details.appendChild(objList);
+    }
+
+    const location = questAssignedLocationLabel(state, def.id);
+    if (location) {
+      const loc = document.createElement("div");
+      loc.className = "journal-quest-meta";
+      loc.textContent = `Marked ${location}`;
+      details.appendChild(loc);
+    }
+    if (questFlag(state, def.id, "foundDead")) {
+      const found = document.createElement("div");
+      found.className = "journal-quest-meta";
+      found.textContent = "The pair did not make it. Davis will add 7.62.";
+      details.appendChild(found);
     }
 
     const times = state.quests[def.id]?.timesCompleted ?? 0;
@@ -322,9 +343,13 @@ export class JournalUI {
     if (status === "active") {
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = giver
-        ? `Turn in with ${giver} once you have the items.`
-        : "Turn in with the quest giver once you have the items.";
+      hint.textContent = questHasItemTurnIn(def)
+        ? giver
+          ? `Turn in with ${giver} once you have the items.`
+          : "Turn in with the quest giver once you have the items."
+        : giver
+          ? `Report back to ${giver} when the job is done.`
+          : "Report back to the quest giver when the job is done.";
       details.appendChild(hint);
     }
 

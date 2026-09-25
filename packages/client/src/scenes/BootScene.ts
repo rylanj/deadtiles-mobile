@@ -8,6 +8,7 @@ import { configureInteriorAnimations } from "../sprites/InteriorAssets";
 import { loadCombatAssets } from "../sprites/CombatAssets";
 import { bakeIsoGroundTextures, groundTextureIsLoaded } from "../world/TileTextures";
 import { AudioManager } from "../audio/AudioManager";
+import { prepareBirchportMapChart } from "@zombie/shared";
 import {
   setBootLoadingProgress,
   setBootLoadingStatus,
@@ -149,6 +150,9 @@ export class BootScene extends Phaser.Scene {
     // lazy now, so a boot-time placeholder under the same key would satisfy every
     // "is this loaded?" check and permanently hide the real art once it arrives.
     // Call sites already degrade gracefully while the pack is in flight.
+
+    setBootLoadingStatus("Charting Birchport");
+    prepareBirchportMapChart();
 
     this.scene.start("MainMenuScene");
   }
