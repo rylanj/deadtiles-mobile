@@ -3,12 +3,12 @@ import {
   MAP_CHART_BARRACKS,
   MAP_CHART_BUILDING,
   MAP_CHART_CARPARK,
-  MAP_CHART_FENCE,
   MAP_CHART_FLOOR,
   MAP_CHART_PAVEMENT,
   MAP_CHART_ROAD,
   birchportMapChartKind,
   birchportMapChartRevision,
+  birchportSafezoneRects,
   getBirchportMapChart,
   type BirchportMapChart,
 } from "@zombie/shared";
@@ -30,7 +30,6 @@ const COLOR_PAVEMENT = [0x9a, 0x9a, 0x8e, 255] as const;
 const COLOR_CAR_PARK = [0x7a, 0x7a, 0x78, 255] as const;
 const COLOR_BARRACKS = [0x6a, 0x5c, 0x4a, 255] as const;
 const COLOR_BUILDING = [0x5c, 0x40, 0x33, 255] as const;
-const COLOR_FENCE = [0x6b, 0x4e, 0x2e, 255] as const;
 const COLOR_STREETLIGHT = [0x8a, 0x8a, 0x70, 255] as const;
 
 const CHART_KIND: Record<number, MinimapTileKind | undefined> = {
@@ -40,7 +39,6 @@ const CHART_KIND: Record<number, MinimapTileKind | undefined> = {
   [MAP_CHART_CARPARK]: "carpark",
   [MAP_CHART_BARRACKS]: "barracks",
   [MAP_CHART_BUILDING]: "building",
-  [MAP_CHART_FENCE]: "fence",
 };
 
 const KIND_COLOR: Record<
@@ -53,7 +51,6 @@ const KIND_COLOR: Record<
   carpark: COLOR_CAR_PARK,
   barracks: COLOR_BARRACKS,
   building: COLOR_BUILDING,
-  fence: COLOR_FENCE,
   streetlight: COLOR_STREETLIGHT,
 };
 
@@ -158,7 +155,7 @@ export class MapOverlayUI {
       this.questLayer,
       this.radioLayer,
     );
-    panel.append(header, frame);
+    panel.append(header, frame, this.buildLegend());
     this.overlay.appendChild(panel);
     document.body.appendChild(this.overlay);
 
@@ -422,6 +419,7 @@ export class MapOverlayUI {
     if (!ctx) return;
 
     ctx.clearRect(0, 0, MAP_PIXELS, MAP_PIXELS);
+    this.paintSafezone(ctx);
 
     for (const marker of markers) {
       const { px, py } = this.project(marker.x, marker.y);
@@ -444,6 +442,47 @@ export class MapOverlayUI {
         ctx.fillRect(px, py, 2, 2);
       }
     }
+  }
+
+  /** Dashed edge of the Birchport exterior weapon restriction. */
+  private paintSafezone(ctx: CanvasRenderingContext2D) {
+    const rects = birchportSafezoneRects();
+    ctx.save();
+    ctx.strokeStyle = "rgba(226, 59, 59, 0.95)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    for (const rect of rects) {
+      const a = this.project(rect.minX, rect.minY);
+      const b = this.project(rect.maxX, rect.maxY);
+      const x = Math.min(a.px, b.px);
+      const y = Math.min(a.py, b.py);
+      ctx.strokeRect(x, y, Math.abs(b.px - a.px), Math.abs(b.py - a.py));
+    }
+    ctx.restore();
+  }
+
+  private buildLegend(): HTMLElement {
+    const legend = document.createElement("div");
+    legend.className = "map-legend";
+    const items: { label: string; swatch: string }[] = [
+      { label: "Safezone", swatch: "safezone" },
+      { label: "Building", swatch: "building" },
+      { label: "Task", swatch: "task" },
+      { label: "Road", swatch: "road" },
+      { label: "Sidewalk", swatch: "sidewalk" },
+    ];
+    for (const item of items) {
+      const row = document.createElement("span");
+      row.className = "map-legend-item";
+      const swatch = document.createElement("span");
+      swatch.className = `map-legend-swatch map-legend-swatch--${item.swatch}`;
+      swatch.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      row.append(swatch, label);
+      legend.appendChild(row);
+    }
+    return legend;
   }
 
   private paintSettlementLabels(

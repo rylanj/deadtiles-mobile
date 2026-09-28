@@ -518,11 +518,7 @@ export function parseQuestsJson(
         entry.status === "active" &&
         entry.completedAt != null &&
         (entry.acceptedAt == null || entry.acceptedAt < entry.completedAt);
-      const itemBoard =
-        !!def?.repeatable &&
-        (def?.objectives.length ?? 0) > 0 &&
-        !!def?.objectives.every((objective) => objective.kind === "turnInItem");
-      if (def && turnedInEarlier && !itemBoard) {
+      if (def && turnedInEarlier) {
         entry.status = "completed";
         entry.progress = {};
         entry.acceptedAt = undefined;
@@ -722,7 +718,7 @@ export function abandonQuest(
   };
 }
 
-/** Mark an active quest turned in. Item board jobs stay accepted. Field jobs do not. */
+/** Mark an active quest turned in. Repeatable jobs must be accepted again. */
 export function completeAcceptedQuest(
   state: PlayerQuestsState,
   questId: string,
@@ -732,19 +728,15 @@ export function completeAcceptedQuest(
   const prev = state.quests[questId];
   if (!def || !prev || prev.status !== "active") return null;
   const timesCompleted = (prev.timesCompleted ?? 0) + 1;
-  const keepAccepted =
-    def.repeatable &&
-    def.objectives.length > 0 &&
-    def.objectives.every((obj) => obj.kind === "turnInItem");
   return {
     ...state,
     quests: {
       ...state.quests,
       [questId]: {
         questId,
-        status: keepAccepted ? "active" : "completed",
+        status: "completed",
         progress: {},
-        acceptedAt: keepAccepted ? prev.acceptedAt : undefined,
+        acceptedAt: undefined,
         completedAt: now,
         timesCompleted,
         targetX: undefined,

@@ -181,11 +181,32 @@ function startNextLoad(scene: Phaser.Scene) {
       return;
     }
     onPackLoaded(scene, id);
-    rec.keys = request.keys;
-    rec.state = "ready";
-    rec.lastNeededAt = Date.now();
-    loadInFlight = false;
-    startNextLoad(scene);
+    const markReady = () => {
+      rec.keys = request.keys;
+      rec.state = "ready";
+      rec.lastNeededAt = Date.now();
+      loadInFlight = false;
+      startNextLoad(scene);
+    };
+    // Crawl frames added after the last atlas build still need to land
+    // before the pack is ready, or crawlers stick on the standing walk.
+    const extras =
+      id === "zombie-6" || id === "zombie-10"
+        ? queueMissingPackImages(scene, id)
+        : 0;
+    if (extras > 0) {
+      const epoch = loadEpoch;
+      scene.load.once(Phaser.Loader.Events.COMPLETE, () => {
+        if (epoch !== loadEpoch) {
+          loadInFlight = false;
+          return;
+        }
+        markReady();
+      });
+      if (!scene.load.isLoading()) scene.load.start();
+      return;
+    }
+    markReady();
   };
 
   if (request.queued === 0) {
@@ -447,6 +468,7 @@ export function preloadNearbyEntityPacks(
         finish(false);
         return;
       }
+      const pendingExtras: EntityPackId[] = [];
       for (const id of missing) {
         const rec = ensureRecord(id);
         // Missing atlas file: drop back to the loose-PNG path on the next pass.
@@ -458,9 +480,34 @@ export function preloadNearbyEntityPacks(
           continue;
         }
         onPackLoaded(scene, id);
+        const extras =
+          id === "zombie-6" || id === "zombie-10"
+            ? queueMissingPackImages(scene, id)
+            : 0;
+        if (extras > 0) {
+          pendingExtras.push(id);
+          continue;
+        }
         rec.keys = keysByPack.get(id) ?? [];
         rec.state = "ready";
         rec.lastNeededAt = Date.now();
+      }
+      if (pendingExtras.length > 0) {
+        scene.load.once(Phaser.Loader.Events.COMPLETE, () => {
+          if (epoch !== loadEpoch) {
+            finish(false);
+            return;
+          }
+          for (const id of pendingExtras) {
+            const rec = ensureRecord(id);
+            rec.keys = keysByPack.get(id) ?? [];
+            rec.state = "ready";
+            rec.lastNeededAt = Date.now();
+          }
+          finish(false);
+        });
+        if (!scene.load.isLoading()) scene.load.start();
+        return;
       }
       finish(false);
     };

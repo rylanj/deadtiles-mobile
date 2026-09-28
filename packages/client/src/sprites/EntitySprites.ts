@@ -25,6 +25,9 @@ import {
   militiaGuardWalkFrames,
   militiaGuardDieFrames,
   ZOMBIE_SKIN_COUNT,
+  ZOMBIE_SKIN_MAN6,
+  ZOMBIE_SKIN_MAN10,
+  zombieHasCrawlVariant,
   GUARD_NPC_HUMAN,
   GUARD_NPC_TRADER_MAN,
   GUARD_NPC_TRADER_GUARD,
@@ -62,6 +65,38 @@ export const WALK_FRAME_HEIGHT = 128;
  */
 /** Slightly above the PNG bottom so the sprite sits a bit lower on the tile. */
 const ZOMBIE_FEET_ORIGIN_Y = 0.95;
+/**
+ * Crawl frames do not share the standing foot line. Origin is the lowest
+ * opaque row of each direction, so the body sits on the same ground point.
+ */
+const ZOMBIE_CRAWL_ORIGIN_Y: Partial<
+  Record<number, Record<DirectionLabel, number>>
+> = {
+  [ZOMBIE_SKIN_MAN6]: {
+    N: 242 / 256,
+    NE: 233 / 256,
+    E: 196 / 256,
+    SE: 223 / 256,
+    S: 217 / 256,
+    SW: 223 / 256,
+    W: 196 / 256,
+    NW: 234 / 256,
+  },
+  [ZOMBIE_SKIN_MAN10]: {
+    N: 255 / 256,
+    NE: 238 / 256,
+    E: 185 / 256,
+    SE: 216 / 256,
+    S: 218 / 256,
+    SW: 216 / 256,
+    W: 185 / 256,
+    NW: 238 / 256,
+  },
+};
+
+function zombieCrawlOriginY(skin: number, dir: DirectionLabel): number {
+  return ZOMBIE_CRAWL_ORIGIN_Y[skin]?.[dir] ?? ZOMBIE_FEET_ORIGIN_Y;
+}
 const HUMAN_FEET_ORIGIN_Y = 0.95;
 const HUMAN_DIE_FEET_ORIGIN_Y = 0.95;
 /** Sit frame includes the campchair; match CampChair1 (raised 10% from the prior seat). */
@@ -99,6 +134,14 @@ export function zombieIdleKey(dir: DirectionLabel, skin = 1) {
 
 export function zombieWalkFrameKey(dir: DirectionLabel, frame: number, skin = 1) {
   return `zombieman${skin}-walk-${dir}-${animFrameTag(frame)}`;
+}
+
+export function zombieIdleCrawlKey(dir: DirectionLabel, skin = ZOMBIE_SKIN_MAN6) {
+  return `zombieman${skin}-idlecrawl-${dir}`;
+}
+
+export function zombieCrawlFrameKey(dir: DirectionLabel, frame: number, skin = ZOMBIE_SKIN_MAN6) {
+  return `zombieman${skin}-crawl-${dir}-${animFrameTag(frame)}`;
 }
 
 export function zombieDieFrameKey(dir: DirectionLabel, frame: number, skin = 1) {
@@ -622,9 +665,22 @@ function applyZombieWalkFrame(
   dir: DirectionLabel,
   animFrame: number,
   skin: number,
+  crawling = false,
 ) {
   const frame = (Math.floor(animFrame) % ZOMBIE_WALK_FRAMES) + 1;
   const resolved = resolveLoadedZombieSkin(skin);
+  if (crawling && zombieHasCrawlVariant(resolved)) {
+    const crawl = zombieCrawlFrameKey(dir, frame, resolved);
+    if (textureKeyExists(sprite.scene, crawl)) {
+      applyEntitySpriteFrame(
+        sprite,
+        crawl,
+        zombieCrawlOriginY(resolved, dir),
+        zombieRenderHeight(skin),
+      );
+      return;
+    }
+  }
   const preferred = zombieWalkFrameKey(dir, frame, resolved);
   const fallback = zombieWalkFrameKey(dir, frame, 1);
   applyEntitySpriteFrame(
@@ -1166,6 +1222,8 @@ export type EntityVisualState = {
   alive?: boolean;
   /** 1–11 = ZombieMan1–11 */
   zombieSkin?: number;
+  /** ZombieMan6 / ZombieMan10 crawler: IdleCrawl / Crawl instead of Idle / Walk. */
+  zombieCrawling?: boolean;
   /** 1–2 = MilitiaGuard1–2; 5 = MilitiaGuard3; 3 = MilitiaCaptain1; 4 = MilitiaDoctor1; 1–4 = RedMan1–4 */
   guardSkin?: number;
   /** See GUARD_NPC_* — MilitiaGuard / TraderMan / TraderGuard / RedMan. */
@@ -1346,6 +1404,8 @@ export function updateEntityVisual(
   }
 
   const zombieSkin = resolveLoadedZombieSkin(state.zombieSkin ?? 1);
+  const crawling =
+    state.zombieCrawling === true && zombieHasCrawlVariant(zombieSkin);
 
   if (isDead) {
     const dieFrame = state.dieFrame ?? 7;
@@ -1353,16 +1413,23 @@ export function updateEntityVisual(
     sprite.setAngle(0);
     sprite.setAlpha(1);
   } else if (isWalking || state.anim === "attack") {
-    applyZombieWalkFrame(sprite, dir, state.animFrame, zombieSkin);
+    applyZombieWalkFrame(sprite, dir, state.animFrame, zombieSkin, crawling);
     sprite.setAngle(0);
     sprite.setAlpha(1);
   } else {
+    const crawlIdle = crawling ? zombieIdleCrawlKey(dir, zombieSkin) : "";
     const idleKey = zombieIdleKey(dir, zombieSkin);
     const fallback = zombieIdleKey(dir, 1);
+    const key =
+      crawlIdle && textureKeyExists(sprite.scene, crawlIdle)
+        ? crawlIdle
+        : textureKeyExists(sprite.scene, idleKey)
+          ? idleKey
+          : fallback;
     applyIdleFrame(
       sprite,
-      textureKeyExists(sprite.scene, idleKey) ? idleKey : fallback,
-      ZOMBIE_FEET_ORIGIN_Y,
+      key,
+      key === crawlIdle ? zombieCrawlOriginY(zombieSkin, dir) : ZOMBIE_FEET_ORIGIN_Y,
       zombieRenderHeight(zombieSkin),
     );
     sprite.setAngle(0);

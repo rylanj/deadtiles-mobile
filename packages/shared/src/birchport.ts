@@ -3,6 +3,11 @@
  */
 
 import {
+  BIRCHPORT_BARRACKS_BOUNDS,
+  isBirchportBarracksMessHall,
+  isInBirchportBarracks,
+} from "./birchportBarracks.js";
+import {
   cityStreetPatrolRoutes,
   getBuildingAt,
   getPlayerSpawnFootprint,
@@ -269,6 +274,84 @@ export function isPlayerInBirchport(opts: {
     return isBuildingInBirchport(opts.buildingX, opts.buildingY);
   }
   return isInBirchport(opts.x, opts.y);
+}
+
+export const BIRCHPORT_WEAPON_EQUIP_DENIED =
+  "You are not allowed to equip weapons here";
+
+export type BirchportSafezoneRect = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+function rectContains(
+  outer: BirchportSafezoneRect,
+  inner: BirchportSafezoneRect,
+): boolean {
+  return (
+    inner.minX >= outer.minX &&
+    inner.maxX <= outer.maxX &&
+    inner.minY >= outer.minY &&
+    inner.maxY <= outer.maxY
+  );
+}
+
+/**
+ * World-space boxes where exterior weapon equip is blocked.
+ * The city footprint uses the same edges as {@link isInBirchport}.
+ * The barracks yard is included when it sticks outside that box.
+ */
+export function birchportSafezoneRects(): BirchportSafezoneRect[] {
+  const f = getPlayerSpawnFootprint();
+  const city: BirchportSafezoneRect = {
+    minX: f.minX,
+    minY: f.minY,
+    maxX: f.maxX,
+    maxY: f.maxY,
+  };
+  const yard: BirchportSafezoneRect = {
+    minX: BIRCHPORT_BARRACKS_BOUNDS.minX,
+    minY: BIRCHPORT_BARRACKS_BOUNDS.minY,
+    maxX: BIRCHPORT_BARRACKS_BOUNDS.maxX + 1,
+    maxY: BIRCHPORT_BARRACKS_BOUNDS.maxY + 1,
+  };
+  if (rectContains(city, yard)) return [city];
+  if (rectContains(yard, city)) return [yard];
+  return [city, yard];
+}
+
+/**
+ * Streets and the barracks yard, plus the hospital, military tents, and mess hall.
+ * Other Birchport interiors stay armed.
+ */
+export function isBirchportWeaponEquipRestricted(opts: {
+  inInterior: boolean;
+  buildingX: number;
+  buildingY: number;
+  x: number;
+  y: number;
+}): boolean {
+  if (!opts.inInterior) {
+    return (
+      isInBirchport(opts.x, opts.y) ||
+      isInBirchportBarracks(Math.floor(opts.x), Math.floor(opts.y))
+    );
+  }
+  if (isBirchportHospital(opts.buildingX, opts.buildingY)) return true;
+  const bld = getBuildingAt(opts.buildingX, opts.buildingY);
+  if (!bld) return false;
+  if (
+    bld.buildingType === "mess_hall" &&
+    isBirchportBarracksMessHall(bld.ox, bld.oy)
+  ) {
+    return true;
+  }
+  if (bld.buildingType === "tent" && isInBirchportBarracks(bld.ox, bld.oy)) {
+    return true;
+  }
+  return false;
 }
 
 /**

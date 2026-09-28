@@ -2120,9 +2120,60 @@
         color: #7ecf7e;
         opacity: 0.85;
       }
+      .map-legend {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px 12px;
+        padding: 0 12px 12px;
+      }
+      .map-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        line-height: 1;
+        color: #c8e4c8;
+      }
+      .map-legend-swatch {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
+        box-sizing: border-box;
+      }
+      .map-legend-swatch--safezone {
+        width: 16px;
+        height: 12px;
+        background: repeating-linear-gradient(
+          90deg,
+          #e23b3b 0 4px,
+          transparent 4px 7px
+        );
+        background-size: 100% 2px;
+        background-repeat: no-repeat;
+        background-position: center;
+      }
+      .map-legend-swatch--building {
+        background: #5c4033;
+      }
+      .map-legend-swatch--task {
+        width: 8px;
+        height: 8px;
+        margin: 2px;
+        background: #f0c040;
+        border: 1px solid #fff6c8;
+        transform: rotate(45deg);
+      }
+      .map-legend-swatch--road {
+        background: #3a3b3c;
+        box-shadow: inset 0 0 0 1px rgba(190, 190, 190, 0.4);
+      }
+      .map-legend-swatch--sidewalk {
+        background: #9a9a8e;
+      }
       .map-frame {
         position: relative;
-        margin: 12px;
+        margin: 12px 12px 10px;
         aspect-ratio: 1;
         border: 1px solid rgba(100, 220, 100, 0.28);
         border-radius: 2px;
@@ -2400,6 +2451,29 @@
         pointer-events: none;
         filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
       }
+      .weapon-hotbar-forbid {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid #e23b3b;
+        background: rgba(28, 8, 8, 0.92);
+        box-sizing: border-box;
+        pointer-events: none;
+        z-index: 2;
+      }
+      .weapon-hotbar-forbid::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 2px;
+        height: 12px;
+        background: #e23b3b;
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
       .weapon-hotbar-name {
         font-size: clamp(10px, 2.5vw, 12px);
         font-weight: 600;
@@ -2450,6 +2524,7 @@
         border-radius: 4px;
         padding: 10px 16px 10px 14px;
         min-width: 180px;
+        max-width: min(420px, 90vw);
         color: #d4f0d4;
         font: 14px/1.5 system-ui, sans-serif;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
@@ -2524,6 +2599,7 @@
       .loot-item-name {
         color: #e8f8e8;
         font-weight: 500;
+        overflow-wrap: anywhere;
       }
       .loot-item-qty {
         color: #7ecf7e;

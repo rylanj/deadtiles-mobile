@@ -81,7 +81,7 @@ export const ONBOARDING_CONTROLS_LEGEND = [
   { key: "J", action: "Journal" },
   { key: "M", action: "Map" },
   { key: "1 / 2", action: "Weapon hotbar" },
-  { key: "B", action: "Build (hammer)" },
+  { key: "B", action: "Build" },
   { key: "Enter", action: "Chat" },
   { key: "/freq 1-3000", action: "Tune radio" },
   { key: "/radio message", action: "Radio chat" },

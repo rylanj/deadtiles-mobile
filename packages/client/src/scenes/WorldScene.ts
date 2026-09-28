@@ -34,6 +34,7 @@ import {
   interiorWallCornerDepthBias,
   interiorWallOccupiesTile,
   isInteriorExitTile,
+  isBirchportWeaponEquipRestricted,
   roomAtInteriorDoor,
   roomDoorApproachGoal,
   searchableFootprint,
@@ -45,6 +46,7 @@ import {
   UNLOAD_DURATION_MS,
   playerNearEntity,
   weaponIndexFromItemId,
+  WEAPON_SLOT_COUNT,
   parseInventory,
   countItemInInventory,
   PLAYER_MAX_HEALTH,
@@ -69,7 +71,6 @@ import {
   isRadioItem,
   getEntryRadioFreq,
   TICK_MS,
-  ZOMBIE_SPEED,
   zombieSpeedAtTime,
   WEAPONS,
   isMeleeWeapon,
@@ -82,6 +83,8 @@ import {
   shotHitsTarget,
   advanceWalkAnimFrame,
   dieAnimFrameIndex,
+  isZombieCrawler,
+  zombieBaseSpeed,
   ZOMBIE_WALK_FRAMES,
   ZOMBIE_TILES_PER_WALK_FRAME,
   zombieDieFrameCount,
@@ -811,8 +814,9 @@ export class WorldScene extends Phaser.Scene {
   private ashenTraderDialogUI?: AshenTraderDialogUI;
   private ashenMilitiaDialogUI?: AshenMilitiaDialogUI;
   private mapOverlayUI?: MapOverlayUI;
-  /** Last /ping from each player. Stays put until they ping again. */
+  /** Pings heard on the frequency tuned right now. Cleared when that frequency changes. */
   private radioPings = new Map<string, RadioPingMarker & { freq: number }>();
+  private radioPingListenFreq = 0;
   private weaponHotbar?: WeaponHotbar;
   private damageOverlay?: DamageOverlay;
   private lootPopup?: LootPopup;
@@ -2072,11 +2076,15 @@ export class WorldScene extends Phaser.Scene {
         this.cameras.main.preRender();
         this.tileManager?.invalidateRenderView();
         this.syncWorldTiles(true);
+        this.syncOverworldFenceSprites();
+        this.syncOverworldFenceCornerSprites();
+        this.refreshPlaceableDepths();
         this.refreshAllVisuals(0);
       });
       this.ensureWorldBarracksFences();
       this.syncOverworldFenceSprites();
       this.syncOverworldFenceCornerSprites();
+      this.refreshPlaceableDepths();
       this.syncOverworldBuildingPlacementBlockers();
 
       room.onMessage("tutorialSync", (msg: { flagsJson?: string }) => {
@@ -2193,7 +2201,23 @@ export class WorldScene extends Phaser.Scene {
           });
         } else if (msg.type === "playerNote") {
           const text = msg.payload.text.trim();
-          if (text) this.lootPopup?.show([], { header: text });
+          if (!text) return;
+          const durationMs = msg.payload.durationMs;
+          if (msg.payload.iconId) {
+            this.lootPopup?.show(
+              [
+                {
+                  id: msg.payload.iconId,
+                  name: text,
+                  quantity: 1,
+                  hideQuantity: true,
+                },
+              ],
+              { header: "", durationMs },
+            );
+          } else {
+            this.lootPopup?.show([], { header: text, durationMs });
+          }
         } else if (msg.type === "shotMissed") {
           this.spawnMissImpact(
             msg.payload.impactX,
@@ -2260,6 +2284,7 @@ export class WorldScene extends Phaser.Scene {
           const y = typeof msg.y === "number" ? msg.y : NaN;
           const freq = typeof msg.freq === "number" ? msg.freq : 0;
           if (!playerId || !Number.isFinite(x) || !Number.isFinite(y) || freq <= 0) return;
+          if (freq !== this.localRadioFreq()) return;
           this.radioPings.set(playerId, { playerId, name, x, y, freq });
           this.refreshMapOverlay();
         },
@@ -2897,7 +2922,7 @@ export class WorldScene extends Phaser.Scene {
       this.mobileMapBtn.hidden = !this.playerHasMapItem();
     }
     if (this.mobileBuildBtn) {
-      this.mobileBuildBtn.hidden = !this.playerHasHammerEquipped();
+      this.mobileBuildBtn.hidden = !this.playerHasHammerInHotbar();
     }
 
     this.refreshMobileAimButton();
@@ -2936,13 +2961,19 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** True when the local player currently has the hammer equipped. */
-  private playerHasHammerEquipped(): boolean {
+  /** True when a hammer sits in a hotbar slot, equipped or not. */
+  private playerHasHammerInHotbar(): boolean {
     const me = this.room?.state?.players?.get(this.sessionId);
-    const sync = this.localInventorySync;
-    const equippedIndex =
-      sync?.equippedWeaponIndex ?? me?.equippedWeaponIndex ?? -1;
-    return equippedIndex === weaponIndexFromItemId("weapon_hammer");
+    if (!me) return false;
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me.inventoryJson;
+    const inventory = parseInventory(inventoryJson);
+    const hammer = weaponIndexFromItemId("weapon_hammer");
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const slot = inventory[i];
+      if (slot && weaponIndexFromItemId(slot.id) === hammer) return true;
+    }
+    return false;
   }
 
   /** Tab / mobile inventory button — shared open/close path. */
@@ -3777,8 +3808,13 @@ export class WorldScene extends Phaser.Scene {
 
   private toggleStructureBuildMode() {
     if (!this.room) return;
-    // Entering requires hammer; exiting (B / Esc / button) always allowed.
-    if (!this.structureBuildMode && !this.playerHasHammerEquipped()) return;
+    // Entering needs a hammer in the hotbar. Exiting (B / Esc / button) always works.
+    if (!this.structureBuildMode && !this.playerHasHammerInHotbar()) {
+      this.lootPopup?.show([], {
+        header: "You need a weapon in your hotbar to build",
+      });
+      return;
+    }
     const message: ClientMessage = { type: "toggleStructureBuild" };
     this.room.send("action", message);
   }
@@ -4030,6 +4066,10 @@ export class WorldScene extends Phaser.Scene {
 
   private activeRadioPings(): RadioPingMarker[] {
     const freq = this.localRadioFreq();
+    if (freq !== this.radioPingListenFreq) {
+      if (this.radioPingListenFreq !== 0) this.radioPings.clear();
+      this.radioPingListenFreq = freq;
+    }
     if (freq <= 0) return [];
     const pins: RadioPingMarker[] = [];
     for (const ping of this.radioPings.values()) {
@@ -4243,7 +4283,14 @@ export class WorldScene extends Phaser.Scene {
         : me.magazineRounds;
     const magazinesJson = sync?.weaponMagazinesJson ?? me.weaponMagazinesJson ?? "{}";
     const isReloading = me.isReloading;
-    const key = `${inventoryJson}|${equippedSlot}|${magazineRounds}|${magazinesJson}|${isReloading}`;
+    const weaponRestricted = isBirchportWeaponEquipRestricted({
+      inInterior: !!me.inInterior,
+      buildingX: me.buildingX,
+      buildingY: me.buildingY,
+      x: me.x,
+      y: me.y,
+    });
+    const key = `${inventoryJson}|${equippedSlot}|${magazineRounds}|${magazinesJson}|${isReloading}|${weaponRestricted ? 1 : 0}`;
     if (key !== this.lastHotbarRenderKey) {
       this.lastHotbarRenderKey = key;
       this.weaponHotbar.render(
@@ -4252,6 +4299,7 @@ export class WorldScene extends Phaser.Scene {
         magazineRounds,
         magazinesJson,
         isReloading,
+        weaponRestricted,
       );
     }
     this.refreshMobileActionButtons();
@@ -7637,12 +7685,16 @@ export class WorldScene extends Phaser.Scene {
     if (this.tryInteractPrefabAt(screenX, screenY)) return;
     if (this.tryInteractTreeChopAt(screenX, screenY)) return;
 
+    // The outside doorway always leaves. A zombie or a body on that strip must
+    // not turn the click into a fight or a search.
+    const leavingInterior = this.pointerIsInteriorExit(screenX, screenY);
+
     // Resolve hover at click position so combat vs move matches what the player sees
-    this.updateEntityHover(pos);
+    if (!leavingInterior) this.updateEntityHover(pos);
 
     // Clicking an entity with a melee weapon → combat targeting. Firearms never
     // reach here: their hover is suppressed unless CTRL is held.
-    if (this.hoveredEntityId && this.hoveredEntityKind) {
+    if (!leavingInterior && this.hoveredEntityId && this.hoveredEntityKind) {
       const me = this.room?.state?.players?.get(this.sessionId);
       if (me?.alive && (me.equippedWeaponIndex ?? -1) >= 0) {
         this.clearDoorTarget();
@@ -7665,15 +7717,17 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Furniture / lootable corpse: click walks (or double-click sprints) then searches
-    this.updateSearchHover(pos);
-    this.updateLootableHover(pos);
-    const lootClick = this.handleLootClick();
-    if (lootClick === "started" || lootClick === "armed") {
-      this.clearDoorTarget();
-      this.clearFireplaceTarget();
-      this.clearTreeChopTarget();
-      return;
+    if (!leavingInterior) {
+      // Furniture / lootable corpse: click walks (or double-click sprints) then searches
+      this.updateSearchHover(pos);
+      this.updateLootableHover(pos);
+      const lootClick = this.handleLootClick();
+      if (lootClick === "started" || lootClick === "armed") {
+        this.clearDoorTarget();
+        this.clearFireplaceTarget();
+        this.clearTreeChopTarget();
+        return;
+      }
     }
     this.lastLootClickId = null;
     // Clicking ground or building → cancel any pursuit and move
@@ -7688,7 +7742,8 @@ export class WorldScene extends Phaser.Scene {
     const cart2 = isoToCartesian(worldPt2.x, worldPt2.y);
     const clickTX = Math.floor(cart2.x);
     const clickTY = Math.floor(cart2.y);
-    if (isWallTile(clickTX, clickTY)) {
+    const inside = this.room?.state?.players?.get(this.sessionId)?.inInterior;
+    if (!inside && isWallTile(clickTX, clickTY)) {
       this.tileManager?.highlightBuilding(clickTX, clickTY);
     } else {
       this.tileManager?.highlightBuilding(null, null);
@@ -8302,6 +8357,16 @@ export class WorldScene extends Phaser.Scene {
    *   "armed" reserved for pairing (unused — both clicks start pursuit),
    *   "miss" when the click was not on a lootable.
    */
+  /** True when the cursor is on the interior's outside exit corridor. */
+  private pointerIsInteriorExit(screenX: number, screenY: number): boolean {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me?.inInterior) return false;
+    const world = this.cameras.main.getWorldPoint(screenX, screenY);
+    const cart = isoToCartesian(world.x, world.y);
+    const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
+    return isInteriorExitTile(Math.floor(cart.x), Math.floor(cart.y), exit);
+  }
+
   private handleLootClick(): "started" | "armed" | "miss" {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me?.alive || !this.room) return "miss";
@@ -11419,13 +11484,14 @@ export class WorldScene extends Phaser.Scene {
     y: number,
     targetX: number,
     targetY: number,
+    skin?: number,
   ) {
     const dx = targetX - x;
     const dy = targetY - y;
     const dist = Math.hypot(dx, dy);
     if (dist < 0.05) return;
     const speed = zombieSpeedAtTime(
-      ZOMBIE_SPEED,
+      zombieBaseSpeed(isZombieCrawler(sprite.entityId, skin)),
       this.room?.state?.worldTimeMs ?? 0,
     );
     sprite.setData("velX", (dx / dist) * speed);
@@ -11509,7 +11575,14 @@ export class WorldScene extends Phaser.Scene {
         buildingY: next.buildingY,
       });
       const target = this.zombieWalkTarget(next);
-      this.seedZombieWalkVelocity(sprite, next.x, next.y, target.x, target.y);
+      this.seedZombieWalkVelocity(
+        sprite,
+        next.x,
+        next.y,
+        target.x,
+        target.y,
+        next.skin,
+      );
     }
 
     if (next.anim === "walk" || next.anim === "attack") {
@@ -12406,6 +12479,7 @@ export class WorldScene extends Phaser.Scene {
     attackFrame: number | undefined,
     dieFrame: number | undefined,
     isDead: boolean,
+    zombieCrawling = false,
   ): string {
     // Use *resolved* (loaded) skins / pack readiness — not preferred ids.
     // Otherwise lazy packs finish loading while idle entities keep a cached key
@@ -12446,6 +12520,7 @@ export class WorldScene extends Phaser.Scene {
       packReady,
       data.alive === false ? 1 : 0,
       data.isDead ? 1 : 0,
+      zombieCrawling ? 1 : 0,
     ].join("|");
   }
 
@@ -12587,6 +12662,8 @@ export class WorldScene extends Phaser.Scene {
       displayAnim = "sit-campchair";
       attackFrame = undefined;
     }
+    const zombieCrawling =
+      kind === "zombie" && isZombieCrawler(entityId, data.skin);
     const visualKey = this.buildEntityVisualKey(
       kind,
       {
@@ -12600,6 +12677,7 @@ export class WorldScene extends Phaser.Scene {
       attackFrame,
       dieFrame,
       isDead,
+      zombieCrawling,
     );
     if (sprite.getData("visualKey") !== visualKey) {
       sprite.setData("visualKey", visualKey);
@@ -12618,6 +12696,7 @@ export class WorldScene extends Phaser.Scene {
         isDead,
         alive: kind === "corpse" ? false : data.alive,
         zombieSkin: kind === "zombie" ? (data.skin ?? 1) : undefined,
+        zombieCrawling,
         guardSkin: kind === "guard" ? (data.skin ?? 1) : undefined,
         guardNpcKind: kind === "guard" ? (data.npcKind ?? 0) : undefined,
       });

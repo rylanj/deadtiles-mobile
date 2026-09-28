@@ -240,7 +240,6 @@ export type MinimapTileKind =
   | "carpark"
   | "barracks"
   | "building"
-  | "fence"
   | "streetlight";
 
 /** Fence source canvas size (WoodenFence_*.png). */
@@ -1696,7 +1695,7 @@ export class WorldTileManager {
                       }
                     }
                   }
-                  this.minimapKinds.set(key, "fence");
+                  this.minimapKinds.set(key, "floor");
                 } else {
                   const tree = getTreeAt(x, y);
                   if (tree && !this.treeObjects.has(key)) {

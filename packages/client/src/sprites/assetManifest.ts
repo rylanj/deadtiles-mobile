@@ -5,6 +5,7 @@ import {
   PLAYER_SKIN_DEFAULT,
   PLAYER_WALK_FRAMES,
   ZOMBIE_WALK_FRAMES,
+  zombieHasCrawlVariant,
   zombieDieFrameCount,
   normalizeRedManSkin,
   isMilitiaCaptainSkin,
@@ -79,6 +80,19 @@ function scheduleZombiePack(skin: number, track: TrackFn) {
         `zombieman${skin}-die-${dir}-${tag}`,
         `${man}/Die/${man}_Die_${dir}_${tag}.png`,
       );
+    }
+    if (zombieHasCrawlVariant(skin)) {
+      track(
+        `zombieman${skin}-idlecrawl-${dir}`,
+        `${man}/IdleCrawl/${man}_IdleCrawl_${dir}.png`,
+      );
+      for (let f = 1; f <= ZOMBIE_WALK_FRAMES; f++) {
+        const tag = animFrameTag(f);
+        track(
+          `zombieman${skin}-crawl-${dir}-${tag}`,
+          `${man}/Crawl/${man}_Crawl_${dir}_${tag}.png`,
+        );
+      }
     }
   }
 }

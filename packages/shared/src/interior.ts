@@ -1,6 +1,6 @@
 import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceSpan, getPlayerSpawnFootprint, seededRandom, type BuildingInfo } from "./worldgen.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
-import { isBirchportHospital } from "./birchport.js";
+import { isBirchportHospital, isBuildingInBirchport } from "./birchport.js";
 
 /** Fallback fixed interior size (legacy 2×2 building → 4×4 interior). */
 export const INTERIOR_WIDTH = 4;
@@ -802,7 +802,7 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   watercontainer: 0.18,
   /** Warehouses always place one office pair — chance unused. */
   cabinet: 1,
-  /** Warehouses — at most one, not guaranteed. */
+  /** Warehouses outside Birchport — at most one, not guaranteed. */
   workbench: 0.4,
   /** Residential (house) — try to place one flush against a wall. */
   bed: 1,
@@ -1224,7 +1224,8 @@ function placeWarehouseShelves(
 }
 
 /**
- * Optional Workbench1 on a free floor tile (SE-facing). At most one per warehouse.
+ * Workbench1 on a free floor tile (SE-facing). At most one per warehouse.
+ * Birchport skips the chance roll so the bench is placed whenever a tile is free.
  */
 function placeWarehouseWorkbench(
   bx: number,
@@ -1236,8 +1237,9 @@ function placeWarehouseWorkbench(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
+  guaranteed = false,
 ): SearchableObject[] {
-  if (rng() >= FURNITURE_SPAWN_CHANCE.workbench) return [];
+  if (!guaranteed && rng() >= FURNITURE_SPAWN_CHANCE.workbench) return [];
 
   const { w, h } = furnitureFootprint("workbench");
   const { dx, dy } = ISO_FACING_TILE_DELTA[furnitureFacing("workbench")];
@@ -5911,6 +5913,22 @@ export function generateInteriorContent(bx: number, by: number): {
       occupied,
       0,
     );
+    const birchport = isBuildingInBirchport(bx, by);
+    // Claim the bench before shelves so a Birchport warehouse cannot fill up without one.
+    const earlyBench = birchport
+      ? placeWarehouseWorkbench(
+          bx,
+          by,
+          iW,
+          iH,
+          exitX,
+          exitY,
+          rng,
+          occupied,
+          office.length,
+          true,
+        )
+      : [];
     const shelves = placeWarehouseShelves(
       bx,
       by,
@@ -5920,20 +5938,22 @@ export function generateInteriorContent(bx: number, by: number): {
       exitY,
       rng,
       occupied,
-      office.length,
+      office.length + earlyBench.length,
     );
-    const workbench = placeWarehouseWorkbench(
-      bx,
-      by,
-      iW,
-      iH,
-      exitX,
-      exitY,
-      rng,
-      occupied,
-      office.length + shelves.length,
-    );
-    furnitures = [...office, ...shelves, ...workbench];
+    const lateBench = birchport
+      ? []
+      : placeWarehouseWorkbench(
+          bx,
+          by,
+          iW,
+          iH,
+          exitX,
+          exitY,
+          rng,
+          occupied,
+          office.length + earlyBench.length + shelves.length,
+        );
+    furnitures = [...office, ...earlyBench, ...shelves, ...lateBench];
   } else if (multiRoomHouse) {
     const rooms = placeHouseRooms(
       bx,

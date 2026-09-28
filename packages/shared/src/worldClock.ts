@@ -7,6 +7,8 @@
  *   precip: none  | rain | fog | snow   (mutually exclusive)
  */
 
+import { ZOMBIE_SPEED } from "./constants.js";
+
 export type DayPhase = "dawn" | "day" | "dusk" | "night";
 
 export type SkyId = "clear" | "cloudy";
@@ -227,7 +229,7 @@ export function inGameMinuteOfDay(worldTimeMs: number): number {
   return wrapped * 24 * 60;
 }
 
-/** Peak chase speed at 01:00. Daytime speed is each zombie's base. */
+/** Peak chase speed at 01:00 for a standing zombie. Daytime speed is each zombie's base. */
 export const ZOMBIE_NIGHT_SPEED = 1;
 
 const ZOMBIE_NIGHT_RAMP_START_MIN = 20 * 60;
@@ -257,12 +259,16 @@ export function zombieNightRamp(worldTimeMs: number): number {
   return 0;
 }
 
-/** Daytime `baseSpeed` until 20:00, 1.0 at 01:00, base again at 06:00. */
+/**
+ * Daytime `baseSpeed` until 20:00, then up to the night peak at 01:00, base again at 06:00.
+ * A slower base (crawlers) keeps the same fraction of standing speed at night.
+ */
 export function zombieSpeedAtTime(baseSpeed: number, worldTimeMs: number): number {
   const base = Number.isFinite(baseSpeed) ? baseSpeed : 0;
   const ramp = zombieNightRamp(worldTimeMs);
   if (ramp <= 0) return base;
-  const peak = Math.max(base, ZOMBIE_NIGHT_SPEED);
+  const scale = ZOMBIE_SPEED > 0 ? base / ZOMBIE_SPEED : 1;
+  const peak = Math.max(base, ZOMBIE_NIGHT_SPEED * scale);
   return base + (peak - base) * ramp;
 }
 

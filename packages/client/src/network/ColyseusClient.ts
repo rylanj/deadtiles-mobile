@@ -828,7 +828,7 @@ export type SkillLevelUpEvent = {
 
 export type PlayerNoteEvent = {
   type: "playerNote";
-  payload: { text: string };
+  payload: { text: string; iconId?: string; durationMs?: number };
 };
 
 export type InventorySyncEvent = {

@@ -318,6 +318,8 @@ export class AudioManager {
   private lastForestVariant = -1;
   private actionSounds = new Map<string, LiveAction>();
   private actionDelays = new Map<string, Phaser.Time.TimerEvent>();
+  /** Cuts a clip that runs longer than the action bar. */
+  private actionStopDelays = new Map<string, Phaser.Time.TimerEvent>();
   private treeFalls = new Map<string, LiveTreeFall>();
   private treeChops = new Map<string, LiveTreeChop>();
   private liveZombieGroans: LiveGunshot[] = [];
@@ -797,6 +799,11 @@ export class AudioManager {
       this.actionDelays.delete(key);
       delay?.remove(false);
     }
+    for (const key of [...this.actionStopDelays.keys()]) {
+      const delay = this.actionStopDelays.get(key);
+      this.actionStopDelays.delete(key);
+      delay?.remove(false);
+    }
     for (const key of [...this.actionSounds.keys()]) {
       const live = this.actionSounds.get(key);
       this.actionSounds.delete(key);
@@ -848,14 +855,27 @@ export class AudioManager {
     };
     if (delayMs <= 0 || !this.scene) {
       play();
-      return;
+    } else {
+      delay = this.scene.time.delayedCall(delayMs, play);
+      this.actionDelays.set(mapKey, delay);
     }
-    delay = this.scene.time.delayedCall(delayMs, play);
-    this.actionDelays.set(mapKey, delay);
+    if (durationMs > 0 && this.scene) {
+      const stopDelay = this.scene.time.delayedCall(durationMs, () => {
+        if (this.actionStopDelays.get(mapKey) !== stopDelay) return;
+        this.actionStopDelays.delete(mapKey);
+        this.stopActionSound(kind, id);
+      });
+      this.actionStopDelays.set(mapKey, stopDelay);
+    }
   }
 
   private stopActionSound(kind: "search" | "reload" | "unload" | "consume", id: string) {
     const mapKey = this.actionSoundKey(kind, id);
+    const stopDelay = this.actionStopDelays.get(mapKey);
+    if (stopDelay) {
+      stopDelay.remove(false);
+      this.actionStopDelays.delete(mapKey);
+    }
     const delay = this.actionDelays.get(mapKey);
     if (delay) {
       delay.remove(false);

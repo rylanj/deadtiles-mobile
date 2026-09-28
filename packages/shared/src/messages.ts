@@ -1089,7 +1089,7 @@ export type ServerMessage =
   | {
       /** Owner-only note. Shown as a popup, not a chat bubble. */
       type: "playerNote";
-      payload: { text: string };
+      payload: { text: string; iconId?: string; durationMs?: number };
     };
 
 /** One-shot / channelled world audio other clients in earshot should play. */

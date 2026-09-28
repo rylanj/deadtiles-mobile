@@ -1261,7 +1261,7 @@ function applyBuildingObjectDepth(
         frontFloor,
         buildingFrontEntityDepth(bld, buildingDepth, natural),
       );
-    } else if (result > buildingDepth) {
+    } else if (opts.shouldLift === undefined && result > buildingDepth) {
       result = Math.min(
         result,
         buildingBehindEntityDepth(bld, buildingDepth, natural),

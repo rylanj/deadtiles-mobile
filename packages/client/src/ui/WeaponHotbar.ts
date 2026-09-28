@@ -66,6 +66,7 @@ export class WeaponHotbar {
     magazineRounds: number,
     weaponMagazinesJson: string,
     isReloading: boolean,
+    weaponRestricted = false,
   ) {
     const inventory = parseInventory(inventoryJson);
     const magazines = parseWeaponMagazines(weaponMagazinesJson);
@@ -103,6 +104,15 @@ export class WeaponHotbar {
         btn.setAttribute("aria-label", def?.name ?? slot.id);
       } else {
         btn.appendChild(nameEl);
+      }
+
+      if (weaponRestricted && weaponIndex >= 0) {
+        const forbid = document.createElement("span");
+        forbid.className = "weapon-hotbar-forbid";
+        forbid.title = "You are not allowed to equip weapons here";
+        forbid.setAttribute("aria-hidden", "true");
+        btn.appendChild(forbid);
+        btn.classList.add("weapon-hotbar-slot--restricted");
       }
 
       if (weapon && !isMeleeWeapon(weapon)) {

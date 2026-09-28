@@ -4974,7 +4974,6 @@ export const MAP_CHART_PAVEMENT = 3;
 export const MAP_CHART_CARPARK = 4;
 export const MAP_CHART_BARRACKS = 5;
 export const MAP_CHART_BUILDING = 6;
-export const MAP_CHART_FENCE = 8;
 
 export type BirchportMapChart = {
   minX: number;
@@ -5212,9 +5211,6 @@ function paintBirchportMapChartCell(cx: number, cy: number): void {
       for (const road of layout.arterials) {
         paintBand(road.x0, road.y0, road.x1, road.y1, road.orient, road.width);
       }
-    }
-    for (const fence of settlementFences(cx, cy)) {
-      fillRect(fence.ox, fence.oy, fence.ox, fence.oy, MAP_CHART_FENCE, true);
     }
     for (const bld of settlementBuildings(cx, cy)) {
       fillRect(bld.ox, bld.oy, bld.ox + bld.w - 1, bld.oy + bld.h - 1, MAP_CHART_BUILDING);

@@ -142,6 +142,8 @@ export const ZOMBIE_SKIN_MAN3 = 3;
 export const ZOMBIE_SKIN_MAN4 = 4;
 export const ZOMBIE_SKIN_MAN5 = 5;
 export const ZOMBIE_SKIN_MAN6 = 6;
+/** Share of ZombieMan6 and ZombieMan10 spawns that use IdleCrawl / Crawl. */
+export const ZOMBIE_CRAWL_SPAWN_CHANCE = 0.5;
 export const ZOMBIE_SKIN_MAN7 = 7;
 export const ZOMBIE_SKIN_MAN8 = 8;
 export const ZOMBIE_SKIN_MAN9 = 9;
@@ -249,6 +251,28 @@ export function rollZombieSkin(
     return ZOMBIE_SKIN_MAN11;
   }
   return (Math.floor(rng() * ZOMBIE_COMMON_SKIN_COUNT) + 1) as ZombieSkinId;
+}
+
+/** Skins that ship IdleCrawl / Crawl and can roll the crawling posture. */
+export function zombieHasCrawlVariant(skin: number | undefined): boolean {
+  const s = normalizeZombieSkin(skin);
+  return s === ZOMBIE_SKIN_MAN6 || s === ZOMBIE_SKIN_MAN10;
+}
+
+/** Stable per zombie id, so every client shows the same posture. */
+export function isZombieCrawler(
+  id: string,
+  skin: number | undefined,
+): boolean {
+  if (!zombieHasCrawlVariant(skin)) return false;
+  return seededRandom(`zombie-crawl:${id}`)() < ZOMBIE_CRAWL_SPAWN_CHANCE;
+}
+
+/** Crawlers stay at this fraction of a standing zombie's speed, day and night. */
+export const ZOMBIE_CRAWL_SPEED_SCALE = 0.6;
+
+export function zombieBaseSpeed(crawling: boolean): number {
+  return crawling ? ZOMBIE_SPEED * ZOMBIE_CRAWL_SPEED_SCALE : ZOMBIE_SPEED;
 }
 
 export function normalizeZombieSkin(skin: number | undefined): ZombieSkinId {

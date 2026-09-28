@@ -5,13 +5,17 @@ export type LootItem = {
   quantity: number;
   /** When set, shows the matching UI_* inventory icon. */
   id?: string;
+  /** Icon and name only, no ×quantity. */
+  hideQuantity?: boolean;
 };
 
 export type LootPopupOptions = {
-  /** Override header (default: "You found:" / "Nothing found"). */
+  /** Override header (default: "You found:" / "Nothing found"). Empty skips the header. */
   header?: string;
   /** When set, header is name on the left and this glyph on the right. */
   arrow?: string;
+  /** How long the card stays before fading. Default 2.4s. */
+  durationMs?: number;
 };
 
 /**
@@ -31,23 +35,25 @@ export class LootPopup {
     const card = document.createElement("div");
     card.className = "loot-card";
 
-    const header = document.createElement("div");
-    header.className = "loot-card-header";
-    const title =
-      opts?.header ?? (items.length > 0 ? "You found:" : "Nothing useful found");
-    if (opts?.arrow) {
-      header.classList.add("loot-card-header--split");
-      const name = document.createElement("span");
-      name.className = "loot-card-header-name";
-      name.textContent = title;
-      const arrow = document.createElement("span");
-      arrow.className = "loot-card-arrow";
-      arrow.textContent = opts.arrow;
-      header.append(name, arrow);
-    } else {
-      header.textContent = title;
+    if (opts?.header !== "") {
+      const header = document.createElement("div");
+      header.className = "loot-card-header";
+      const title =
+        opts?.header ?? (items.length > 0 ? "You found:" : "Nothing useful found");
+      if (opts?.arrow) {
+        header.classList.add("loot-card-header--split");
+        const name = document.createElement("span");
+        name.className = "loot-card-header-name";
+        name.textContent = title;
+        const arrow = document.createElement("span");
+        arrow.className = "loot-card-arrow";
+        arrow.textContent = opts.arrow;
+        header.append(name, arrow);
+      } else {
+        header.textContent = title;
+      }
+      card.appendChild(header);
     }
-    card.appendChild(header);
 
     for (const item of items) {
       const row = document.createElement("div");
@@ -69,14 +75,15 @@ export class LootPopup {
       name.textContent = item.name;
       left.appendChild(name);
 
-      const qty = document.createElement("span");
-      qty.className = "loot-item-qty";
-      // Reputation rewards use the rep icon and a +N label.
-      qty.textContent =
-        item.id === "rep" ? `+${item.quantity}` : `×${item.quantity}`;
-
       row.appendChild(left);
-      row.appendChild(qty);
+      if (!item.hideQuantity) {
+        const qty = document.createElement("span");
+        qty.className = "loot-item-qty";
+        // Reputation rewards use the rep icon and a +N label.
+        qty.textContent =
+          item.id === "rep" ? `+${item.quantity}` : `×${item.quantity}`;
+        row.appendChild(qty);
+      }
       card.appendChild(row);
     }
 
@@ -86,7 +93,7 @@ export class LootPopup {
     requestAnimationFrame(() => card.classList.add("loot-card--visible"));
 
     // Begin exit: fade out after 2.4 s, then remove element
-    const SHOW_MS = 2400;
+    const SHOW_MS = opts?.durationMs ?? 2400;
     const FADE_MS = 400;
     setTimeout(() => {
       card.classList.add("loot-card--hiding");
