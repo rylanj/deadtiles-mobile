@@ -4,6 +4,7 @@ import {
   PLAYER_FIRE_FRAMES,
   PLAYER_SKIN_DEFAULT,
   PLAYER_WALK_FRAMES,
+  COYWOLF_RUN_FRAMES,
   ZOMBIE_WALK_FRAMES,
   zombieHasCrawlVariant,
   zombieDieFrameCount,
@@ -36,7 +37,8 @@ export type EntityPackId =
   | `redman-${number}`
   | `player-${number}`
   | "traderman"
-  | "traderguard";
+  | "traderguard"
+  | "coywolf";
 
 /** Packs that are not entities but still benefit from atlasing. */
 export type ExtraPackId = "furniture";
@@ -93,6 +95,36 @@ function scheduleZombiePack(skin: number, track: TrackFn) {
           `${man}/Crawl/${man}_Crawl_${dir}_${tag}.png`,
         );
       }
+    }
+  }
+}
+
+function scheduleCoywolfPack(track: TrackFn) {
+  for (const dir of DIRECTION_LABELS) {
+    track(
+      `coywolf-idle-${dir}`,
+      `Coywolf1/Idle/Coywolf_Idle_${dir}.png`,
+    );
+    for (let f = 1; f <= 8; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `coywolf-walk-${dir}-${tag}`,
+        `Coywolf1/Walk/Coywolf1_Walk_${dir}_${tag}.png`,
+      );
+    }
+    for (let f = 1; f <= COYWOLF_RUN_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `coywolf-run-${dir}-${tag}`,
+        `Coywolf1/Run/Coywolf1_Run_${dir}_${tag}.png`,
+      );
+    }
+    for (let f = 1; f <= 9; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `coywolf-die-${dir}-${tag}`,
+        `Coywolf1/Die/Coywolf1_Die_${dir}_${tag}.png`,
+      );
     }
   }
 }
@@ -400,6 +432,34 @@ function scheduleFurniturePack(track: TrackFn) {
       `Furniture/Fireplace1/Fireplace1_Active_SE_${tag}.png`,
     );
   }
+  for (const facing of ["SE", "SW"] as const) {
+    const face = facing.toLowerCase();
+    track(
+      `furniture-furnace1-inactive-${face}`,
+      `Furniture/Furnace1/Furnace1_Inactive_${facing}.png`,
+    );
+    for (let frame = 1; frame <= FIREPLACE_ACTIVE_FRAMES; frame++) {
+      const tag = animFrameTag(frame);
+      track(
+        `furniture-furnace1-active-${face}-${tag}`,
+        `Furniture/Furnace1/Furnace1_Active_${facing}_${tag}.png`,
+      );
+    }
+  }
+  for (const facing of ["SE", "SW"] as const) {
+    const face = facing.toLowerCase();
+    track(
+      `furniture-mantel1-inactive-${face}`,
+      `Furniture/Mantel1/Mantel1_Inactive_${facing}.png`,
+    );
+    for (let frame = 1; frame <= 9; frame++) {
+      const tag = animFrameTag(frame);
+      track(
+        `furniture-mantel1-active-${face}-${tag}`,
+        `Furniture/Mantel1/Mantel1_Active_${facing}_${tag}.png`,
+      );
+    }
+  }
 }
 
 export function schedulePackTextures(id: PackId, track: TrackFn) {
@@ -417,6 +477,8 @@ export function schedulePackTextures(id: PackId, track: TrackFn) {
     scheduleTraderManPack(track);
   } else if (id === "traderguard") {
     scheduleTraderGuardPack(track);
+  } else if (id === "coywolf") {
+    scheduleCoywolfPack(track);
   }
 }
 
@@ -436,7 +498,7 @@ export function allPackIds(): PackId[] {
   }
   for (let s = 1; s <= 4; s++) ids.push(`redman-${s}`);
   for (let s = 1; s <= 3; s++) ids.push(`player-${s}`);
-  ids.push("traderman", "traderguard", "furniture");
+  ids.push("traderman", "traderguard", "coywolf", "furniture");
   return ids;
 }
 

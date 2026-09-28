@@ -1366,6 +1366,43 @@
         border: 1px dashed rgba(255, 255, 255, 0.18);
         background: rgba(0, 0, 0, 0.2);
       }
+      .fireplace-cook-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .fireplace-cook-section[hidden] {
+        display: none !important;
+      }
+      .fireplace-cook-hint {
+        margin: 0;
+      }
+      .fireplace-cook-row,
+      .fireplace-pack-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .fireplace-cook-cell,
+      .fireplace-pack-cell {
+        pointer-events: auto;
+      }
+      .fireplace-cook-cell {
+        cursor: pointer;
+      }
+      .fireplace-pack-cell {
+        cursor: grab;
+      }
+      .fireplace-pack-empty {
+        font-size: 13px;
+        opacity: 0.75;
+        align-self: center;
+      }
+      .fireplace-pack-drop.inventory-cell--drag-over {
+        outline: 1px dashed rgba(136, 255, 136, 0.8);
+        outline-offset: 4px;
+        border-radius: 4px;
+      }
       .fireplace-fuel-fallback {
         font-size: 18px;
         font-weight: 700;
@@ -1558,6 +1595,9 @@
         margin-top: 2px;
         color: #9a7070;
         font: italic 12px/1.3 system-ui, sans-serif;
+      }
+      .craft-break-heading {
+        margin: 10px 0 4px;
       }
       .trader-cell--offered {
         outline: 1px solid rgba(180, 220, 100, 0.75);
@@ -2635,6 +2675,12 @@
         font-size: 11px;
         font-weight: 500;
         border-color: rgba(160, 168, 156, 0.4);
+      }
+      .chat-bubble-icon {
+        position: fixed;
+        z-index: 1;
+        margin: 0;
+        pointer-events: none;
       }
       /* ── Chat bar ─────────────────────────────────────────────────────────── */
       #chat-bar {

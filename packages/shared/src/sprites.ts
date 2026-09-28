@@ -271,6 +271,12 @@ export function isZombieCrawler(
 /** Crawlers stay at this fraction of a standing zombie's speed, day and night. */
 export const ZOMBIE_CRAWL_SPEED_SCALE = 0.6;
 
+/**
+ * Crawl sheets fill more of the 256 frame than the standing body, so the
+ * same render height makes them read much larger. Drawn at this fraction.
+ */
+export const ZOMBIE_CRAWL_RENDER_SCALE = 0.9;
+
 export function zombieBaseSpeed(crawling: boolean): number {
   return crawling ? ZOMBIE_SPEED * ZOMBIE_CRAWL_SPEED_SCALE : ZOMBIE_SPEED;
 }
@@ -288,9 +294,12 @@ const ZOMBIE_SKIN_RENDER_SCALE: Partial<Record<ZombieSkinId, number>> = {
 };
 
 /** On-screen height for a zombie skin (ZombieMan9 is 10% shorter). */
-export function zombieRenderHeight(skin?: number): number {
+export function zombieRenderHeight(skin?: number, crawling = false): number {
   const s = normalizeZombieSkin(skin);
-  return ENTITY_RENDER_HEIGHT * (ZOMBIE_SKIN_RENDER_SCALE[s] ?? 1);
+  const scale =
+    (ZOMBIE_SKIN_RENDER_SCALE[s] ?? 1) *
+    (crawling ? ZOMBIE_CRAWL_RENDER_SCALE : 1);
+  return ENTITY_RENDER_HEIGHT * scale;
 }
 
 /** Die frames shipped for a zombie skin. */

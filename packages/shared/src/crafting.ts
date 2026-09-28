@@ -2,6 +2,8 @@ import {
   canAddToInventory,
   addToInventory,
   countItemInInventory,
+  itemFitsInSlot,
+  maxStackForItem,
   removeItemFromInventory,
   type Inventory,
 } from "./items.js";
@@ -39,7 +41,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   {
     id: "rags_from_teddy",
     station: "workbench",
-    output: { itemId: "rags", quantity: 4 },
+    output: { itemId: "rags", quantity: 2 },
     inputs: [
       {
         anyOf: [
@@ -50,35 +52,68 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
     ],
   },
   {
+    id: "rags_from_shirt",
+    station: "workbench",
+    output: { itemId: "rags", quantity: 2 },
+    inputs: [
+      {
+        anyOf: [
+          { itemId: "white_tshirt", quantity: 1 },
+          { itemId: "black_tshirt", quantity: 1 },
+        ],
+      },
+    ],
+  },
+  {
     id: "bandages_from_alcohol_rags",
     station: "workbench",
     output: { itemId: "bandages", quantity: 2 },
     inputs: [
       { itemId: "alcohol", quantity: 1 },
-      { itemId: "rags", quantity: 4 },
+      { itemId: "rags", quantity: 6 },
     ],
+  },
+  {
+    id: "screws_from_scrap",
+    station: "workbench",
+    output: { itemId: "screws", quantity: 1 },
+    inputs: [{ itemId: "scrap_metal", quantity: 1 }],
+  },
+  {
+    id: "bolts_from_scrap",
+    station: "workbench",
+    output: { itemId: "bolts", quantity: 1 },
+    inputs: [{ itemId: "scrap_metal", quantity: 1 }],
   },
   {
     id: "hammer_from_scrap",
     station: "workbench",
     output: { itemId: "weapon_hammer", quantity: 1 },
     inputs: [
-      { itemId: "scrap_metal", quantity: 2 },
-      { itemId: "screws", quantity: 8 },
-      { itemId: "duct_tape", quantity: 1 },
+      { itemId: "scrap_metal", quantity: 3 },
+      { itemId: "screws", quantity: 4 },
+      { itemId: "duct_tape", quantity: 2 },
     ],
   },
   {
-    id: "screws_from_scrap",
+    id: "hatchet_from_scrap",
     station: "workbench",
-    output: { itemId: "screws", quantity: 2 },
-    inputs: [{ itemId: "scrap_metal", quantity: 1 }],
+    output: { itemId: "weapon_hatchet", quantity: 1 },
+    inputs: [
+      { itemId: "wood", quantity: 2 },
+      { itemId: "scrap_metal", quantity: 2 },
+      { itemId: "bolts", quantity: 2 },
+      { itemId: "duct_tape", quantity: 2 },
+    ],
   },
   {
-    id: "bolts_from_scrap",
+    id: "bat_from_wood",
     station: "workbench",
-    output: { itemId: "bolts", quantity: 2 },
-    inputs: [{ itemId: "scrap_metal", quantity: 1 }],
+    output: { itemId: "weapon_bat", quantity: 1 },
+    inputs: [
+      { itemId: "wood", quantity: 3 },
+      { itemId: "duct_tape", quantity: 2 },
+    ],
   },
 ] as const;
 
@@ -135,4 +170,186 @@ export function applyCraftRecipe(
     return null;
   }
   return addToInventory(next, recipe.output.itemId, recipe.output.quantity);
+}
+
+/** Parts returned when a firearm is broken down. The rest are ruined. */
+export const DISASSEMBLY_RETURN_COUNT = 3;
+export const DISASSEMBLY_DURATION_MS = 15_000;
+
+export type DisassemblyRecipe = {
+  id: string;
+  station: "workbench";
+  weaponId: string;
+  parts: readonly string[];
+  returnCount: number;
+  durationMs?: number;
+};
+
+export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
+  {
+    id: "disassemble_pistol",
+    station: "workbench",
+    weaponId: "weapon_pistol",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: ["pistol_frame", "pistol_slide", "small_spring", "pistol_trigger"],
+  },
+  {
+    id: "disassemble_revolver",
+    station: "workbench",
+    weaponId: "weapon_revolver",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: [
+      "revolver_frame",
+      "revolver_cylinder",
+      "revolver_barrel",
+      "small_spring",
+      "revolver_trigger",
+    ],
+  },
+  {
+    id: "disassemble_shotgun",
+    station: "workbench",
+    weaponId: "weapon_shotgun",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: [
+      "shotgun_receiver",
+      "shotgun_barrel",
+      "large_spring",
+      "shotgun_stock",
+      "shotgun_trigger",
+    ],
+  },
+  {
+    id: "disassemble_hunting_rifle",
+    station: "workbench",
+    weaponId: "weapon_hunting_rifle",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: [
+      "rifle_receiver",
+      "rifle_barrel",
+      "rifle_stock",
+      "scope",
+      "large_spring",
+      "rifle_trigger",
+    ],
+  },
+  {
+    id: "disassemble_ak",
+    station: "workbench",
+    weaponId: "weapon_assault_rifle",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: [
+      "ak_receiver",
+      "ak_barrel",
+      "ak_stock",
+      "large_spring",
+      "rifle_trigger",
+    ],
+  },
+  {
+    id: "disassemble_m4",
+    station: "workbench",
+    weaponId: "weapon_m4a1",
+    returnCount: DISASSEMBLY_RETURN_COUNT,
+    durationMs: DISASSEMBLY_DURATION_MS,
+    parts: [
+      "m4_receiver",
+      "m4_barrel",
+      "m4_stock",
+      "large_spring",
+      "rifle_trigger",
+    ],
+  },
+];
+
+export function getDisassemblyRecipe(
+  recipeId: string,
+): DisassemblyRecipe | undefined {
+  return DISASSEMBLY_RECIPES.find((r) => r.id === recipeId);
+}
+
+/** How many more of itemId fit in stacks that already hold it. */
+function stackedRoom(inventory: Inventory, itemId: string): number {
+  const max = maxStackForItem(itemId);
+  let room = 0;
+  for (const slot of inventory) {
+    if (slot?.id === itemId) room += Math.max(0, max - slot.quantity);
+  }
+  return room;
+}
+
+function emptySlotsFor(inventory: Inventory, itemId: string): number {
+  let n = 0;
+  for (let i = 0; i < inventory.length; i++) {
+    if (!inventory[i] && itemFitsInSlot(itemId, i)) n++;
+  }
+  return n;
+}
+
+/**
+ * True when the player has the gun and any 3 of its parts will fit
+ * after the gun is removed.
+ */
+export function canDisassemble(
+  inventory: Inventory,
+  recipe: DisassemblyRecipe,
+): boolean {
+  if (countItemInInventory(inventory, recipe.weaponId) < 1) return false;
+  const next = removeItemFromInventory(inventory, recipe.weaponId, 1);
+  const needsSlot = recipe.parts.filter((id) => stackedRoom(next, id) < 1);
+  const slotsNeeded = Math.min(recipe.returnCount, needsSlot.length);
+  if (slotsNeeded === 0) return true;
+  return emptySlotsFor(next, needsSlot[0]!) >= slotsNeeded;
+}
+
+function pickDistinctParts(
+  parts: readonly string[],
+  count: number,
+  rng: () => number,
+): string[] {
+  const pool = parts.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const swap = pool[i]!;
+    pool[i] = pool[j]!;
+    pool[j] = swap;
+  }
+  return pool.slice(0, Math.min(count, pool.length));
+}
+
+export type DisassemblyResult = {
+  inventory: Inventory;
+  salvaged: { id: string; quantity: number }[];
+  ruined: string[];
+};
+
+/**
+ * Destroy one gun and add a random subset of its parts.
+ * Returns null when the gun is missing or the parts will not fit.
+ */
+export function applyDisassembly(
+  inventory: Inventory,
+  recipe: DisassemblyRecipe,
+  rng: () => number = Math.random,
+): DisassemblyResult | null {
+  if (!canDisassemble(inventory, recipe)) return null;
+  const picked = pickDistinctParts(recipe.parts, recipe.returnCount, rng);
+  let next = removeItemFromInventory(inventory, recipe.weaponId, 1);
+  const salvaged: { id: string; quantity: number }[] = [];
+  for (const id of picked) {
+    if (!canAddToInventory(next, id, 1)) return null;
+    next = addToInventory(next, id, 1);
+    salvaged.push({ id, quantity: 1 });
+  }
+  const kept = new Set(picked);
+  return {
+    inventory: next,
+    salvaged,
+    ruined: recipe.parts.filter((id) => !kept.has(id)),
+  };
 }

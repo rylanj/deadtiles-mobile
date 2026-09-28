@@ -84,11 +84,19 @@ import {
   advanceWalkAnimFrame,
   dieAnimFrameIndex,
   isZombieCrawler,
+  zombieRenderHeight,
   zombieBaseSpeed,
   ZOMBIE_WALK_FRAMES,
   ZOMBIE_TILES_PER_WALK_FRAME,
   zombieDieFrameCount,
   zombieDieAnimMs,
+  COYWOLF_DIE_ANIM_MS,
+  COYWOLF_DIE_FRAMES,
+  COYWOLF_RENDER_HEIGHT,
+  COYWOLF_RUN_FRAMES,
+  COYWOLF_TILES_PER_RUN_FRAME,
+  COYWOLF_TILES_PER_WALK_FRAME,
+  COYWOLF_WALK_FRAMES,
   worldCenter,
   GUARD_WEAPON_INDEX,
   GUARD_NPC_TRADER_MAN,
@@ -113,11 +121,13 @@ import {
   playerAdjacentToSearchable,
   furnitureIsSearchable,
   furnitureIsCraftStation,
+  furnitureIsFurnace,
   searchableOccupiesTile,
   OVERWORLD_BAG_BUILDING,
   isGroundBackpackType,
   CRAFT_DURATION_MS,
   getCraftRecipe,
+  getDisassemblyRecipe,
   TILE_HEIGHT,
   FURNITURE_RENDER_HEIGHT_PX,
   settlementsInTileRegion,
@@ -214,6 +224,7 @@ import {
   type NightLight,
 } from "../world/DayNightLighting";
 import { WeatherFx } from "../world/WeatherFx";
+import { ChimneySmoke } from "../world/ChimneySmoke";
 import {
   BuildingOcclusionMask,
   OCCLUSION_OVERLAY_DEPTH,
@@ -261,18 +272,21 @@ import { getStateCallbacks } from "colyseus.js";
 import {
   applyIdleFrame,
   entityFeetY,
+  ZOMBIE_CRAWL_TILE_DROP_PX,
+  COYWOLF_TILE_DROP_PX,
   guardIdleAKKey,
   playerManIdleKey,
   resetTreeFallFrameRequests,
   updateEntityVisual,
   zombieIdleKey,
+  coywolfIdleKey,
 } from "../sprites/EntitySprites";
 import { DamageOverlay } from "../ui/DamageOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
 import { JournalUI } from "../ui/JournalUI";
 import { ContainerLootUI } from "../ui/ContainerLootUI";
 import { CraftUI } from "../ui/CraftUI";
-import { FireplaceUI } from "../ui/FireplaceUI";
+import { FireplaceUI, type FireplaceUIState } from "../ui/FireplaceUI";
 import { PrefabDepositUI } from "../ui/PrefabDepositUI";
 import { DeconstructUI } from "../ui/DeconstructUI";
 import {
@@ -337,6 +351,7 @@ import {
   syncEntityAssetPacks,
   traderGuardPackReady,
   traderManPackReady,
+  coywolfPackReady,
 } from "../sprites/EntityAssetLoader";
 import {
   hideWorldEntering,
@@ -563,7 +578,7 @@ const MISS_DUST_BY_WEAPON: Record<number, MissDustConfig> = {
   },
 };
 
-type CombatEntityKind = "player" | "zombie" | "guard";
+type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf";
 
 /** Un-built prefab tile — mirrors a server StructureRecord with status "prefab". */
 type PrefabTile = {
@@ -592,6 +607,7 @@ export class WorldScene extends Phaser.Scene {
   private playerSprites = new Map<string, EntitySprite>();
   private corpseSprites = new Map<string, EntitySprite>();
   private zombieSprites = new Map<string, EntitySprite>();
+  private coywolfSprites = new Map<string, EntitySprite>();
   private guardSprites = new Map<string, EntitySprite>();
   /** Local /godmode — sprite AABB + id overlay. */
   private godModeDebug = false;
@@ -786,6 +802,7 @@ export class WorldScene extends Phaser.Scene {
   private interiorView?: InteriorView;
   private dayNightLighting?: DayNightLighting;
   private weatherFx?: WeatherFx;
+  private chimneySmoke?: ChimneySmoke;
   private worldBounds: WorldBounds = { ...INITIAL_WORLD_BOUNDS };
   private lastBoundsKey = "";
   private lastInteriorKey = "";
@@ -927,7 +944,7 @@ export class WorldScene extends Phaser.Scene {
   private hoveredSearchableId: string | null = null;
   /** Dead unlooted entity under the cursor (zombie, guard, or player corpse). */
   private hoveredLootableId: string | null = null;
-  private hoveredLootableKind: "zombie" | "guard" | "player" | null = null;
+  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | null = null;
   private searchProgressEl?: HTMLElement;
   private searchProgressLabel?: HTMLElement;
   private searchProgressFill?: HTMLElement;
@@ -967,7 +984,7 @@ export class WorldScene extends Phaser.Scene {
   private interactSprint = false;
   /** Double-click lootable — approach then auto-start search (no E required). */
   private lootTargetId: string | null = null;
-  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | null = null;
+  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | null = null;
   private lootSprint = false;
   private lastPursuitMoveSentAt = 0;
   /** Double-click sprint detection (time-only — tiles shift under cursor while moving). */
@@ -1216,6 +1233,19 @@ export class WorldScene extends Phaser.Scene {
           buildingY,
         });
       }
+    }
+    for (const s of this.searchablesCache) {
+      if (!furnitureIsFurnace(s.objectType)) continue;
+      if (!fireplaceIsActive(s.activeUntil, now)) continue;
+      const { w, h } = searchableFootprint(s);
+      sources.push({
+        id: `fn:${s.id}`,
+        x: s.x + w / 2,
+        y: s.y + h / 2,
+        inInterior: true,
+        buildingX: s.buildingX,
+        buildingY: s.buildingY,
+      });
     }
     AudioManager.get().syncFireplaces(sources);
   }
@@ -1599,7 +1629,26 @@ export class WorldScene extends Phaser.Scene {
   private chatBarEl: HTMLElement | null = null;
   private chatInputEl: HTMLInputElement | null = null;
   private chatOpen = false;
-  private chatBubbles = new Map<string, { text: Phaser.GameObjects.Text; expiresAt: number }>();
+  private chatBubbles = new Map<
+    string,
+    {
+      root: Phaser.GameObjects.Container;
+      bg: Phaser.GameObjects.Graphics;
+      label: Phaser.GameObjects.Text;
+      iconEl: HTMLElement | null;
+      iconLocalX: number;
+      iconLocalY: number;
+      blockHeight: number;
+      expiresAt: number;
+    }
+  >();
+  private static readonly RADIO_BUBBLE_PREFIX = "[Radio] ";
+  /**
+   * Popup icon size (`.loot-item-icon-wrap`) at full zoom-in.
+   * The bubble reserves this in world pixels. The glyph itself is an HTML
+   * image, same as the popup, so it stays sharp and scales with the text.
+   */
+  private static readonly RADIO_BUBBLE_ICON_SCREEN_PX = 28;
   private static readonly CHAT_BUBBLE_MS = 6000;
   private static readonly CHAT_BUBBLE_FADE_MS = 800;
   /** True while we are intentionally leaving (shutdown) — skip onLeave → menu bounce. */
@@ -1620,6 +1669,12 @@ export class WorldScene extends Phaser.Scene {
   }
 
   async create() {
+    this.events.off(
+      Phaser.Scenes.Events.RENDER,
+      this.placeChatBubbleIcons,
+      this,
+    );
+    this.events.on(Phaser.Scenes.Events.RENDER, this.placeChatBubbleIcons, this);
     const joinGen = ++this.worldJoinGeneration;
     this.intentionalLeave = false;
     this.worldRevealReady = false;
@@ -1666,6 +1721,7 @@ export class WorldScene extends Phaser.Scene {
     this.tileManager = drawProceduralWorld(this, this.worldBounds);
     this.dayNightLighting = new DayNightLighting(this);
     this.weatherFx = new WeatherFx(this);
+    this.chimneySmoke = new ChimneySmoke(this);
     setCuboidStatsProvider(() => this.tileManager?.getLiveCuboidStats() ?? "");
     this.interiorView = new InteriorView(this);
     this.interiorView.setPlaceableDepthResolver((tx, ty) =>
@@ -1713,6 +1769,7 @@ export class WorldScene extends Phaser.Scene {
       onAddWood: () => this.sendFireplaceAddWood(),
       onLight: () => this.sendFireplaceLight(),
       onExtinguish: () => this.sendFireplaceExtinguish(),
+      onCookSlot: (slot, itemId) => this.sendFireplaceCook(slot, itemId),
     });
     this.prefabDepositUI = new PrefabDepositUI({
       onClose: () => this.closePrefabUI(),
@@ -2148,7 +2205,15 @@ export class WorldScene extends Phaser.Scene {
           }
           this.lastInventoryRenderKey = "";
           this.lastHotbarRenderKey = "";
-          if (msg.payload.crafted) {
+          if (msg.payload.salvaged && msg.payload.salvaged.length > 0) {
+            const ruined = (msg.payload.ruined ?? [])
+              .map((part) => part.name)
+              .filter((name) => name.length > 0);
+            const header = ruined.length
+              ? `You salvaged 3 parts. Ruined: ${ruined.join(", ")}.`
+              : "You salvaged:";
+            this.lootPopup?.show(msg.payload.salvaged, { header });
+          } else if (msg.payload.crafted) {
             this.lootPopup?.show([msg.payload.crafted], { header: "You made:" });
           }
         } else if (msg.type === "tradeOpen") {
@@ -2558,6 +2623,10 @@ export class WorldScene extends Phaser.Scene {
     this.updateChatBubbles();
     this.updateEntityActionLabels();
     this.updateDayNightLighting(frameDelta);
+    this.chimneySmoke?.update(
+      frameDelta,
+      !!this.room?.state?.players?.get(this.sessionId)?.inInterior,
+    );
     this.syncGunshotListener();
     this.syncFireplaceAudio();
     this.syncOutdoorAmbience(frameDelta);
@@ -2576,6 +2645,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   shutdown() {
+    this.events.off(
+      Phaser.Scenes.Events.RENDER,
+      this.placeChatBubbleIcons,
+      this,
+    );
     this.worldJoinGeneration++;
     this.intentionalLeave = true;
     this.worldRevealReady = false;
@@ -2658,6 +2732,8 @@ export class WorldScene extends Phaser.Scene {
     this.dayNightLighting = undefined;
     this.weatherFx?.destroy();
     this.weatherFx = undefined;
+    this.chimneySmoke?.destroy();
+    this.chimneySmoke = undefined;
     this.tileManager = undefined;
     setCuboidStatsProvider(null);
     resetBuildingTextureCache(this);
@@ -2751,7 +2827,7 @@ export class WorldScene extends Phaser.Scene {
     this.mobileReloadAmmoIconId = "";
     document.body.classList.remove("build-mode-open");
     this.closeChatBar();
-    for (const bubble of this.chatBubbles.values()) bubble.text.destroy();
+    for (const bubble of this.chatBubbles.values()) this.destroyChatBubble(bubble);
     this.chatBubbles.clear();
   }
 
@@ -2761,6 +2837,7 @@ export class WorldScene extends Phaser.Scene {
       this.playerSprites,
       this.corpseSprites,
       this.zombieSprites,
+      this.coywolfSprites,
       this.guardSprites,
     ]) {
       for (const sprite of map.values()) {
@@ -3253,10 +3330,32 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private showChatBubble(senderId: string, text: string, action = false) {
-    // Destroy any existing bubble for this sender
+    const radio = text.startsWith(WorldScene.RADIO_BUBBLE_PREFIX);
+    const body = radio ? text.slice(WorldScene.RADIO_BUBBLE_PREFIX.length) : text;
+    if (!this.sys?.isActive()) return;
+    const iconSrc = action
+      ? undefined
+      : getItemIconPath(radio ? "handheld_radio" : "chat");
+    this.mountChatBubble(senderId, body, action, iconSrc ?? null);
+  }
+
+  private destroyChatBubble(bubble: {
+    root: Phaser.GameObjects.Container;
+    iconEl: HTMLElement | null;
+  }) {
+    bubble.iconEl?.remove();
+    bubble.root.destroy();
+  }
+
+  private mountChatBubble(
+    senderId: string,
+    text: string,
+    action: boolean,
+    iconSrc: string | null,
+  ) {
     const existing = this.chatBubbles.get(senderId);
     if (existing) {
-      existing.text.destroy();
+      this.destroyChatBubble(existing);
       this.chatBubbles.delete(senderId);
     }
 
@@ -3265,20 +3364,141 @@ export class WorldScene extends Phaser.Scene {
       fontFamily: "system-ui, sans-serif",
       fontStyle: action ? "italic" : "normal",
       color: action ? "#b7bdb4" : "#e8f8e8",
-      backgroundColor: "rgba(10,14,10,0.78)",
-      padding: { x: 6, y: 3 },
       shadow: { color: "#000", blur: 4, fill: true },
       wordWrap: { width: 220, useAdvancedWrap: true },
-      align: "center",
+      align: iconSrc ? "left" : "center",
       maxLines: 3,
     });
-    bubbleText.setOrigin(0.5, 1);
-    bubbleText.setDepth(9_999_999);
+    bubbleText.setOrigin(0, 0.5);
 
-    this.chatBubbles.set(senderId, {
-      text: bubbleText,
+    const bg = this.add.graphics();
+    const root = this.add.container(0, 0, [bg, bubbleText]);
+    root.setDepth(9_999_999);
+
+    let iconEl: HTMLElement | null = null;
+    if (iconSrc) {
+      const wrap = document.createElement("span");
+      wrap.className = "chat-bubble-icon loot-item-icon-wrap";
+      const img = document.createElement("img");
+      img.className = "loot-item-icon";
+      img.src = iconSrc;
+      img.alt = "";
+      img.draggable = false;
+      wrap.appendChild(img);
+      wrap.style.visibility = "hidden";
+      document.body.appendChild(wrap);
+      iconEl = wrap;
+    }
+
+    const bubble = {
+      root,
+      bg,
+      label: bubbleText,
+      iconEl,
+      iconLocalX: 0,
+      iconLocalY: 0,
+      blockHeight: 0,
       expiresAt: Date.now() + WorldScene.CHAT_BUBBLE_MS,
-    });
+    };
+    this.layoutChatBubble(bubble);
+    this.chatBubbles.set(senderId, bubble);
+  }
+
+  /**
+   * Icon slot matches the popup at max zoom. An HTML image fills that slot
+   * so the glyph stays as sharp as the frequency popup and scales with the text.
+   */
+  private layoutChatBubble(bubble: {
+    bg: Phaser.GameObjects.Graphics;
+    label: Phaser.GameObjects.Text;
+    iconEl: HTMLElement | null;
+    iconLocalX: number;
+    iconLocalY: number;
+    blockHeight: number;
+  }) {
+    const iconSize = bubble.iconEl
+      ? WorldScene.RADIO_BUBBLE_ICON_SCREEN_PX / CAMERA_ZOOM_MAX
+      : 0;
+    const gap = bubble.iconEl ? 6 : 0;
+    const padX = 6;
+    const padY = 3;
+    const contentW = bubble.label.width + (bubble.iconEl ? iconSize + gap : 0);
+    const contentH = Math.max(bubble.label.height, iconSize);
+    const totalW = contentW + padX * 2;
+    const totalH = contentH + padY * 2;
+    const left = -totalW / 2;
+    const top = -totalH;
+    const midY = top + totalH / 2;
+
+    bubble.bg.clear();
+    bubble.bg.fillStyle(0x0a0e0a, 0.78);
+    bubble.bg.fillRoundedRect(left, top, totalW, totalH, 3);
+    bubble.label.setPosition(
+      left + padX + (bubble.iconEl ? iconSize + gap : 0),
+      midY,
+    );
+    if (bubble.iconEl) {
+      bubble.iconLocalX = left + padX + iconSize / 2;
+      bubble.iconLocalY = midY;
+    }
+    bubble.blockHeight = totalH;
+  }
+
+  /** After the camera updates, pin each HTML glyph to the bubble slot. */
+  private placeChatBubbleIcons() {
+    for (const bubble of this.chatBubbles.values()) {
+      this.placeChatBubbleIcon(bubble, bubble.root.alpha);
+    }
+  }
+
+  /** Keep the HTML chat or radio glyph on the bubble slot as the camera moves. */
+  private placeChatBubbleIcon(
+    bubble: {
+      root: Phaser.GameObjects.Container;
+      iconEl: HTMLElement | null;
+      iconLocalX: number;
+      iconLocalY: number;
+    },
+    alpha: number,
+  ) {
+    const icon = bubble.iconEl;
+    if (!icon) return;
+    if (!bubble.root.visible) {
+      icon.style.visibility = "hidden";
+      return;
+    }
+    const cam = this.cameras.main;
+    const canvas = this.game.canvas;
+    const rect = canvas.getBoundingClientRect();
+    const zoom = cam.zoom || 1;
+    const scaleX = canvas.width > 0 ? rect.width / canvas.width : 1;
+    const scaleY = canvas.height > 0 ? rect.height / canvas.height : 1;
+    const world = WorldScene.RADIO_BUBBLE_ICON_SCREEN_PX / CAMERA_ZOOM_MAX;
+    const width = world * zoom * scaleX;
+    const height = world * zoom * scaleY;
+    const worldX = bubble.root.x + bubble.iconLocalX;
+    const worldY = bubble.root.y + bubble.iconLocalY;
+    // Match Camera.preRender: scroll is the top-left, zoom is about the origin.
+    let scrollX = cam.scrollX;
+    let scrollY = cam.scrollY;
+    if (cam.roundPixels) {
+      scrollX = Math.floor(scrollX);
+      scrollY = Math.floor(scrollY);
+    }
+    const originX = cam.width * cam.originX;
+    const originY = cam.height * cam.originY;
+    const localX =
+      zoom * (worldX - scrollX - originX) + Math.floor(cam.x + originX + 0.5);
+    const localY =
+      zoom * (worldY - scrollY - originY) + Math.floor(cam.y + originY + 0.5);
+    const screenX = rect.left + localX * scaleX;
+    const screenY = rect.top + localY * scaleY;
+    icon.style.visibility = "visible";
+    icon.style.width = `${width}px`;
+    icon.style.height = `${height}px`;
+    icon.style.left = `${screenX - width / 2}px`;
+    icon.style.top = `${screenY - height / 2}px`;
+    icon.style.opacity = String(alpha);
   }
 
   private updateChatBubbles() {
@@ -3286,7 +3506,7 @@ export class WorldScene extends Phaser.Scene {
     for (const [id, bubble] of this.chatBubbles) {
       const remaining = bubble.expiresAt - now;
       if (remaining <= 0) {
-        bubble.text.destroy();
+        this.destroyChatBubble(bubble);
         this.chatBubbles.delete(id);
         continue;
       }
@@ -3295,17 +3515,17 @@ export class WorldScene extends Phaser.Scene {
       const alpha = remaining < WorldScene.CHAT_BUBBLE_FADE_MS
         ? remaining / WorldScene.CHAT_BUBBLE_FADE_MS
         : 1;
-      bubble.text.setAlpha(alpha);
+      bubble.root.setAlpha(alpha);
 
       // Position above the player/zombie sprite
       const sprite = this.getEntitySprite(id);
       if (!sprite || !sprite.visible) {
-        bubble.text.setVisible(false);
+        bubble.root.setVisible(false);
         continue;
       }
-      bubble.text.setVisible(true);
+      bubble.root.setVisible(true);
       // sprite.y is the feet position; head is ENTITY_RENDER_HEIGHT px above
-      bubble.text.setPosition(sprite.x, sprite.y - ENTITY_RENDER_HEIGHT - 8);
+      bubble.root.setPosition(sprite.x, sprite.y - ENTITY_RENDER_HEIGHT - 8);
     }
   }
 
@@ -3322,8 +3542,8 @@ export class WorldScene extends Phaser.Scene {
 
         const chat = this.chatBubbles.get(id);
         const stackBelowPx =
-          chat && chat.text.visible && chat.text.alpha > 0
-            ? chat.text.height + 4
+          chat && chat.root.visible && chat.root.alpha > 0
+            ? chat.blockHeight + 4
             : 0;
 
         const data = sprite.getData("server") as { inInterior?: boolean } | undefined;
@@ -5689,7 +5909,11 @@ export class WorldScene extends Phaser.Scene {
     buildingY: number;
     fuelWood: number;
     activeUntil: number;
+    objectType?: string;
   }) {
+    if (msg.inInterior && msg.objectType === "mantel") {
+      this.chimneySmoke?.setMantel(msg.buildingX, msg.buildingY, msg.activeUntil);
+    }
     if (msg.inInterior) {
       const key = buildingKey(msg.buildingX, msg.buildingY);
       const list = this.structureFireplacesByBuilding.get(key);
@@ -6693,6 +6917,12 @@ export class WorldScene extends Phaser.Scene {
   ) {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me || this.isOverlayOpen() || this.chatOpen || this.structureBuildMode) {
+      return;
+    }
+
+    const hoveredStation = this.nearestSearchable();
+    if (hoveredStation && furnitureIsFurnace(hoveredStation.objectType)) {
+      this.game.canvas.style.cursor = "pointer";
       return;
     }
 
@@ -8092,6 +8322,14 @@ export class WorldScene extends Phaser.Scene {
             | undefined,
         );
       }
+      for (const [id, sprite] of this.coywolfSprites) {
+        considerSprite(
+          id,
+          sprite as unknown as Phaser.GameObjects.Sprite,
+          "coywolf",
+          sprite?.getData("server") as { isDead?: boolean; alive?: boolean } | undefined,
+        );
+      }
     } else if (!equippedWeapon) {
       // Hands empty — talkable NPCs (Traders / MilitiaGuard / Red Order).
       for (const [id, sprite] of this.guardSprites) {
@@ -8173,12 +8411,14 @@ export class WorldScene extends Phaser.Scene {
   private spriteMapForKind(kind: CombatEntityKind) {
     if (kind === "player") return this.playerSprites;
     if (kind === "zombie") return this.zombieSprites;
+    if (kind === "coywolf") return this.coywolfSprites;
     return this.guardSprites;
   }
 
   private resolveEntityKind(id: string): CombatEntityKind | null {
     if (this.playerSprites.has(id)) return "player";
     if (this.zombieSprites.has(id)) return "zombie";
+    if (this.coywolfSprites.has(id)) return "coywolf";
     if (this.guardSprites.has(id)) return "guard";
     return null;
   }
@@ -8187,6 +8427,7 @@ export class WorldScene extends Phaser.Scene {
     return (
       this.playerSprites.get(id) ??
       this.zombieSprites.get(id) ??
+      this.coywolfSprites.get(id) ??
       this.guardSprites.get(id)
     );
   }
@@ -8372,7 +8613,7 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || !this.room) return "miss";
 
     let targetId: string | null = null;
-    let targetKind: "searchable" | "zombie" | "guard" | "player" | null = null;
+    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | null = null;
 
     const searchable = this.nearestSearchable();
     if (searchable) {
@@ -8481,8 +8722,9 @@ export class WorldScene extends Phaser.Scene {
         return false;
       }
       const craftStation = furnitureIsCraftStation(target.objectType);
-      if (craftStation) {
-        // Craft stations stay usable even if previously flagged searched/depleted.
+      const furnace = furnitureIsFurnace(target.objectType);
+      if (craftStation || furnace) {
+        // Stations stay usable even if previously flagged searched/depleted.
       } else if (target.depleted || !furnitureIsSearchable(target.objectType)) {
         this.clearLootTarget();
         return false;
@@ -8514,6 +8756,14 @@ export class WorldScene extends Phaser.Scene {
       }
       this.stopPlayerMovement();
       this.clearLootTarget();
+      if (furnace) {
+        const message: ClientMessage = {
+          type: "fireplaceOpen",
+          payload: { x: target.x, y: target.y },
+        };
+        this.room.send("action", message);
+        return true;
+      }
       if (craftStation) {
         const message: ClientMessage = {
           type: "craftOpen",
@@ -8563,6 +8813,28 @@ export class WorldScene extends Phaser.Scene {
       const message: ClientMessage = {
         type: "lootZombieStart",
         payload: { zombieId },
+      };
+      this.beginOptimisticSearch();
+      this.room.send("action", message);
+      return true;
+    }
+
+    if (this.lootTargetKind === "coywolf") {
+      const entitySprite = this.coywolfSprites.get(this.lootTargetId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined;
+      if (!entityData?.isDead || entityData.looted || me.inInterior) {
+        this.clearLootTarget();
+        return false;
+      }
+      if (!playerNearEntity(me.x, me.y, entityData.x, entityData.y)) return false;
+      this.stopPlayerMovement();
+      const coywolfId = this.lootTargetId;
+      this.clearLootTarget();
+      const message: ClientMessage = {
+        type: "lootCoyoteStart",
+        payload: { coywolfId },
       };
       this.beginOptimisticSearch();
       this.room.send("action", message);
@@ -8654,12 +8926,16 @@ export class WorldScene extends Phaser.Scene {
       buildingY?: number;
     },
     targetId: string,
-    targetKind: "searchable" | "zombie" | "guard" | "player",
+    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf",
   ): { x: number; y: number } | null {
     if (targetKind === "searchable") {
-      const target = this.searchablesCache.find(
-        (item) => item.id === targetId && !item.depleted,
-      );
+      const target = this.searchablesCache.find((item) => {
+        if (item.id !== targetId) return false;
+        // Furnaces are stations, not loot piles, so a depleted flag must not
+        // cancel the walk-up that opens the fuel dialog.
+        if (furnitureIsFurnace(item.objectType)) return true;
+        return !item.depleted;
+      });
       if (!target) return null;
 
       // Overworld floor bags — walk onto the pile (always walkable outdoors).
@@ -8717,9 +8993,11 @@ export class WorldScene extends Phaser.Scene {
     const sprite =
       targetKind === "zombie"
         ? this.zombieSprites.get(targetId)
-        : targetKind === "guard"
-          ? this.guardSprites.get(targetId)
-          : this.corpseSprites.get(targetId);
+        : targetKind === "coywolf"
+          ? this.coywolfSprites.get(targetId)
+          : targetKind === "guard"
+            ? this.guardSprites.get(targetId)
+            : this.corpseSprites.get(targetId);
     const data = sprite?.getData("server") as
       | { x: number; y: number }
       | undefined;
@@ -8983,12 +9261,19 @@ export class WorldScene extends Phaser.Scene {
     const data = this.getEntityData(targetId, kind);
     if (!data || data.isDead || data.alive === false) return false;
 
+    const zombie = kind === "zombie" ? this.room?.state?.zombies?.get(targetId) : undefined;
     const target: RaycastTarget = {
       id: targetId,
       x: data.x,
       y: data.y,
       health: data.health ?? 1,
       isDead: false,
+      renderHeight:
+        kind === "coywolf"
+          ? COYWOLF_RENDER_HEIGHT
+          : zombie
+            ? zombieRenderHeight(zombie.skin, isZombieCrawler(targetId, zombie.skin))
+            : undefined,
     };
 
     return shotHitsTarget({
@@ -9728,7 +10013,12 @@ export class WorldScene extends Phaser.Scene {
     return (
       this.searchablesCache.find((item) => {
         if (item.id !== this.hoveredSearchableId) return false;
-        if (furnitureIsCraftStation(item.objectType)) return true;
+        if (
+          furnitureIsCraftStation(item.objectType) ||
+          furnitureIsFurnace(item.objectType)
+        ) {
+          return true;
+        }
         return !item.depleted;
       }) ?? null
     );
@@ -9755,11 +10045,12 @@ export class WorldScene extends Phaser.Scene {
     const cursorTX = Math.floor(cart.x);
     const cursorTY = Math.floor(cart.y);
 
-    const hovered =
+    let hovered =
       this.searchablesCache.find((item) => {
         const craftStation = furnitureIsCraftStation(item.objectType);
-        if (craftStation) {
-          // Craft stations stay interactable even if previously marked searched.
+        const furnace = furnitureIsFurnace(item.objectType);
+        if (craftStation || furnace) {
+          // Stations stay interactable even if previously marked searched.
         } else if (item.depleted || !furnitureIsSearchable(item.objectType)) {
           return false;
         }
@@ -9775,6 +10066,24 @@ export class WorldScene extends Phaser.Scene {
         }
         return searchableOccupiesTile(item, cursorTX, cursorTY);
       }) ?? null;
+
+    // Furnace art stands against the wall and rises well above its floor tile.
+    // A click on the sprite often lands on the wall behind it, so also accept
+    // an opaque hit on the furnace itself when nothing is drawn in front.
+    if (me.inInterior) {
+      const spriteId = this.interiorView?.pickFurnitureIdAtWorld(world.x, world.y);
+      if (spriteId) {
+        const spriteItem = this.searchablesCache.find((item) => item.id === spriteId);
+        if (
+          spriteItem &&
+          furnitureIsFurnace(spriteItem.objectType) &&
+          spriteItem.buildingX === me.buildingX &&
+          spriteItem.buildingY === me.buildingY
+        ) {
+          hovered = spriteItem;
+        }
+      }
+    }
 
     const newId = hovered?.id ?? null;
     if (newId !== this.hoveredSearchableId) {
@@ -9819,7 +10128,7 @@ export class WorldScene extends Phaser.Scene {
     const cursorTY = Math.floor(cart.y);
 
     let bestId: string | null = null;
-    let bestKind: "zombie" | "guard" | "player" | null = null;
+    let bestKind: "zombie" | "guard" | "player" | "coywolf" | null = null;
     let bestTX = 0;
     let bestTY = 0;
     let bestEntityX = 0;
@@ -9857,6 +10166,25 @@ export class WorldScene extends Phaser.Scene {
       bestEntityX = data.x;
       bestEntityY = data.y;
       break;
+    }
+
+    if (!bestId && !me.inInterior) {
+      for (const [id, sprite] of this.coywolfSprites) {
+        const data = sprite?.getData("server") as
+          | { x: number; y: number; isDead?: boolean; looted?: boolean }
+          | undefined;
+        if (!data?.isDead || data.looted) continue;
+        const wTX = Math.floor(data.x);
+        const wTY = Math.floor(data.y);
+        if (cursorTX !== wTX || cursorTY !== wTY) continue;
+        bestId = id;
+        bestKind = "coywolf";
+        bestTX = wTX;
+        bestTY = wTY;
+        bestEntityX = data.x;
+        bestEntityY = data.y;
+        break;
+      }
     }
 
     if (!bestId) {
@@ -9981,7 +10309,14 @@ export class WorldScene extends Phaser.Scene {
     if (target && playerAdjacentToSearchable(me.x, me.y, target)) {
       const overworldBag = target.buildingX === OVERWORLD_BAG_BUILDING;
       if (overworldBag ? !me.inInterior : me.inInterior) {
-        if (furnitureIsCraftStation(target.objectType)) {
+        if (furnitureIsFurnace(target.objectType)) {
+          this.stopPlayerMovement();
+          const message: ClientMessage = {
+            type: "fireplaceOpen",
+            payload: { x: target.x, y: target.y },
+          };
+          this.room.send("action", message);
+        } else if (furnitureIsCraftStation(target.objectType)) {
           const message: ClientMessage = {
             type: "craftOpen",
             payload: { workbenchId: target.id },
@@ -10054,6 +10389,30 @@ export class WorldScene extends Phaser.Scene {
         const message: ClientMessage = {
           type: "lootZombieStart",
           payload: { zombieId: this.hoveredLootableId },
+        };
+        this.beginOptimisticSearch();
+        this.room.send("action", message);
+        started = true;
+      }
+    }
+
+    if (
+      !started &&
+      this.hoveredLootableId &&
+      this.hoveredLootableKind === "coywolf"
+    ) {
+      const entitySprite = this.coywolfSprites.get(this.hoveredLootableId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number }
+        | undefined;
+      if (
+        entityData &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, entityData.x, entityData.y)
+      ) {
+        const message: ClientMessage = {
+          type: "lootCoyoteStart",
+          payload: { coywolfId: this.hoveredLootableId },
         };
         this.beginOptimisticSearch();
         this.room.send("action", message);
@@ -11018,6 +11377,7 @@ export class WorldScene extends Phaser.Scene {
         buildingY?: number;
         fuelWood?: number;
         activeUntil?: number;
+        objectType?: string;
       }) => {
         if (msg.x == null || msg.y == null) return;
         this.applyFireplaceStateChanged({
@@ -11028,7 +11388,30 @@ export class WorldScene extends Phaser.Scene {
           buildingY: msg.buildingY ?? 0,
           fuelWood: Number(msg.fuelWood ?? 0) || 0,
           activeUntil: Number(msg.activeUntil ?? 0) || 0,
+          objectType: typeof msg.objectType === "string" ? msg.objectType : undefined,
         });
+      },
+    );
+
+    room.onMessage(
+      "chimneySmokeSync",
+      (msg: {
+        fires?: { buildingX?: number; buildingY?: number; activeUntil?: number }[];
+      }) => {
+        const fires: {
+          buildingX: number;
+          buildingY: number;
+          activeUntil: number;
+        }[] = [];
+        for (const fire of msg.fires ?? []) {
+          if (fire.buildingX == null || fire.buildingY == null) continue;
+          fires.push({
+            buildingX: fire.buildingX,
+            buildingY: fire.buildingY,
+            activeUntil: Number(fire.activeUntil ?? 0) || 0,
+          });
+        }
+        this.chimneySmoke?.sync(fires);
       },
     );
 
@@ -11102,6 +11485,10 @@ export class WorldScene extends Phaser.Scene {
       guards: {
         onAdd: (cb: (guard: GuardSchema, id: string) => void) => void;
         onRemove: (cb: (guard: GuardSchema, id: string) => void) => void;
+      };
+      coywolves?: {
+        onAdd: (cb: (wolf: ZombieSchema, id: string) => void) => void;
+        onRemove: (cb: (wolf: ZombieSchema, id: string) => void) => void;
       };
       corpses: {
         onAdd: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
@@ -11295,6 +11682,12 @@ export class WorldScene extends Phaser.Scene {
     });
     state$.guards.onRemove((_g, id) => this.removeEntity(this.guardSprites, id));
 
+    state$.coywolves?.onAdd((wolf, id) => {
+      this.refreshCoywolf(id, wolf);
+      $(wolf).onChange(() => this.refreshCoywolf(id, wolf));
+    });
+    state$.coywolves?.onRemove((_w, id) => this.removeEntity(this.coywolfSprites, id));
+
     if (state$.searchables) {
       state$.searchables.onAdd((item, id) => {
         refreshSearchables();
@@ -11342,7 +11735,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private entityVisible(
-    kind: "player" | "zombie" | "guard" | "corpse",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
     data: {
       x?: number;
       y?: number;
@@ -11416,6 +11809,89 @@ export class WorldScene extends Phaser.Scene {
       targetX: data.targetX,
       targetY: data.targetY,
     };
+  }
+
+  private refreshCoywolf(
+    id: string,
+    data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
+  ) {
+    if (!this.entityVisible("coywolf", data, id)) {
+      const existing = this.coywolfSprites.get(id);
+      if (existing) {
+        existing.setData("server", {
+          ...data,
+          isDead: !!data.isDead,
+          looted: !!data.looted,
+        });
+        this.softHideEntitySprite(existing);
+      }
+      return;
+    }
+
+    const sprite = this.ensureEntity(this.coywolfSprites, id, "coywolf");
+    const prev = sprite.getData("server") as { isDead?: boolean; x?: number; y?: number; anim?: string } | undefined;
+    const next = {
+      x: data.x,
+      y: data.y,
+      facing: data.facing,
+      anim: data.anim,
+      animFrame: data.animFrame,
+      health: data.health,
+      isDead: !!data.isDead,
+      looted: !!data.looted,
+      alive: !data.isDead,
+    };
+    if (!prev && next.isDead) {
+      this.freezeEntityDieAnim(id);
+    } else if (prev && !prev.isDead && next.isDead) {
+      this.startEntityDieAnim(id);
+      sprite.setData("visualKey", "");
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+    }
+    this.applyCoywolfMotion(sprite, prev, next);
+    sprite.setData("server", next);
+    this.updateEntityFromState(sprite, "coywolf", id);
+  }
+
+  private applyCoywolfMotion(
+    sprite: EntitySprite,
+    prev: { x?: number; y?: number; anim?: string; isDead?: boolean } | undefined,
+    next: { x: number; y: number; anim: string; isDead: boolean },
+  ) {
+    const minTickSec = TICK_MS / 1000;
+    const stopped = next.anim === "idle" || next.isDead;
+    if (!prev || prev.x == null || prev.y == null) {
+      sprite.setData("renderX", next.x);
+      sprite.setData("renderY", next.y);
+      sprite.setData("snapX", next.x);
+      sprite.setData("snapY", next.y);
+      sprite.setData("snapAt", performance.now());
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+      return;
+    }
+    if (prev.x !== next.x || prev.y !== next.y) {
+      const now = performance.now();
+      const prevSnapAt = (sprite.getData("snapAt") as number | undefined) ?? now - TICK_MS;
+      const deltaSec = Math.min(
+        Math.max((now - prevSnapAt) / 1000, minTickSec),
+        minTickSec * 4,
+      );
+      sprite.setData("velX", (next.x - prev.x) / deltaSec);
+      sprite.setData("velY", (next.y - prev.y) / deltaSec);
+      sprite.setData("snapX", next.x);
+      sprite.setData("snapY", next.y);
+      sprite.setData("snapAt", now);
+      return;
+    }
+    if (stopped) {
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+      sprite.setData("snapX", next.x);
+      sprite.setData("snapY", next.y);
+      sprite.setData("snapAt", performance.now());
+    }
   }
 
   /** Apply queued zombie schema updates (batched off the network thread). */
@@ -12134,7 +12610,7 @@ export class WorldScene extends Phaser.Scene {
   private ensureEntity(
     map: Map<string, EntitySprite>,
     id: string,
-    kind: "player" | "zombie" | "guard",
+    kind: "player" | "zombie" | "guard" | "coywolf",
   ) {
     let sprite = map.get(id);
     // Stale entries after kick/reconnect: GameObject destroyed, scene unset.
@@ -12143,15 +12619,20 @@ export class WorldScene extends Phaser.Scene {
       sprite = undefined;
     }
     if (!sprite) {
+      const coywolfKey = coywolfIdleKey("S");
       const placeholder =
         kind === "player"
           ? playerManIdleKey("S")
           : kind === "guard"
             ? guardIdleAKKey("S")
-            : zombieIdleKey("S");
+            : kind === "coywolf" && this.textures.exists(coywolfKey)
+              ? coywolfKey
+              : kind === "coywolf"
+                ? "__DEFAULT"
+                : zombieIdleKey("S");
       sprite = this.add.sprite(0, 0, placeholder, 0) as EntitySprite;
       sprite.entityId = id;
-      applyIdleFrame(sprite, placeholder);
+      if (placeholder !== "__DEFAULT") applyIdleFrame(sprite, placeholder);
       // Force the first updateEntityFromState to apply facing/anim/skin.
       sprite.setData("visualKey", "");
       map.set(id, sprite);
@@ -12170,6 +12651,7 @@ export class WorldScene extends Phaser.Scene {
 
   private refreshAllVisuals(delta = 0) {
     this.tickZombieWalkAnims(delta / 1000);
+    this.tickCoywolfWalkAnims(delta / 1000);
     this.syncNearbyEntityAssets();
     this.ensureVisibleEntities();
     // Create any zombies queued by ensure (living flush already ran earlier).
@@ -12212,6 +12694,18 @@ export class WorldScene extends Phaser.Scene {
       this.updateEntityFromState(sprite, "zombie", sprite.entityId);
     }
 
+    for (const sprite of this.coywolfSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; isDead?: boolean }
+        | undefined;
+      if (!data) continue;
+      if (!this.entityVisible("coywolf", data, sprite.entityId)) {
+        this.softHideEntitySprite(sprite);
+        continue;
+      }
+      this.updateEntityFromState(sprite, "coywolf", sprite.entityId);
+    }
+
     for (const sprite of this.guardSprites.values()) {
       const data = sprite.getData("server") as
         | { x?: number; y?: number; alive?: boolean; inInterior?: boolean }
@@ -12233,7 +12727,7 @@ export class WorldScene extends Phaser.Scene {
     this.entityBoundsLabels.clear();
   }
 
-  /** Godmode: stroke sprite bounds + id label (player green, zombie red, NPC cyan). */
+  /** Godmode: stroke sprite bounds + id label (player green, zombie red, NPC cyan, coyote amber). */
   private drawEntitySpriteBoundsDebug() {
     if (!this.godModeDebug) {
       this.clearEntitySpriteBoundsDebug();
@@ -12280,6 +12774,7 @@ export class WorldScene extends Phaser.Scene {
     for (const sprite of this.playerSprites.values()) draw(sprite, 0x22ee88);
     for (const sprite of this.zombieSprites.values()) draw(sprite, 0xff4444);
     for (const sprite of this.guardSprites.values()) draw(sprite, 0x44aaff);
+    for (const sprite of this.coywolfSprites.values()) draw(sprite, 0xffaa33);
 
     for (const [id, label] of this.entityBoundsLabels) {
       if (!seen.has(id)) {
@@ -12365,6 +12860,12 @@ export class WorldScene extends Phaser.Scene {
       }
       this.applyGuardServerData(id, guard);
     });
+
+    state.coywolves?.forEach((wolf, id) => {
+      if (this.coywolfSprites.has(id)) return;
+      if (!this.entityVisible("coywolf", wolf, id)) return;
+      this.refreshCoywolf(id, wolf);
+    });
   }
 
   /** Lazy-load NPC sprite packs for entities near the local player. */
@@ -12425,6 +12926,13 @@ export class WorldScene extends Phaser.Scene {
       zombies,
       guards,
       players,
+      coywolves: (() => {
+        const list: { x: number; y: number }[] = [];
+        this.room.state.coywolves?.forEach((wolf) => {
+          list.push({ x: wolf.x, y: wolf.y });
+        });
+        return list;
+      })(),
     });
   }
 
@@ -12462,8 +12970,43 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  /** Advance coywolf walk frames from rendered displacement, same idea as zombies. */
+  private tickCoywolfWalkAnims(dtSec: number) {
+    if (dtSec <= 0) return;
+    for (const sprite of this.coywolfSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; anim?: string; isDead?: boolean }
+        | undefined;
+      if (!data || data.isDead) continue;
+      const running = data.anim === "run";
+      if (data.anim !== "walk" && !running) continue;
+      if (data.x == null || data.y == null || !this.tileManager?.isTileDrawn(Math.floor(data.x), Math.floor(data.y))) {
+        continue;
+      }
+      const rx = (sprite.getData("renderX") as number | undefined) ?? data.x;
+      const ry = (sprite.getData("renderY") as number | undefined) ?? data.y;
+      const prevRx = (sprite.getData("prevRenderX") as number | undefined) ?? rx;
+      const prevRy = (sprite.getData("prevRenderY") as number | undefined) ?? ry;
+      sprite.setData("prevRenderX", rx);
+      sprite.setData("prevRenderY", ry);
+      const dist = Math.hypot(rx - prevRx, ry - prevRy);
+      if (dist < 0.0005) continue;
+      const localAnimFrame =
+        (sprite.getData("localAnimFrame") as number | undefined) ?? 0;
+      sprite.setData(
+        "localAnimFrame",
+        advanceWalkAnimFrame(
+          localAnimFrame,
+          dist,
+          running ? COYWOLF_TILES_PER_RUN_FRAME : COYWOLF_TILES_PER_WALK_FRAME,
+          running ? COYWOLF_RUN_FRAMES : COYWOLF_WALK_FRAMES,
+        ),
+      );
+    }
+  }
+
   private buildEntityVisualKey(
-    kind: "player" | "zombie" | "guard" | "corpse",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
     data: {
       facing: number;
       anim: string;
@@ -12503,6 +13046,8 @@ export class WorldScene extends Phaser.Scene {
       } else {
         resolvedSkin = String(resolveLoadedGuardSkin(data.skin ?? 1));
       }
+    } else if (kind === "coywolf") {
+      packReady = coywolfPackReady() ? "1" : "0";
     }
 
     return [
@@ -12526,7 +13071,7 @@ export class WorldScene extends Phaser.Scene {
 
   private updateEntityFromState(
     sprite: EntitySprite,
-    kind: "player" | "zombie" | "guard" | "corpse",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
     entityId: string,
   ) {
     let data = sprite.getData("server") as
@@ -12590,7 +13135,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const animFrame =
-      kind === "zombie"
+      kind === "zombie" || kind === "coywolf"
         ? Math.floor(
             (sprite.getData("localAnimFrame") as number | undefined) ??
               data.animFrame ??
@@ -12601,7 +13146,7 @@ export class WorldScene extends Phaser.Scene {
     const isDead =
       kind === "corpse"
         ? true
-        : kind === "zombie"
+        : kind === "zombie" || kind === "coywolf"
           ? this.isZombieDead(data)
           : kind === "guard"
             ? data.alive === false
@@ -12616,6 +13161,13 @@ export class WorldScene extends Phaser.Scene {
               zombieDieFrameCount(data.skin),
               zombieDieAnimMs(data.skin),
             )
+          : kind === "coywolf"
+            ? this.resolveDieFrame(
+                entityId,
+                isDead,
+                COYWOLF_DIE_FRAMES,
+                COYWOLF_DIE_ANIM_MS,
+              )
           : kind === "guard"
             ? this.resolveDieFrame(
                 entityId,
@@ -12705,7 +13257,7 @@ export class WorldScene extends Phaser.Scene {
     sprite.setVisible(true);
 
     const renderPos =
-      kind === "zombie"
+      kind === "zombie" || kind === "coywolf"
         ? this.getZombieRenderPosition(sprite, data.x, data.y)
         : kind === "player"
           ? this.getPlayerRenderPosition(sprite, data.x, data.y)
@@ -12734,7 +13286,9 @@ export class WorldScene extends Phaser.Scene {
     if (entityId === this.sessionId && kind === "player" && !isDead) {
       depth += LOCAL_PLAYER_DEPTH_BIAS;
     }
-    sprite.setPosition(iso.x, entityFeetY(iso.y));
+    const crawlDrop = zombieCrawling && !isDead ? ZOMBIE_CRAWL_TILE_DROP_PX : 0;
+    const coyoteDrop = kind === "coywolf" ? COYWOLF_TILE_DROP_PX : 0;
+    sprite.setPosition(iso.x, entityFeetY(iso.y) + crawlDrop + coyoteDrop);
     sprite.setDepth(depth);
 
     if (entityId === this.sessionId && kind === "player") {
@@ -12892,14 +13446,7 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
-  private openFireplaceUI(payload: {
-    x: number;
-    y: number;
-    fuelWood: number;
-    activeUntil: number;
-    inventoryJson: string;
-    hasLighter: boolean;
-  }) {
+  private openFireplaceUI(payload: FireplaceUIState) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
@@ -12943,6 +13490,22 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private sendFireplaceCook(slot: number, itemId?: string) {
+    if (!this.room || !this.fireplaceUI?.isOpen()) return;
+    const tile = this.fireplaceUI.getTile();
+    if (!tile) return;
+    const message: ClientMessage = {
+      type: "fireplaceCook",
+      payload: {
+        x: tile.x,
+        y: tile.y,
+        slot,
+        ...(itemId ? { itemId } : {}),
+      },
+    };
+    this.room.send("action", message);
+  }
+
   private sendFireplaceExtinguish() {
     if (!this.room || !this.fireplaceUI?.isOpen()) return;
     const tile = this.fireplaceUI.getTile();
@@ -12955,6 +13518,21 @@ export class WorldScene extends Phaser.Scene {
     AudioManager.get().playFireplaceExtinguish();
   }
 
+  private furnaceSearchableAt(
+    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    tx: number,
+    ty: number,
+  ) {
+    if (!me.inInterior) return undefined;
+    return this.searchablesCache.find(
+      (item) =>
+        furnitureIsFurnace(item.objectType) &&
+        item.buildingX === me.buildingX &&
+        item.buildingY === me.buildingY &&
+        searchableOccupiesTile(item, tx, ty),
+    );
+  }
+
   private updateFireplaceProximity() {
     if (!this.fireplaceUI?.isOpen() || !this.room) return;
     const tile = this.fireplaceUI.getTile();
@@ -12963,6 +13541,15 @@ export class WorldScene extends Phaser.Scene {
     const me = this.room.state.players.get(this.sessionId);
     if (!me?.alive) {
       this.closeFireplaceUI();
+      return;
+    }
+
+    // Warehouse furnaces reuse this panel but are furniture, not structures.
+    const furnace = this.furnaceSearchableAt(me, tile.x, tile.y);
+    if (furnace) {
+      if (!me.inInterior || !playerAdjacentToSearchable(me.x, me.y, furnace)) {
+        this.closeFireplaceUI();
+      }
       return;
     }
 
@@ -13336,7 +13923,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.room || !this.craftUI?.isOpen()) return;
     const workbenchId = this.craftUI.getWorkbenchId();
     if (!workbenchId) return;
-    const recipe = getCraftRecipe(recipeId);
+    const recipe = getCraftRecipe(recipeId) ?? getDisassemblyRecipe(recipeId);
     const durationMs = recipe
       ? craftDurationForSkill(
           recipe,
@@ -13921,6 +14508,21 @@ export class WorldScene extends Phaser.Scene {
           (me.buildingX === corpseData.buildingX &&
             me.buildingY === corpseData.buildingY)) &&
         playerNearEntity(me.x, me.y, corpseData.x, corpseData.y)
+      );
+    }
+
+    const wolf = room.state.coywolves?.get(containerId);
+    const wolfData =
+      wolf ??
+      (this.coywolfSprites.get(containerId)?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined);
+    if (wolfData) {
+      return (
+        !!wolfData.isDead &&
+        !wolfData.looted &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, wolfData.x, wolfData.y)
       );
     }
 

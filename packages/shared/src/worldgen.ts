@@ -363,7 +363,7 @@ export function buildingEntranceTiles(
 /**
  * Pick an exterior perimeter tile for a house chimney — north or west face
  * (never the SE/SW door wall), inset from corners when the footprint allows.
- * Shared by exterior render and a future interior fireplace flush.
+ * Shared by exterior render and the interior mantel, which spans the same tile.
  */
 export function pickHouseChimneyTile(
   ox: number,
@@ -401,7 +401,7 @@ export function pickHouseChimneyTile(
 }
 
 /**
- * Interior wall band that backs a house chimney — for a fireplace flush.
+ * Interior wall band that backs a house chimney. Mantel1 spans these tiles.
  * North exterior → NE wall (`y = 0`); west exterior → NW wall (`x = 0`).
  */
 export function houseChimneyInteriorTiles(
@@ -4112,6 +4112,23 @@ function blendedTreeDensity(tx: number, ty: number): number {
     blend += forestMacroAt(mx, nmy).treeDensity * wy * 0.5;
   }
   return Math.min(blend, 0.24);
+}
+
+/**
+ * True on forest floor: not a meadow clearing, and not a building, street,
+ * or parking lot. Used to place wildlife.
+ */
+export function isWoodedForestAt(tx: number, ty: number): boolean {
+  const x = Math.floor(tx);
+  const y = Math.floor(ty);
+  const mx = Math.floor(x / FOREST_MACRO_CELL);
+  const my = Math.floor(y / FOREST_MACRO_CELL);
+  if (forestMacroAt(mx, my).clearing) return false;
+  if (blendedTreeDensity(x, y) < 0.09) return false;
+  if (getBuildingAt(x, y)) return false;
+  if (getStreetTileType(x, y) !== null) return false;
+  if (isCarParkLotTile(x, y)) return false;
+  return true;
 }
 
 function pickTreeVariant(tx: number, ty: number, rng: () => number): number {

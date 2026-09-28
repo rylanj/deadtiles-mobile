@@ -42,6 +42,10 @@ import {
   configureInteriorAnimations,
   FIREPLACE1_ACTIVE_ANIM,
   FIREPLACE1_INACTIVE_KEY,
+  furnace1ActiveAnim,
+  furnace1InactiveKey,
+  mantel1ActiveAnim,
+  mantel1InactiveKey,
   furnitureSearchedFrameKey,
   interiorTextureKey,
   type AnimatedFurnitureDef,
@@ -76,6 +80,7 @@ import { createInteriorFloorImage, interiorFloorTextureKey } from "./TileTexture
 import {
   nearestManhattanTile,
   pickTopOpaqueImageAtWorld,
+  spriteOpaqueAtWorldPoint,
 } from "../sprites/spritePixelHit";
 
 /**
@@ -131,6 +136,8 @@ export type SearchableVisual = {
   buildingX: number;
   buildingY: number;
   facing?: string;
+  /** Furnace burn end (unix ms). 0 when cold. */
+  activeUntil?: number;
 };
 
 /** Interior partition height (fraction of one exterior storey). */
@@ -338,6 +345,14 @@ const VENDINGMACHINE_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.1);
 const FIREPLACE1_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95);
 /** Fireplace1 — lower by 12.5% of display height. */
 const FIREPLACE1_BOTTOM_PAD = Math.round(FIREPLACE1_RENDER_HEIGHT * 0.125);
+/** Furnace1 — same screen height as other floor furniture. */
+const FURNACE1_RENDER_HEIGHT = FURNITURE_RENDER_HEIGHT;
+/** Furnace1 — lower by 5% of display height. */
+const FURNACE1_BOTTOM_PAD = Math.round(FURNACE1_RENDER_HEIGHT * 0.05);
+/** Mantel1 — taller than a stove so the breast reads above the hearth. */
+const MANTEL1_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.5);
+/** Mantel1 — lower by 5% of display height, same as the furnace. */
+const MANTEL1_BOTTOM_PAD = Math.round(MANTEL1_RENDER_HEIGHT * 0.05);
 
 function furnitureRenderHeight(objectType: string): number {
   if (objectType === "desk") return DESK_RENDER_HEIGHT;
@@ -461,6 +476,8 @@ function furnitureBottomPad(objectType: string): number {
     return THREESEATER_BOTTOM_PAD;
   }
   if (objectType === "vendingmachine") return VENDINGMACHINE_BOTTOM_PAD;
+  if (objectType === "furnace") return FURNACE1_BOTTOM_PAD;
+  if (objectType === "mantel") return MANTEL1_BOTTOM_PAD;
   return 0;
 }
 
@@ -535,6 +552,21 @@ export class InteriorView {
   private fireplaces: InteriorFireplaceTile[] = [];
   private fireplaceSprites = new Map<string, Phaser.GameObjects.Sprite>();
   private fireplaceExpireEvents = new Map<string, Phaser.Time.TimerEvent>();
+  /** Furnaces and house mantels currently drawn, keyed by searchable id. */
+  private furnaceTiles = new Map<
+    string,
+    {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      activeUntil: number;
+      objectType: string;
+      facing: string;
+    }
+  >();
+  private furnaceVisualUntil = new Map<string, number>();
+  private furnaceExpireEvents = new Map<string, Phaser.Time.TimerEvent>();
   private fences: InteriorFenceTile[] = [];
   private fenceSprites = new Map<string, Phaser.GameObjects.Image>();
   private fenceCorners: InteriorFenceCornerTile[] = [];
@@ -605,6 +637,14 @@ export class InteriorView {
       if (!sprite?.visible) continue;
       cb(sprite.x, sprite.y - sprite.displayHeight * 0.45);
     }
+    for (const [id, tile] of this.furnaceTiles) {
+      if (nowMs >= tile.activeUntil) continue;
+      const sprite = this.objectSprites.get(id);
+      if (!sprite || !("visible" in sprite) || !sprite.visible) continue;
+      if (!("x" in sprite) || !("displayHeight" in sprite)) continue;
+      const lift = tile.objectType === "mantel" ? 0.32 : 0.45;
+      cb(sprite.x, sprite.y - sprite.displayHeight * lift);
+    }
   }
 
   /** True when a lit fireplace is on or adjacent to this interior tile. */
@@ -616,6 +656,10 @@ export class InteriorView {
         return true;
       }
     }
+    for (const tile of this.furnaceTiles.values()) {
+      if (nowMs >= tile.activeUntil) continue;
+      if (this.hearthNear(tile, tx, ty)) return true;
+    }
     return false;
   }
 
@@ -626,6 +670,12 @@ export class InteriorView {
     for (const tile of this.fireplaces) {
       if (nowMs >= tile.activeUntil) continue;
       const heat = fireplaceAirHeatFromOffset(tile.x - tx, tile.y - ty, true);
+      if (heat > best) best = heat;
+      if (best >= 1) return 1;
+    }
+    for (const tile of this.furnaceTiles.values()) {
+      if (nowMs >= tile.activeUntil) continue;
+      const heat = this.hearthHeat(tile, tx, ty);
       if (heat > best) best = heat;
       if (best >= 1) return 1;
     }
@@ -927,6 +977,7 @@ export class InteriorView {
     this.extraDoors = [];
     this.clearInternalDoorSprites();
     this.clearFireplaces();
+    this.clearFurnaceRuntime();
     this.clearFences();
     this.clearFenceCorners();
     this.clearBuildGhost();
@@ -1420,6 +1471,26 @@ export class InteriorView {
     this.prefabPartitionKeys.clear();
   }
 
+  /**
+   * Topmost furniture sprite whose opaque pixels cover the world point.
+   * Used so a click on tall wall art (furnaces) still selects that object
+   * when the floor tile under the cursor is the wall behind it.
+   */
+  pickFurnitureIdAtWorld(worldX: number, worldY: number): string | null {
+    let bestId: string | null = null;
+    let bestDepth = -Infinity;
+    for (const [id, sprite] of this.objectSprites) {
+      if (sprite instanceof Phaser.GameObjects.Graphics) continue;
+      if (!sprite.visible || !sprite.active) continue;
+      if (!sprite.getBounds().contains(worldX, worldY)) continue;
+      if (!spriteOpaqueAtWorldPoint(sprite, worldX, worldY)) continue;
+      if (sprite.depth < bestDepth) continue;
+      bestDepth = sprite.depth;
+      bestId = id;
+    }
+    return bestId;
+  }
+
   /** Draws a yellow outline around the hovered item's footprint. Pass null to clear. */
   setHoveredItem(id: string | null, items: SearchableVisual[]) {
     if (!id) {
@@ -1464,6 +1535,7 @@ export class InteriorView {
         this.searchingState.delete(id);
         this.groundBagTiles.delete(id);
         this.lanternIds.delete(id);
+        this.forgetFurnace(id);
       }
     }
 
@@ -1802,6 +1874,10 @@ export class InteriorView {
   }
 
   private upsertSearchable(item: SearchableVisual, isSearching = false) {
+    if (item.objectType === "furnace" || item.objectType === "mantel") {
+      this.upsertFurnace(item);
+      return;
+    }
     if (item.objectType === "lantern1") this.lanternIds.add(item.id);
     if (
       (item.objectType === "campchair" || item.objectType === "canteenchair") &&
@@ -1894,6 +1970,149 @@ export class InteriorView {
     this.trackGroundBagTile(item);
     this.searchedState.set(item.id, item.searched);
     this.searchingState.set(item.id, isSearching);
+  }
+
+  private clearFurnaceRuntime() {
+    for (const ev of this.furnaceExpireEvents.values()) ev.remove(false);
+    this.furnaceExpireEvents.clear();
+    this.furnaceVisualUntil.clear();
+    this.furnaceTiles.clear();
+  }
+
+  private forgetFurnace(id: string) {
+    this.furnaceExpireEvents.get(id)?.remove(false);
+    this.furnaceExpireEvents.delete(id);
+    this.furnaceVisualUntil.delete(id);
+    this.furnaceTiles.delete(id);
+  }
+
+  private hearthArt(objectType: string, facing: string): {
+    inactiveKey: string;
+    animKey: string;
+    height: number;
+  } {
+    if (objectType === "mantel") {
+      return {
+        inactiveKey: mantel1InactiveKey(facing),
+        animKey: mantel1ActiveAnim(facing),
+        height: MANTEL1_RENDER_HEIGHT,
+      };
+    }
+    return {
+      inactiveKey: furnace1InactiveKey(facing),
+      animKey: furnace1ActiveAnim(facing),
+      height: FURNACE1_RENDER_HEIGHT,
+    };
+  }
+
+  private hearthNear(
+    tile: { x: number; y: number; w: number; h: number },
+    tx: number,
+    ty: number,
+  ): boolean {
+    const dx =
+      tx < tile.x ? tile.x - tx : tx > tile.x + tile.w - 1 ? tx - (tile.x + tile.w - 1) : 0;
+    const dy =
+      ty < tile.y ? tile.y - ty : ty > tile.y + tile.h - 1 ? ty - (tile.y + tile.h - 1) : 0;
+    return Math.max(dx, dy) <= 1;
+  }
+
+  private hearthHeat(
+    tile: { x: number; y: number; w: number; h: number },
+    tx: number,
+    ty: number,
+  ): number {
+    let best = 0;
+    for (let y = tile.y; y < tile.y + tile.h; y++) {
+      for (let x = tile.x; x < tile.x + tile.w; x++) {
+        const heat = fireplaceAirHeatFromOffset(x - tx, y - ty, true);
+        if (heat > best) best = heat;
+      }
+    }
+    return best;
+  }
+
+  /** Inactive still, or a looping active sheet while wood is burning. */
+  private upsertFurnace(item: SearchableVisual) {
+    configureInteriorAnimations(this.scene);
+    const facing = item.facing === "SW" ? "SW" : "SE";
+    const art = this.hearthArt(item.objectType, facing);
+    const until = item.activeUntil ?? 0;
+    const { w, h } = searchableFootprint(item);
+    this.furnaceTiles.set(item.id, {
+      x: item.x,
+      y: item.y,
+      w,
+      h,
+      activeUntil: until,
+      objectType: item.objectType,
+      facing,
+    });
+
+    if (!textureKeyExists(this.scene, art.inactiveKey)) return;
+
+    const iso = cartesianToIso(item.x + w / 2, item.y + h / 2);
+    const groundY = iso.y + TILE_HEIGHT / 2 + furnitureBottomPad(item.objectType);
+    const depth = this.searchableDepth(item);
+
+    const existing = this.objectSprites.get(item.id);
+    let sprite: Phaser.GameObjects.Sprite;
+    if (existing instanceof Phaser.GameObjects.Sprite) {
+      existing.setPosition(iso.x, groundY);
+      sprite = existing;
+    } else {
+      if (existing) existing.destroy();
+      sprite = addSpriteForKey(this.scene, iso.x, groundY, art.inactiveKey);
+      sprite.setOrigin(0.5, 1);
+      this.objectSprites.set(item.id, sprite);
+      this.furnaceVisualUntil.delete(item.id);
+    }
+    sprite.setDepth(depth);
+    sprite.setVisible(true);
+    sprite.setActive(true);
+
+    if (this.furnaceVisualUntil.get(item.id) === until) return;
+    this.furnaceVisualUntil.set(item.id, until);
+    this.applyFurnaceVisual(sprite, item.objectType, facing, until);
+    this.scheduleFurnaceExpire(item.id, until);
+  }
+
+  private applyFurnaceVisual(
+    sprite: Phaser.GameObjects.Sprite,
+    objectType: string,
+    facing: string,
+    activeUntil: number,
+  ) {
+    const art = this.hearthArt(objectType, facing);
+    const active = Date.now() < activeUntil;
+    if (active && this.scene.anims.exists(art.animKey)) {
+      if (!sprite.anims.isPlaying || sprite.anims.currentAnim?.key !== art.animKey) {
+        sprite.play(art.animKey);
+      }
+    } else {
+      sprite.anims.stop();
+      if (!spriteShowsKey(sprite, art.inactiveKey)) {
+        applyTextureKey(sprite, art.inactiveKey);
+      }
+    }
+    this.fitInteriorSprite(sprite, art.height);
+  }
+
+  private scheduleFurnaceExpire(id: string, activeUntil: number) {
+    this.furnaceExpireEvents.get(id)?.remove(false);
+    this.furnaceExpireEvents.delete(id);
+    const remaining = activeUntil - Date.now();
+    if (remaining <= 0) return;
+    const ev = this.scene.time.delayedCall(remaining, () => {
+      this.furnaceExpireEvents.delete(id);
+      const sprite = this.objectSprites.get(id);
+      const tile = this.furnaceTiles.get(id);
+      if (!(sprite instanceof Phaser.GameObjects.Sprite) || !tile) return;
+      if (Date.now() < tile.activeUntil) return;
+      this.furnaceVisualUntil.set(id, tile.activeUntil);
+      this.applyFurnaceVisual(sprite, tile.objectType, tile.facing, tile.activeUntil);
+    });
+    this.furnaceExpireEvents.set(id, ev);
   }
 
   private trackGroundBagTile(item: SearchableVisual) {

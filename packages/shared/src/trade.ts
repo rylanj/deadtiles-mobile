@@ -5,6 +5,7 @@ import {
   countItemInInventory,
   getItemDefinition,
   lootCategoryItemIds,
+  maxStackForItem,
   removeFromInventorySlot,
   type Inventory,
   type InventoryEntry,
@@ -25,9 +26,9 @@ import {
   type FactionStanding,
 } from "./factionRep.js";
 
-/** Trader starts with this many banknotes (inclusive range). */
-export const TRADER_BANKNOTES_MIN = 100;
-export const TRADER_BANKNOTES_MAX = 300;
+/** Trader starts with this many banknotes (inclusive range). Rolled fresh each restart. */
+export const TRADER_BANKNOTES_MIN = 1000;
+export const TRADER_BANKNOTES_MAX = 3000;
 
 /**
  * Base banknote value per item.
@@ -232,7 +233,7 @@ export function ashenDialogLineById(id: string): AshenDialogLine | undefined {
  * Warm: [1000, 2500) · Friendly: [2500, 5000) · Allied: ≥ 5000
  *
  * +1 per $ given to the trader (player buys); +0.1 per $ taken (player sells).
- * When the trader cannot cover a sell in cash, each unpaid $ also grants +1.
+ * When the trader cannot cover a sell in cash, each unpaid $ also grants +0.1.
  * Everyone starts at 0 (Wary).
  */
 export const ASHEN_REP_EXILED_THRESHOLD = FACTION_REP_EXILED_THRESHOLD;
@@ -439,6 +440,54 @@ export function addToTraderStock(
   return next;
 }
 
+/** True when `quantity` of `itemId` fits without passing the line cap or a stack cap. */
+export function canAddToTraderStock(
+  stock: readonly InventoryEntry[],
+  itemId: string,
+  quantity: number,
+): boolean {
+  if (quantity <= 0 || itemId === "banknote" || !getItemDefinition(itemId)) {
+    return false;
+  }
+  const def = getItemDefinition(itemId)!;
+  const max = maxStackForItem(itemId);
+  if (max <= 0) return false;
+  if (!def.stackable) {
+    return stock.length + quantity <= TRADER_SHOP_CAPACITY;
+  }
+  const existing = stock.find((entry) => entry.id === itemId);
+  if (existing) return existing.quantity + quantity <= max;
+  return stock.length < TRADER_SHOP_CAPACITY && quantity <= max;
+}
+
+/**
+ * Whether the offer leaves the caravan at or under {@link TRADER_SHOP_CAPACITY}.
+ * Buys are removed first, so a full shelf can still take goods when the same
+ * offer frees a line.
+ */
+export function tradeOfferFitsTraderStock(
+  stock: readonly InventoryEntry[],
+  sells: readonly { itemId: string; quantity: number }[],
+  buys: readonly { stockIndex: number; itemId: string; quantity: number }[],
+): boolean {
+  let next = stock.map((entry) => ({ ...entry }));
+  const buyByIndexDesc = [...buys].sort((a, b) => b.stockIndex - a.stockIndex);
+  for (const line of buyByIndexDesc) {
+    if (line.quantity <= 0) continue;
+    const entry = next[line.stockIndex];
+    if (!entry || entry.id !== line.itemId) return false;
+    const removed = removeFromTraderStock(next, line.stockIndex, line.quantity);
+    if (!removed) return false;
+    next = removed;
+  }
+  for (const line of sells) {
+    if (line.quantity <= 0) continue;
+    if (!canAddToTraderStock(next, line.itemId, line.quantity)) return false;
+    next = addToTraderStock(next, line.itemId, line.quantity);
+  }
+  return next.length <= TRADER_SHOP_CAPACITY;
+}
+
 export function removeFromTraderStock(
   stock: InventoryEntry[],
   stockIndex: number,
@@ -458,6 +507,13 @@ export function removeFromTraderStock(
 
 /** How many distinct stock lines a trader rolls on spawn. */
 export const TRADER_SHOP_ITEM_COUNT = 12;
+/**
+ * Max stock lines a caravan will hold. Spawn fills the first
+ * {@link TRADER_SHOP_ITEM_COUNT}. Further player sales stop at this count.
+ * Each line also stops at {@link maxStackForItem}, so one stack cannot grow
+ * past a normal inventory stack.
+ */
+export const TRADER_SHOP_CAPACITY = 36;
 
 /** Categories eligible for shop stock, with per-category quantity ranges. */
 const TRADER_SHOP_CATEGORIES: {
@@ -563,7 +619,7 @@ export type TradeOfferCashSettlement = {
   playerPays: number;
   /** Cash the player actually receives (capped by trader float). */
   playerReceives: number;
-  /** Dollars the trader cannot cover — becomes bonus reputation. */
+  /** Dollars the trader cannot cover. Reputation for these matches a paid sale. */
   shortfall: number;
   /** False only when the player cannot cover what they owe. */
   playerCanAfford: boolean;
@@ -615,7 +671,7 @@ export function tradeOfferCashSettlement(
  * Atomically apply a multi-line trade offer with net banknote settlement.
  * Sells and buys offset each other. If the trader cannot cover the cash the
  * player is owed, the trade still goes through for whatever float remains and
- * the unpaid dollars are returned as {@link shortfall} (bonus reputation).
+ * the unpaid dollars are returned as {@link shortfall} (+0.1 reputation each).
  */
 export function applyTradeOffer(
   playerInv: Inventory,
@@ -634,7 +690,7 @@ export function applyTradeOffer(
   playerReceives: number;
   /** Cash taken from the player. */
   playerPays: number;
-  /** Unpaid dollars when trader float could not cover net — +1 rep each. */
+  /** Unpaid dollars when trader float could not cover net. +0.1 rep each. */
   shortfall: number;
 } | null {
   if (sells.length === 0 && buys.length === 0) return null;
@@ -722,6 +778,7 @@ export function applyTradeOffer(
     countItemInInventory(playerInv, "banknote"),
   );
   if (!cash.playerCanAfford) return null;
+  if (!tradeOfferFitsTraderStock(shop.stock, sellLines, buyLines)) return null;
   const { playerPays, playerReceives, shortfall } = cash;
 
   let nextInv = playerInv.map((s) => (s ? { ...s } : null));

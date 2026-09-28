@@ -134,6 +134,46 @@ export function fireplace1ActiveFrameKey(frame: number): string {
   return `furniture-fireplace1-active-${tag}`;
 }
 
+/** Furnace1 — Active loop + Inactive still, SE and SW. */
+export const FURNACE1_ACTIVE_FRAME_COUNT = 8;
+
+export function furnace1Facing(facing?: string): "SE" | "SW" {
+  return facing === "SW" ? "SW" : "SE";
+}
+
+export function furnace1InactiveKey(facing?: string): string {
+  return `furniture-furnace1-inactive-${furnace1Facing(facing).toLowerCase()}`;
+}
+
+export function furnace1ActiveAnim(facing?: string): string {
+  return `furniture-furnace1-active-${furnace1Facing(facing).toLowerCase()}`;
+}
+
+export function furnace1ActiveFrameKey(facing: string | undefined, frame: number): string {
+  const tag = String(
+    Math.max(1, Math.min(FURNACE1_ACTIVE_FRAME_COUNT, frame)),
+  ).padStart(4, "0");
+  return `furniture-furnace1-active-${furnace1Facing(facing).toLowerCase()}-${tag}`;
+}
+
+/** Mantel1 — Active loop + Inactive still, SE and SW. Nine fire frames. */
+export const MANTEL1_ACTIVE_FRAME_COUNT = 9;
+
+export function mantel1InactiveKey(facing?: string): string {
+  return `furniture-mantel1-inactive-${furnace1Facing(facing).toLowerCase()}`;
+}
+
+export function mantel1ActiveAnim(facing?: string): string {
+  return `furniture-mantel1-active-${furnace1Facing(facing).toLowerCase()}`;
+}
+
+export function mantel1ActiveFrameKey(facing: string | undefined, frame: number): string {
+  const tag = String(
+    Math.max(1, Math.min(MANTEL1_ACTIVE_FRAME_COUNT, frame)),
+  ).padStart(4, "0");
+  return `furniture-mantel1-active-${furnace1Facing(facing).toLowerCase()}-${tag}`;
+}
+
 type FurnitureLoadState = "absent" | "loading" | "ready";
 let furnitureState: FurnitureLoadState = "absent";
 
@@ -233,6 +273,44 @@ export function configureInteriorAnimations(scene: Phaser.Scene) {
     if (frames.length === FIREPLACE1_ACTIVE_FRAME_COUNT) {
       scene.anims.create({
         key: FIREPLACE1_ACTIVE_ANIM,
+        frames,
+        frameRate: 10,
+        repeat: -1,
+      });
+    }
+  }
+
+  for (const facing of ["SE", "SW"] as const) {
+    const animKey = furnace1ActiveAnim(facing);
+    if (scene.anims.exists(animKey)) continue;
+    const frames: Phaser.Types.Animations.AnimationFrame[] = [];
+    for (let frame = 1; frame <= FURNACE1_ACTIVE_FRAME_COUNT; frame++) {
+      const animFrame = animFrameFor(scene, furnace1ActiveFrameKey(facing, frame));
+      if (!animFrame) break;
+      frames.push(animFrame);
+    }
+    if (frames.length === FURNACE1_ACTIVE_FRAME_COUNT) {
+      scene.anims.create({
+        key: animKey,
+        frames,
+        frameRate: 10,
+        repeat: -1,
+      });
+    }
+  }
+
+  for (const facing of ["SE", "SW"] as const) {
+    const animKey = mantel1ActiveAnim(facing);
+    if (scene.anims.exists(animKey)) continue;
+    const frames: Phaser.Types.Animations.AnimationFrame[] = [];
+    for (let frame = 1; frame <= MANTEL1_ACTIVE_FRAME_COUNT; frame++) {
+      const animFrame = animFrameFor(scene, mantel1ActiveFrameKey(facing, frame));
+      if (!animFrame) break;
+      frames.push(animFrame);
+    }
+    if (frames.length === MANTEL1_ACTIVE_FRAME_COUNT) {
+      scene.anims.create({
+        key: animKey,
         frames,
         frameRate: 10,
         repeat: -1,

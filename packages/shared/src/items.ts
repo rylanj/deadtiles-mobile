@@ -1,3 +1,4 @@
+import { RAW_MEAT_INFECTION_CHANCE } from "./infection.js";
 import { mulberry32, xmur3 } from "./worldgen.js";
 import { ZOMBIE_SKIN_MAN11 } from "./sprites.js";
 
@@ -169,6 +170,8 @@ export type ItemDefinition = {
   healOverTimeDurationMs?: number;
   /** True when using this item treats an active infection. */
   treatsInfection?: boolean;
+  /** Chance (0–1) to catch the zombie infection when this item is eaten. */
+  infectionChance?: number;
   /** Clothing insulation points (bare = 0, t-shirt = 1). */
   insulation?: number;
 };
@@ -308,6 +311,30 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "bolts", name: "Bolts", category: "crafting", stackable: true, weight: 0.01 },
   { id: "duct_tape", name: "Duct Tape", category: "crafting", stackable: true, weight: 0.2 },
   { id: "scrap_metal", name: "Scrap Metal", category: "crafting", stackable: true, weight: 0.5 },
+  { id: "pistol_frame", name: "Pistol Frame", category: "crafting", stackable: true, weight: 0.35 },
+  { id: "pistol_slide", name: "Pistol Slide", category: "crafting", stackable: true, weight: 0.25 },
+  { id: "small_spring", name: "Small Spring", category: "crafting", stackable: true, weight: 0.05 },
+  { id: "pistol_trigger", name: "Pistol Trigger", category: "crafting", stackable: true, weight: 0.08 },
+  { id: "revolver_frame", name: "Revolver Frame", category: "crafting", stackable: true, weight: 0.4 },
+  { id: "revolver_cylinder", name: "Cylinder", category: "crafting", stackable: true, weight: 0.25 },
+  { id: "revolver_barrel", name: "Revolver Barrel", category: "crafting", stackable: true, weight: 0.3 },
+  { id: "revolver_trigger", name: "Revolver Trigger", category: "crafting", stackable: true, weight: 0.08 },
+  { id: "shotgun_receiver", name: "Shotgun Receiver", category: "crafting", stackable: true, weight: 0.7 },
+  { id: "shotgun_barrel", name: "Shotgun Barrel", category: "crafting", stackable: true, weight: 0.6 },
+  { id: "shotgun_stock", name: "Shotgun Stock", category: "crafting", stackable: true, weight: 0.7 },
+  { id: "shotgun_trigger", name: "Shotgun Trigger", category: "crafting", stackable: true, weight: 0.08 },
+  { id: "large_spring", name: "Large Spring", category: "crafting", stackable: true, weight: 0.08 },
+  { id: "rifle_receiver", name: "Rifle Receiver", category: "crafting", stackable: true, weight: 0.7 },
+  { id: "rifle_barrel", name: "Rifle Barrel", category: "crafting", stackable: true, weight: 0.6 },
+  { id: "rifle_stock", name: "Rifle Stock", category: "crafting", stackable: true, weight: 0.8 },
+  { id: "scope", name: "Scope", category: "crafting", stackable: true, weight: 0.4 },
+  { id: "rifle_trigger", name: "Rifle Trigger", category: "crafting", stackable: true, weight: 0.08 },
+  { id: "ak_receiver", name: "AK Receiver", category: "crafting", stackable: true, weight: 0.8 },
+  { id: "ak_barrel", name: "AK Barrel", category: "crafting", stackable: true, weight: 0.6 },
+  { id: "ak_stock", name: "AK Stock", category: "crafting", stackable: true, weight: 0.6 },
+  { id: "m4_receiver", name: "M4 Receiver", category: "crafting", stackable: true, weight: 0.7 },
+  { id: "m4_barrel", name: "M4 Barrel", category: "crafting", stackable: true, weight: 0.5 },
+  { id: "m4_stock", name: "M4 Stock", category: "crafting", stackable: true, weight: 0.45 },
   /** Fuel for Fireplace1 — looted from felled trees. */
   { id: "wood", name: "Wood", category: "crafting", stackable: false, weight: 0.5 },
   { id: "banknote", name: "Banknote", category: "junk", stackable: true, weight: 0.01 },
@@ -379,6 +406,156 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     consumeDurationMs: 2500,
     restoreHunger: 10,
     restoreThirst: -5,
+  },
+  {
+    id: "raw_coyote_meat",
+    name: "Raw Coyote Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 10,
+    infectionChance: RAW_MEAT_INFECTION_CHANCE,
+  },
+  {
+    id: "cooked_coyote_meat",
+    name: "Cooked Coyote Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 30,
+    restoreThirst: 5,
+  },
+  {
+    id: "burnt_coyote_meat",
+    name: "Burnt Coyote Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 5,
+    restoreThirst: -20,
+  },
+  {
+    id: "raw_rabbit_meat",
+    name: "Raw Rabbit Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.15,
+    consumeDurationMs: 2500,
+    restoreHunger: 8,
+    infectionChance: RAW_MEAT_INFECTION_CHANCE,
+  },
+  {
+    id: "cooked_rabbit_meat",
+    name: "Cooked Rabbit Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.15,
+    consumeDurationMs: 2500,
+    restoreHunger: 24,
+    restoreThirst: 5,
+  },
+  {
+    id: "burnt_rabbit_meat",
+    name: "Burnt Rabbit Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.15,
+    consumeDurationMs: 2500,
+    restoreHunger: 4,
+    restoreThirst: -20,
+  },
+  {
+    id: "raw_bird_meat",
+    name: "Raw Bird Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.1,
+    consumeDurationMs: 2500,
+    restoreHunger: 6,
+    infectionChance: RAW_MEAT_INFECTION_CHANCE,
+  },
+  {
+    id: "cooked_bird_meat",
+    name: "Cooked Bird Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.1,
+    consumeDurationMs: 2500,
+    restoreHunger: 18,
+    restoreThirst: 5,
+  },
+  {
+    id: "burnt_bird_meat",
+    name: "Burnt Bird Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.1,
+    consumeDurationMs: 2500,
+    restoreHunger: 3,
+    restoreThirst: -20,
+  },
+  {
+    id: "raw_chicken_meat",
+    name: "Raw Chicken Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 10,
+    infectionChance: RAW_MEAT_INFECTION_CHANCE,
+  },
+  {
+    id: "cooked_chicken_meat",
+    name: "Cooked Chicken Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 30,
+    restoreThirst: 5,
+  },
+  {
+    id: "burnt_chicken_meat",
+    name: "Burnt Chicken Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.2,
+    consumeDurationMs: 2500,
+    restoreHunger: 5,
+    restoreThirst: -20,
+  },
+  {
+    id: "raw_bear_meat",
+    name: "Raw Bear Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.35,
+    consumeDurationMs: 2500,
+    restoreHunger: 16,
+    infectionChance: RAW_MEAT_INFECTION_CHANCE,
+  },
+  {
+    id: "cooked_bear_meat",
+    name: "Cooked Bear Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.35,
+    consumeDurationMs: 2500,
+    restoreHunger: 40,
+    restoreThirst: 5,
+  },
+  {
+    id: "burnt_bear_meat",
+    name: "Burnt Bear Meat",
+    category: "food",
+    stackable: true,
+    weight: 0.35,
+    consumeDurationMs: 2500,
+    restoreHunger: 6,
+    restoreThirst: -20,
   },
   {
     id: "lemonada",
@@ -1159,10 +1336,52 @@ const CATEGORY_ITEMS: Record<string, string[]> = {
   medical_heavy: ["alcohol", "bandages", "antibiotics"],
   guns_lite: ["weapon_pistol", "weapon_revolver"],
   guns_medium: ["weapon_shotgun"],
-  guns_heavy: ["weapon_assault_rifle", "weapon_m4a1", "weapon_hunting_rifle"],
+  guns_hunting: ["weapon_hunting_rifle"],
+  /** Whole AK and M4. Barracks and warehouse crates only. */
+  guns_military: ["weapon_assault_rifle", "weapon_m4a1"],
   melee_lite: ["weapon_hammer", "weapon_hatchet"],
   melee_heavy: ["weapon_bat"],
   crafting_lite: ["bolts", "screws", "duct_tape", "scrap_metal"],
+  /** Sidearm parts a house, motel, or police desk can hold. */
+  parts_pistol: ["pistol_frame", "pistol_slide", "pistol_trigger", "small_spring"],
+  parts_revolver: [
+    "revolver_frame",
+    "revolver_cylinder",
+    "revolver_barrel",
+    "revolver_trigger",
+  ],
+  /** Civilian long guns. Large spring is shared with rifles. */
+  parts_shotgun: [
+    "shotgun_receiver",
+    "shotgun_barrel",
+    "shotgun_stock",
+    "shotgun_trigger",
+    "large_spring",
+  ],
+  parts_hunting: [
+    "rifle_receiver",
+    "rifle_barrel",
+    "rifle_stock",
+    "scope",
+    "rifle_trigger",
+    "large_spring",
+  ],
+  /**
+   * AK and M4 parts. Only on barracks furniture and warehouse crates,
+   * never on house furniture.
+   */
+  parts_military: [
+    "ak_receiver",
+    "ak_barrel",
+    "ak_stock",
+    "m4_receiver",
+    "m4_barrel",
+    "m4_stock",
+    "rifle_trigger",
+    "large_spring",
+  ],
+  /** Hardware springs in warehouses. Not a military receiver. */
+  parts_springs: ["small_spring", "large_spring"],
   junk: [
     "banknote",
     "lighter",
@@ -1205,7 +1424,14 @@ export function furnitureIsSearchable(objectType: string): boolean {
 
 /** Furniture → loot categories (objectType keys match interior furniture). */
 const CONTAINER_CATEGORIES: Record<string, string[]> = {
-  desk: ["melee_lite", "ammo_lite", "medical_lite", "crafting_lite", "junk"],
+  desk: [
+    "melee_lite",
+    "ammo_lite",
+    "medical_lite",
+    "crafting_lite",
+    "junk",
+    "parts_pistol",
+  ],
   bigshelf: [
     "ammo_lite",
     "ammo_heavy",
@@ -1213,6 +1439,7 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "medical_heavy",
     "crafting_lite",
     "consumables",
+    "parts_springs",
   ],
   bigbox: [
     "ammo_lite",
@@ -1224,15 +1451,44 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "guns_lite",
     "melee_lite",
     "melee_heavy",
+    "parts_springs",
+    "parts_military",
+    "guns_military",
   ],
   watercontainer: ["consumables"],
   cabinet: ["ammo_lite", "medical_lite", "crafting_lite", "junk"],
-  bed: ["guns_lite", "guns_medium", "melee_lite", "melee_heavy", "junk"],
+  bed: [
+    "guns_lite",
+    "guns_medium",
+    "melee_lite",
+    "melee_heavy",
+    "junk",
+    "parts_pistol",
+    "parts_shotgun",
+  ],
   dresser: ["junk"],
   bookshelf: ["junk"],
-  guncabinet: ["ammo_lite", "ammo_heavy", "guns_lite", "guns_medium", "guns_heavy"],
+  guncabinet: [
+    "ammo_lite",
+    "ammo_heavy",
+    "guns_lite",
+    "guns_medium",
+    "guns_hunting",
+    "parts_pistol",
+    "parts_revolver",
+    "parts_shotgun",
+    "parts_hunting",
+  ],
   fridge: ["consumables"],
-  drawers: ["ammo_lite", "medical_lite", "guns_lite", "crafting_lite", "junk"],
+  drawers: [
+    "ammo_lite",
+    "medical_lite",
+    "guns_lite",
+    "crafting_lite",
+    "junk",
+    "parts_pistol",
+    "parts_revolver",
+  ],
   kitchensink: ["consumables"],
   /** House kitchen — set DinnerTable1. */
   dinnertable: ["consumables", "junk"],
@@ -1243,6 +1499,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "melee_lite",
     "crafting_lite",
     "junk",
+    "parts_pistol",
+    "parts_revolver",
   ],
   desk2: [
     "ammo_lite",
@@ -1252,6 +1510,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "crafting_lite",
     "junk",
     "consumables",
+    "parts_pistol",
+    "parts_shotgun",
   ],
   bookshelf2: ["ammo_lite", "junk"],
   deadofficer: [
@@ -1260,6 +1520,7 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "medical_lite",
     "medical_heavy",
     "junk",
+    "parts_pistol",
   ],
   bagchair: [
     "ammo_lite",
@@ -1277,6 +1538,7 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "crafting_lite",
     "junk",
     "consumables",
+    "parts_pistol",
   ],
   watercooler: ["consumables"],
   trashcan: ["crafting_lite", "junk", "consumables"],
@@ -1317,12 +1579,19 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
   /** Motel — lobby Counter1 (junk + rare sidearm roll). */
   counter: ["junk"],
   /** Motel — MotelBed1 guest bed. */
-  motelbed: ["guns_lite", "guns_medium", "melee_lite", "melee_heavy", "junk"],
+  motelbed: [
+    "guns_lite",
+    "guns_medium",
+    "melee_lite",
+    "melee_heavy",
+    "junk",
+    "parts_pistol",
+  ],
   /** Motel — MiniFridge1 in guest rooms. */
   minifridge: ["consumables"],
   /** Player-dropped floor bag — loot is pre-seeded; no random rolls. */
   groundbackpack: [],
-  militarybed: ["guns_lite", "melee_lite", "junk"],
+  militarybed: ["guns_lite", "melee_lite", "junk", "parts_military", "guns_military"],
   footlocker: [
     "ammo_lite",
     "medical_lite",
@@ -1331,6 +1600,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "crafting_lite",
     "junk",
     "consumables",
+    "parts_military",
+    "guns_military",
   ],
   kitbag: [
     "ammo_lite",
@@ -1339,6 +1610,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "crafting_lite",
     "junk",
     "consumables",
+    "parts_military",
+    "guns_military",
   ],
   camptable: ["consumables", "junk"],
   militarybasket: ["crafting_lite", "junk", "consumables"],
@@ -1360,6 +1633,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "crafting_lite",
     "junk",
     "consumables",
+    "parts_pistol",
+    "parts_shotgun",
   ],
 };
 
@@ -1387,6 +1662,30 @@ const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: 
   screws: { chance: 0.08, minQty: 1, maxQty: 5 },
   duct_tape: { chance: 0.1, minQty: 1, maxQty: 1 },
   scrap_metal: { chance: 0.05, minQty: 1, maxQty: 1 },
+  pistol_slide: { chance: 0.012, minQty: 1, maxQty: 1 },
+  pistol_trigger: { chance: 0.008, minQty: 1, maxQty: 1 },
+  pistol_frame: { chance: 0.006, minQty: 1, maxQty: 1 },
+  small_spring: { chance: 0.018, minQty: 1, maxQty: 1 },
+  revolver_cylinder: { chance: 0.006, minQty: 1, maxQty: 1 },
+  revolver_barrel: { chance: 0.006, minQty: 1, maxQty: 1 },
+  revolver_trigger: { chance: 0.006, minQty: 1, maxQty: 1 },
+  revolver_frame: { chance: 0.005, minQty: 1, maxQty: 1 },
+  shotgun_stock: { chance: 0.005, minQty: 1, maxQty: 1 },
+  shotgun_trigger: { chance: 0.005, minQty: 1, maxQty: 1 },
+  shotgun_barrel: { chance: 0.004, minQty: 1, maxQty: 1 },
+  shotgun_receiver: { chance: 0.004, minQty: 1, maxQty: 1 },
+  large_spring: { chance: 0.008, minQty: 1, maxQty: 1 },
+  rifle_stock: { chance: 0.004, minQty: 1, maxQty: 1 },
+  rifle_trigger: { chance: 0.004, minQty: 1, maxQty: 1 },
+  rifle_barrel: { chance: 0.003, minQty: 1, maxQty: 1 },
+  rifle_receiver: { chance: 0.003, minQty: 1, maxQty: 1 },
+  scope: { chance: 0.003, minQty: 1, maxQty: 1 },
+  ak_stock: { chance: 0.004, minQty: 1, maxQty: 1 },
+  ak_barrel: { chance: 0.003, minQty: 1, maxQty: 1 },
+  ak_receiver: { chance: 0.003, minQty: 1, maxQty: 1 },
+  m4_stock: { chance: 0.003, minQty: 1, maxQty: 1 },
+  m4_barrel: { chance: 0.002, minQty: 1, maxQty: 1 },
+  m4_receiver: { chance: 0.002, minQty: 1, maxQty: 1 },
   banknote: { chance: 0.05, minQty: 1, maxQty: 20 },
   lighter: { chance: 0.04, minQty: 1, maxQty: 1 },
   blue_cigarettes: { chance: 0.1, minQty: 1, maxQty: 1 },
@@ -1446,14 +1745,17 @@ function eligibleLootItems(objectType: string): string[] {
 function rollLootFromCategories(
   categories: string[],
   rng: () => number,
+  chanceScale = 1,
 ): InventoryEntry[] {
   const possibleItems = [
     ...new Set(categories.flatMap((cat) => CATEGORY_ITEMS[cat] ?? [])),
   ];
+  const scale =
+    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
   const results: InventoryEntry[] = [];
   for (const id of possibleItems) {
     const data = ITEM_SPAWN_DATA[id];
-    if (!data || rng() >= data.chance) continue;
+    if (!data || rng() >= Math.min(1, data.chance * scale)) continue;
     const quantity =
       Math.floor(rng() * (data.maxQty - data.minQty + 1)) + data.minQty;
     results.push({ id, quantity });
@@ -1582,7 +1884,9 @@ function applyDeadOfficerLoot(
       quantity: 1 + Math.floor(Math.random() * 17),
     });
   }
-  if (out.length === 0) {
+  // Outside town the body always yields something. Birchport uses the halved
+  // rolls only, so this station corpse can come up empty.
+  if (out.length === 0 && scale >= 1) {
     const fallback: { id: string; minQty: number; maxQty: number }[] = [
       { id: "ammo_9x19", minQty: 3, maxQty: 17 },
       { id: "rags", minQty: 1, maxQty: 4 },
@@ -1619,11 +1923,17 @@ const ZOMBIE_POLICE_PISTOL_CHANCE = 0.25;
 export function generateZombieLoot(
   zombieId: string,
   skin = 1,
+  chanceScale = 1,
 ): InventoryEntry[] {
   const rng = mulberry32(xmur3(`zombie-loot:${zombieId}`)());
+  const scale =
+    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
   const results: InventoryEntry[] = [];
 
-  if (skin === ZOMBIE_SKIN_MAN11 && rng() < ZOMBIE_POLICE_PISTOL_CHANCE) {
+  if (
+    skin === ZOMBIE_SKIN_MAN11 &&
+    rng() < Math.min(1, ZOMBIE_POLICE_PISTOL_CHANCE * scale)
+  ) {
     results.push({ id: "weapon_pistol", quantity: 1 });
     const ammoQty = Math.floor(rng() * 18); // 0–17
     if (ammoQty > 0) {
@@ -1633,7 +1943,7 @@ export function generateZombieLoot(
 
   // Empty roll skips normal categories but keeps any officer sidearm above.
   if (rng() < ZOMBIE_EMPTY_LOOT_CHANCE) return results;
-  results.push(...rollLootFromCategories(ZOMBIE_LOOT_CATEGORIES, rng));
+  results.push(...rollLootFromCategories(ZOMBIE_LOOT_CATEGORIES, rng, scale));
   return results;
 }
 
@@ -1644,6 +1954,7 @@ const GUARD_LOOT_CATEGORIES = [
   "crafting_lite",
   "junk",
   "consumables",
+  "parts_military",
 ];
 
 /** Deterministic loot rolled once when a guard dies — always includes dog tag, AK + 0–30 7.62. */

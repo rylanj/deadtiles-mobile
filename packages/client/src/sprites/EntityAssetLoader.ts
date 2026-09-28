@@ -74,6 +74,10 @@ function ensureRecord(id: EntityPackId): PackRecord {
   return rec;
 }
 
+export function coywolfPackReady(): boolean {
+  return isEntityPackReady("coywolf");
+}
+
 export function isEntityPackReady(id: EntityPackId): boolean {
   return packs.get(id)?.state === "ready";
 }
@@ -188,10 +192,11 @@ function startNextLoad(scene: Phaser.Scene) {
       loadInFlight = false;
       startNextLoad(scene);
     };
-    // Crawl frames added after the last atlas build still need to land
-    // before the pack is ready, or crawlers stick on the standing walk.
+    // Frames added after the last atlas build still need to land before the
+    // pack is ready. Otherwise crawlers stay on the standing walk, and
+    // coyotes keep a walk frame while they bolt.
     const extras =
-      id === "zombie-6" || id === "zombie-10"
+      id === "zombie-6" || id === "zombie-10" || id === "coywolf"
         ? queueMissingPackImages(scene, id)
         : 0;
     if (extras > 0) {
@@ -276,6 +281,7 @@ export function syncEntityAssetPacks(
     }>;
     /** Nearby players / corpses that need clothing skins. */
     players?: Iterable<{ x: number; y: number; clothingSkin?: number }>;
+    coywolves?: Iterable<{ x: number; y: number }>;
   },
 ) {
   repairBootResidentTextures(scene);
@@ -359,6 +365,7 @@ export function collectNeededEntityPacks(opts: {
     npcKind?: number;
   }>;
   players?: Iterable<{ x: number; y: number; clothingSkin?: number }>;
+  coywolves?: Iterable<{ x: number; y: number }>;
 }): Set<EntityPackId> {
   const preloadR = CLIENT_RENDER_RADIUS + PRELOAD_MARGIN;
   const needed = new Set<EntityPackId>();
@@ -379,6 +386,9 @@ export function collectNeededEntityPacks(opts: {
   }
   for (const p of opts.players ?? []) {
     consider(p.x, p.y, packForPlayerClothingSkin(p.clothingSkin ?? 1));
+  }
+  for (const wolf of opts.coywolves ?? []) {
+    consider(wolf.x, wolf.y, "coywolf");
   }
 
   needed.add("zombie-1");
@@ -481,7 +491,7 @@ export function preloadNearbyEntityPacks(
         }
         onPackLoaded(scene, id);
         const extras =
-          id === "zombie-6" || id === "zombie-10"
+          id === "zombie-6" || id === "zombie-10" || id === "coywolf"
             ? queueMissingPackImages(scene, id)
             : 0;
         if (extras > 0) {

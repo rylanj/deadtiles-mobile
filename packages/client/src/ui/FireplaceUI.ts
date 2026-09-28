@@ -1,6 +1,10 @@
 import {
+  COOK_SLOT_COUNT,
+  COOK_STAGE_MS,
   FIREPLACE_MAX_FUEL,
+  cookResultOf,
   countItemInInventory,
+  isRawMeat,
   fireplaceIsActive,
   findFirstItemSlot,
   getEntryDurability,
@@ -12,12 +16,18 @@ import {
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import {
+  bindSlotPointerDnD,
+  cancelAllSlotDrags,
+  type SlotTapState,
+} from "./slotPointerDnD";
 
 export type FireplaceUIHandlers = {
   onClose: () => void;
   onAddWood: () => void;
   onLight: () => void;
   onExtinguish: () => void;
+  onCookSlot: (slot: number, itemId?: string) => void;
 };
 
 export type FireplaceUIState = {
@@ -27,6 +37,10 @@ export type FireplaceUIState = {
   activeUntil: number;
   inventoryJson: string;
   hasLighter: boolean;
+  /** Panel title. Warehouses use Furnace; player fireplaces stay Fireplace. */
+  title?: string;
+  /** Null hides cooking. Warehouse furnaces do not cook. */
+  cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
 };
 
 function makeReqCell(opts: {
@@ -69,6 +83,16 @@ export class FireplaceUI {
   private addBtn: HTMLButtonElement;
   private lightBtn: HTMLButtonElement;
   private extinguishBtn: HTMLButtonElement;
+  private titleEl: HTMLHeadingElement;
+  private titleName = "Fireplace";
+  private cookSlots: { itemId: string; stageStartedAt: number }[] | null = null;
+  private cookSectionEl: HTMLElement;
+  private cookRowEl: HTMLElement;
+  private packSectionEl!: HTMLElement;
+  private packRowEl!: HTMLElement;
+  private cookTimerEls: HTMLElement[] = [];
+  private cookTimer: number | null = null;
+  private lastTap: SlotTapState = null;
 
   constructor(private handlers: FireplaceUIHandlers) {
     this.overlay = document.createElement("div");
@@ -88,6 +112,7 @@ export class FireplaceUI {
     const title = document.createElement("h2");
     title.className = "inventory-title";
     title.textContent = "Fireplace";
+    this.titleEl = title;
     headerTop.append(
       title,
       createDialogCloseButton(() => this.handlers.onClose()),
@@ -105,6 +130,33 @@ export class FireplaceUI {
 
     this.fuelRowEl = document.createElement("div");
     this.fuelRowEl.className = "fireplace-fuel-row";
+
+    this.cookSectionEl = document.createElement("div");
+    this.cookSectionEl.className = "fireplace-cook-section";
+    this.cookSectionEl.hidden = true;
+    const cookLabel = document.createElement("div");
+    cookLabel.className = "fireplace-section-label";
+    cookLabel.textContent = "Meat";
+    const cookHint = document.createElement("div");
+    cookHint.className = "inventory-hint fireplace-cook-hint";
+    cookHint.textContent =
+      "Drag raw meat onto the fire. Click a piece to take it back.";
+    this.cookRowEl = document.createElement("div");
+    this.cookRowEl.className = "fireplace-cook-row";
+    this.packSectionEl = document.createElement("div");
+    this.packSectionEl.className = "fireplace-pack-drop";
+    const packLabel = document.createElement("div");
+    packLabel.className = "fireplace-section-label";
+    packLabel.textContent = "In pack";
+    this.packRowEl = document.createElement("div");
+    this.packRowEl.className = "fireplace-pack-row";
+    this.packSectionEl.append(packLabel, this.packRowEl);
+    this.cookSectionEl.append(
+      cookLabel,
+      cookHint,
+      this.cookRowEl,
+      this.packSectionEl,
+    );
 
     const fuelActions = document.createElement("div");
     fuelActions.className = "fireplace-actions";
@@ -155,6 +207,7 @@ export class FireplaceUI {
     body.append(
       fuelLabel,
       this.fuelRowEl,
+      this.cookSectionEl,
       fuelActions,
       this.lightSectionEl,
     );
@@ -184,6 +237,7 @@ export class FireplaceUI {
     this.overlay.hidden = false;
     document.body.classList.add("fireplace-open");
     this.render();
+    this.startCookTimer();
     resetDialogScroll(this.overlay);
   }
 
@@ -203,13 +257,21 @@ export class FireplaceUI {
     this.activeUntil = 0;
     this.hasLighter = false;
     this.inventory = [];
+    this.cookSlots = null;
+    this.cookTimerEls = [];
+    this.lastTap = null;
+    cancelAllSlotDrags();
+    this.stopCookTimer();
   }
 
   private applyState(state: FireplaceUIState) {
     this.fuelWood = Math.max(0, Math.min(FIREPLACE_MAX_FUEL, state.fuelWood));
     this.activeUntil = state.activeUntil;
     this.hasLighter = state.hasLighter;
+    this.titleName = state.title?.trim() || "Fireplace";
+    this.titleEl.textContent = this.titleName;
     this.inventory = parseInventory(state.inventoryJson);
+    this.cookSlots = state.cookSlots === undefined ? null : state.cookSlots;
   }
 
   private render() {
@@ -246,7 +308,7 @@ export class FireplaceUI {
     this.addBtn.title = canAdd
       ? "Add 1 wood (+10 minutes if burning)"
       : this.fuelWood >= FIREPLACE_MAX_FUEL
-        ? "Fireplace is full"
+        ? `${this.titleName} is full`
         : "No wood in inventory";
 
     this.extinguishBtn.hidden = !burning;
@@ -283,5 +345,202 @@ export class FireplaceUI {
           ? "Add wood first"
           : "Need a lighter with uses remaining";
     }
+
+    this.renderCookSlots();
+    this.paintCookTimers();
+  }
+
+  private renderCookSlots() {
+    cancelAllSlotDrags();
+    const slots = this.cookSlots;
+    this.cookSectionEl.hidden = !slots;
+    this.cookRowEl.replaceChildren();
+    this.packRowEl.replaceChildren();
+    this.cookTimerEls = [];
+    if (!slots) return;
+
+    const rawCount = this.countRawMeat();
+    const count = Math.max(COOK_SLOT_COUNT, slots.length);
+    for (let i = 0; i < count; i++) {
+      const slot = slots[i] ?? { itemId: "", stageStartedAt: 0 };
+      const cell = document.createElement("div");
+      cell.className = "inventory-cell fireplace-fuel-cell fireplace-cook-cell";
+      cell.dataset.cookIndex = String(i);
+      cell.dataset.filled = slot.itemId.length > 0 ? "1" : "0";
+      cell.tabIndex = 0;
+      const filled = slot.itemId.length > 0;
+      if (filled) {
+        cell.classList.add("inventory-cell--filled");
+        const def = getItemDefinition(slot.itemId);
+        if (appendItemIcon(cell, slot.itemId, "inventory-cell-icon")) {
+          cell.classList.add("inventory-cell--has-icon");
+        }
+        cell.title = def
+          ? `${def.name}. Click or drag it off the fire`
+          : "Click or drag it off the fire";
+        cell.setAttribute("aria-label", cell.title);
+        this.bindCookDrag(cell, i);
+      } else {
+        cell.classList.add("fireplace-fuel-cell--empty");
+        cell.title = rawCount > 0 ? "Drop raw meat" : "Needs raw meat";
+        cell.setAttribute("aria-label", cell.title);
+      }
+      const timer = document.createElement("span");
+      timer.className = "inventory-cell-qty";
+      cell.appendChild(timer);
+      this.cookTimerEls.push(timer);
+      cell.addEventListener("click", () => this.handlers.onCookSlot(i));
+      cell.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        this.handlers.onCookSlot(i);
+      });
+      this.cookRowEl.appendChild(cell);
+    }
+    this.renderPackMeat();
+  }
+
+  private countRawMeat(): number {
+    let total = 0;
+    for (const slot of this.inventory) {
+      if (slot && isRawMeat(slot.id)) total += slot.quantity;
+    }
+    return total;
+  }
+
+  /** Raw meat in the player's pack. Drag a stack onto an empty fire slot. */
+  private renderPackMeat() {
+    const stacks: { index: number; itemId: string; quantity: number; name: string }[] = [];
+    for (let i = 0; i < this.inventory.length; i++) {
+      const slot = this.inventory[i];
+      if (!slot || slot.quantity <= 0 || !isRawMeat(slot.id)) continue;
+      stacks.push({
+        index: i,
+        itemId: slot.id,
+        quantity: slot.quantity,
+        name: getItemDefinition(slot.id)?.name ?? "Raw meat",
+      });
+    }
+    if (stacks.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "fireplace-pack-empty";
+      empty.textContent = "No raw meat";
+      this.packRowEl.appendChild(empty);
+      return;
+    }
+    for (const stack of stacks) {
+      const cell = document.createElement("div");
+      cell.className =
+        "inventory-cell fireplace-fuel-cell fireplace-pack-cell inventory-cell--filled";
+      cell.dataset.packSlot = String(stack.index);
+      cell.dataset.meatId = stack.itemId;
+      cell.title = `Drag ${stack.name} onto the fire`;
+      cell.setAttribute("aria-label", `${stack.name} ×${stack.quantity}`);
+      if (appendItemIcon(cell, stack.itemId, "inventory-cell-icon")) {
+        cell.classList.add("inventory-cell--has-icon");
+      }
+      if (stack.quantity > 1) {
+        const qty = document.createElement("span");
+        qty.className = "inventory-cell-qty";
+        qty.textContent = String(stack.quantity);
+        cell.appendChild(qty);
+      }
+      this.bindPackDrag(cell);
+      this.packRowEl.appendChild(cell);
+    }
+  }
+
+  private bindPackDrag(cell: HTMLElement) {
+    bindSlotPointerDnD({
+      cell,
+      root: this.overlay,
+      tapKey: `fire-pack:${cell.dataset.packSlot ?? ""}`,
+      getLastTap: () => this.lastTap,
+      setLastTap: (tap) => {
+        this.lastTap = tap;
+      },
+      resolveTarget: (el) => this.cookDropTarget(el),
+      canDropOn: (target) => target.dataset.filled === "0",
+      onDropOn: (target) => {
+        const slot = Number(target.dataset.cookIndex);
+        const meatId = cell.dataset.meatId;
+        if (Number.isInteger(slot) && meatId) this.handlers.onCookSlot(slot, meatId);
+      },
+      clearHover: () => this.clearCookDragHover(),
+      setHover: (target, valid) => {
+        target.classList.toggle("inventory-cell--drag-over", valid);
+        target.classList.toggle("inventory-cell--drag-invalid", !valid);
+      },
+    });
+  }
+
+  private bindCookDrag(cell: HTMLElement, cookIndex: number) {
+    bindSlotPointerDnD({
+      cell,
+      root: this.overlay,
+      tapKey: `fire-cook:${cookIndex}`,
+      getLastTap: () => this.lastTap,
+      setLastTap: (tap) => {
+        this.lastTap = tap;
+      },
+      resolveTarget: () => this.packSectionEl,
+      canDropOn: () => true,
+      onDropOn: () => this.handlers.onCookSlot(cookIndex),
+      clearHover: () => this.clearCookDragHover(),
+      setHover: (target, valid) => {
+        target.classList.toggle("inventory-cell--drag-over", valid);
+        target.classList.toggle("inventory-cell--drag-invalid", !valid);
+      },
+    });
+  }
+
+  /** Empty cook slot under the pointer, or the first empty slot if they drop on the row. */
+  private cookDropTarget(el: Element | null): HTMLElement | null {
+    const hit = el?.closest?.(".fireplace-cook-cell") as HTMLElement | null;
+    if (hit && this.overlay.contains(hit)) return hit;
+    if (
+      el?.closest?.(".fireplace-cook-row") ||
+      el?.closest?.(".fireplace-cook-section")
+    ) {
+      if (el.closest(".fireplace-pack-drop")) return null;
+      return this.cookRowEl.querySelector<HTMLElement>(
+        ".fireplace-cook-cell[data-filled='0']",
+      );
+    }
+    return null;
+  }
+
+  private clearCookDragHover() {
+    this.overlay
+      .querySelectorAll(".inventory-cell--drag-over, .inventory-cell--drag-invalid, .fireplace-pack-drop.inventory-cell--drag-over")
+      .forEach((el) => {
+        el.classList.remove("inventory-cell--drag-over", "inventory-cell--drag-invalid");
+      });
+  }
+
+  private paintCookTimers() {
+    if (!this.cookSlots) return;
+    const burning = fireplaceIsActive(this.activeUntil);
+    const now = Date.now();
+    for (let i = 0; i < this.cookSlots.length; i++) {
+      const el = this.cookTimerEls[i];
+      const slot = this.cookSlots[i];
+      if (!el || !slot) continue;
+      const cooking =
+        burning && slot.stageStartedAt > 0 && cookResultOf(slot.itemId) != null;
+      const leftMs = COOK_STAGE_MS - (now - slot.stageStartedAt);
+      el.textContent = cooking ? `${Math.max(0, Math.ceil(leftMs / 1000))}s` : "";
+    }
+  }
+
+  private startCookTimer() {
+    this.stopCookTimer();
+    this.cookTimer = window.setInterval(() => this.paintCookTimers(), 250);
+  }
+
+  private stopCookTimer() {
+    if (this.cookTimer == null) return;
+    window.clearInterval(this.cookTimer);
+    this.cookTimer = null;
   }
 }

@@ -1,4 +1,5 @@
 import { isStructureBuildKind, type StructureBuildKind } from "./buildCosts.js";
+import { COOK_SLOT_COUNT, isRawMeat } from "./cooking.js";
 import type { FreeAimSurface } from "./combat.js";
 import {
   isStructureFenceFacing,
@@ -41,6 +42,10 @@ export type SearchMessage = {
 
 export type LootZombieMessage = {
   zombieId: string;
+};
+
+export type LootCoyoteMessage = {
+  coywolfId: string;
 };
 
 export type LootGuardMessage = {
@@ -206,6 +211,15 @@ export type FireplaceLightMessage = {
   y: number;
 };
 
+/** Place one raw meat into an empty cook slot, or take the piece already there. */
+export type FireplaceCookMessage = {
+  x: number;
+  y: number;
+  slot: number;
+  /** Raw meat to place. Omitted on take, and on a click that uses the first raw stack. */
+  itemId?: string;
+};
+
 /** Extinguish an active Fireplace1 (wood + partial burn time preserved). */
 export type FireplaceExtinguishMessage = {
   x: number;
@@ -300,6 +314,7 @@ export type ClientMessage =
   | { type: "searchStart"; payload: SearchMessage }
   | { type: "searchCancel" }
   | { type: "lootZombieStart"; payload: LootZombieMessage }
+  | { type: "lootCoyoteStart"; payload: LootCoyoteMessage }
   | { type: "lootGuardStart"; payload: LootGuardMessage }
   | { type: "lootPlayerStart"; payload: LootPlayerMessage }
   | { type: "equipWeapon"; payload: EquipWeaponMessage }
@@ -328,6 +343,7 @@ export type ClientMessage =
   | { type: "fireplaceAddWood"; payload: FireplaceAddWoodMessage }
   | { type: "fireplaceLight"; payload: FireplaceLightMessage }
   | { type: "fireplaceExtinguish"; payload: FireplaceExtinguishMessage }
+  | { type: "fireplaceCook"; payload: FireplaceCookMessage }
   | { type: "fireplaceClose" }
   | { type: "chopTree"; payload: ChopTreeMessage }
   | { type: "placeTempWall"; payload: PlaceTempWallMessage }
@@ -457,6 +473,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     case "lootZombieStart": {
       if (!isIdString(p.zombieId)) return null;
       return { type, payload: { zombieId: p.zombieId } };
+    }
+    case "lootCoyoteStart": {
+      if (!isIdString(p.coywolfId)) return null;
+      return { type, payload: { coywolfId: p.coywolfId } };
     }
     case "lootGuardStart": {
       if (!isIdString(p.guardId)) return null;
@@ -623,6 +643,24 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!Number.isInteger(p.x) || !Number.isInteger(p.y)) return null;
       if (typeof p.code !== "string" || !/^[0-9]{4,8}$/.test(p.code)) return null;
       return { type, payload: { x: p.x, y: p.y, code: p.code } };
+    }
+    case "fireplaceCook": {
+      if (!isFiniteNum(p.x) || !isFiniteNum(p.y)) return null;
+      if (!Number.isInteger(p.x) || !Number.isInteger(p.y)) return null;
+      if (Math.abs(p.x) > 1e7 || Math.abs(p.y) > 1e7) return null;
+      if (!isIntInRange(p.slot, 0, COOK_SLOT_COUNT - 1)) return null;
+      if (p.itemId != null && (typeof p.itemId !== "string" || !isRawMeat(p.itemId))) {
+        return null;
+      }
+      return {
+        type,
+        payload: {
+          x: p.x,
+          y: p.y,
+          slot: p.slot,
+          ...(typeof p.itemId === "string" ? { itemId: p.itemId } : {}),
+        },
+      };
     }
     case "fireplaceOpen":
     case "fireplaceAddWood":
@@ -824,6 +862,8 @@ export type ServerMessage =
         workbenchId: string;
         inventoryJson: string;
         crafted?: { id: string; quantity: number; name: string };
+        salvaged?: { id: string; quantity: number; name: string }[];
+        ruined?: { name: string }[];
       };
     }
   | {
@@ -838,6 +878,9 @@ export type ServerMessage =
         activeUntil: number;
         inventoryJson: string;
         hasLighter: boolean;
+        title?: string;
+        /** Null on warehouse furnaces, which do not cook. */
+        cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
       };
     }
   | {
@@ -852,6 +895,8 @@ export type ServerMessage =
         activeUntil: number;
         inventoryJson: string;
         hasLighter: boolean;
+        title?: string;
+        cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
       };
     }
   | { type: "shotMissed"; payload: { targetId: string; impactX: number; impactY: number; weaponIndex: number } }
@@ -983,6 +1028,8 @@ export type ServerMessage =
         buildingY?: number;
         fuelWood: number;
         activeUntil: number;
+        /** Set for interior mantels and furnaces so outdoor clients can tell them apart. */
+        objectType?: string;
       };
     }
   | {

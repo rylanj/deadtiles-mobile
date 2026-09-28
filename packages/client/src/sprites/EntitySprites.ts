@@ -36,6 +36,10 @@ import {
   normalizeRedManSkin,
   RED_MAN_SKIN_COUNT,
   TREE_FALL_FRAMES,
+  TILE_HEIGHT,
+  COYWOLF_RENDER_HEIGHT,
+  COYWOLF_RUN_FRAMES,
+  COYWOLF_WALK_FRAMES,
   type DirectionLabel,
   type IdleWeaponKey,
 } from "@zombie/shared";
@@ -97,6 +101,11 @@ const ZOMBIE_CRAWL_ORIGIN_Y: Partial<
 function zombieCrawlOriginY(skin: number, dir: DirectionLabel): number {
   return ZOMBIE_CRAWL_ORIGIN_Y[skin]?.[dir] ?? ZOMBIE_FEET_ORIGIN_Y;
 }
+
+/** Screen-Y drop so a crawler sits 20% of a tile lower than a standing body. */
+export const ZOMBIE_CRAWL_TILE_DROP_PX = TILE_HEIGHT * 0.2;
+/** Screen-Y drop so a coyote sits 20% of a tile lower than a standing body. */
+export const COYWOLF_TILE_DROP_PX = TILE_HEIGHT * 0.2;
 const HUMAN_FEET_ORIGIN_Y = 0.95;
 const HUMAN_DIE_FEET_ORIGIN_Y = 0.95;
 /** Sit frame includes the campchair; match CampChair1 (raised 10% from the prior seat). */
@@ -146,6 +155,42 @@ export function zombieCrawlFrameKey(dir: DirectionLabel, frame: number, skin = Z
 
 export function zombieDieFrameKey(dir: DirectionLabel, frame: number, skin = 1) {
   return `zombieman${skin}-die-${dir}-${animFrameTag(frame)}`;
+}
+
+export function coywolfIdleKey(dir: DirectionLabel) {
+  return `coywolf-idle-${dir}`;
+}
+
+export function coywolfWalkFrameKey(dir: DirectionLabel, frame: number) {
+  return `coywolf-walk-${dir}-${animFrameTag(frame)}`;
+}
+
+export function coywolfRunFrameKey(dir: DirectionLabel, frame: number) {
+  return `coywolf-run-${dir}-${animFrameTag(frame)}`;
+}
+
+export function coywolfDieFrameKey(dir: DirectionLabel, frame: number) {
+  return `coywolf-die-${dir}-${animFrameTag(frame)}`;
+}
+
+const COYWOLF_FEET_ORIGIN_Y = 0.92;
+/**
+ * Idle art fills more of its canvas than walk, so the same height makes a
+ * standing coyote look larger.
+ */
+const COYWOLF_IDLE_RENDER_SCALE = 0.85;
+
+function applyCoywolfFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  textureKey: string,
+  renderHeight = COYWOLF_RENDER_HEIGHT,
+) {
+  applyEntitySpriteFrame(
+    sprite,
+    textureKey,
+    COYWOLF_FEET_ORIGIN_Y,
+    renderHeight,
+  );
 }
 
 /** @deprecated — Survivor1 weapon-specific idle. */
@@ -676,7 +721,7 @@ function applyZombieWalkFrame(
         sprite,
         crawl,
         zombieCrawlOriginY(resolved, dir),
-        zombieRenderHeight(skin),
+        zombieRenderHeight(skin, true),
       );
       return;
     }
@@ -1252,7 +1297,7 @@ function resolvePlayerIdleWeapon(state: EntityVisualState): string | undefined {
 
 export function updateEntityVisual(
   sprite: Phaser.GameObjects.Sprite,
-  kind: "player" | "zombie" | "guard",
+  kind: "player" | "zombie" | "guard" | "coywolf",
   state: EntityVisualState,
 ) {
   const dir = DIRECTION_LABELS[((state.facing % 8) + 8) % 8]!;
@@ -1262,6 +1307,28 @@ export function updateEntityVisual(
 
   sprite.setVisible(true);
   sprite.setActive(true);
+
+  if (kind === "coywolf") {
+    if (isDead) {
+      const frame = Math.min(9, Math.max(1, (state.dieFrame ?? 0) + 1));
+      applyCoywolfFrame(sprite, coywolfDieFrameKey(dir, frame));
+    } else if (isRunning) {
+      const frame = (Math.floor(state.animFrame) % COYWOLF_RUN_FRAMES) + 1;
+      applyCoywolfFrame(sprite, coywolfRunFrameKey(dir, frame));
+    } else if (isWalking) {
+      const frame = (Math.floor(state.animFrame) % COYWOLF_WALK_FRAMES) + 1;
+      applyCoywolfFrame(sprite, coywolfWalkFrameKey(dir, frame));
+    } else {
+      applyCoywolfFrame(
+        sprite,
+        coywolfIdleKey(dir),
+        COYWOLF_RENDER_HEIGHT * COYWOLF_IDLE_RENDER_SCALE,
+      );
+    }
+    sprite.setAngle(0);
+    sprite.setAlpha(1);
+    return;
+  }
 
   if (kind === "guard") {
     const npcKind = state.guardNpcKind ?? GUARD_NPC_HUMAN;
@@ -1430,7 +1497,7 @@ export function updateEntityVisual(
       sprite,
       key,
       key === crawlIdle ? zombieCrawlOriginY(zombieSkin, dir) : ZOMBIE_FEET_ORIGIN_Y,
-      zombieRenderHeight(zombieSkin),
+      zombieRenderHeight(zombieSkin, key === crawlIdle),
     );
     sprite.setAngle(0);
     sprite.setAlpha(1);

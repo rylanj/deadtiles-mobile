@@ -1,4 +1,4 @@
-import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceSpan, getPlayerSpawnFootprint, seededRandom, type BuildingInfo } from "./worldgen.js";
+import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceSpan, getPlayerSpawnFootprint, houseChimneyInteriorTiles, seededRandom, type BuildingInfo } from "./worldgen.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
 import { isBirchportHospital, isBuildingInBirchport } from "./birchport.js";
 
@@ -201,6 +201,10 @@ export const FURNITURE_TYPES = [
   "canteenchair",
   /** Barracks tent floor lantern. Not loot. */
   "lantern1",
+  /** Warehouse Furnace1. Fueled like a fireplace. Not loot. */
+  "furnace",
+  /** House Mantel1. Fueled like a fireplace, aligned to the chimney. Not loot. */
+  "mantel",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -262,6 +266,8 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   canteentable3: "Canteen Table",
   canteenchair: "Canteen Chair",
   lantern1: "Lantern",
+  furnace: "Furnace",
+  mantel: "Fireplace",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -341,6 +347,8 @@ export function furnitureFootprint(
         : furnitureFacing("kitchensink");
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
+  // Workbench1 — SE only. 2×1 along the NE–SW wall (same span as DinnerTable1 SE).
+  if (objectType === "workbench") return { w: 1, h: 2 };
   // DinnerTable1 — 2×1 freestanding kitchen table (SE + SW art).
   if (objectType === "dinnertable") {
     const f =
@@ -425,6 +433,14 @@ export function furnitureFootprint(
         : furnitureFacing(objectType);
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
+  // Mantel1 — 2 tiles along the chimney wall (SE on the west wall, SW on the north).
+  if (objectType === "mantel") {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing("mantel");
+    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
+  }
   // MedicalReception1 — SW only: 3×2 lobby desk (same span as Checkout1 SW).
   if (objectType === "medicalreception") return { w: 3, h: 2 };
   // ThreeSeater / 2 / 3 — SE waiting bench, 1×2 footprint.
@@ -503,6 +519,8 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   canteentable3: "SE",
   canteenchair: "SE",
   lantern1: "SE",
+  furnace: "SE",
+  mantel: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -609,6 +627,11 @@ const BULLET_BLOCKING_FURNITURE = new Set([
 
 export function furnitureBlocksBullets(objectType: string): boolean {
   return BULLET_BLOCKING_FURNITURE.has(objectType);
+}
+
+/** Furnace1 or house Mantel1. Opens the wood-fuel UI, not a loot container. */
+export function furnitureIsFurnace(objectType: string): boolean {
+  return objectType === "furnace" || objectType === "mantel";
 }
 
 export function searchableFootprint(obj: {
@@ -882,6 +905,10 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   canteenchair: 1,
   /** Barracks tents only — placed by layout, never rolled. */
   lantern1: 0,
+  /** Warehouses — at most one Furnace1. */
+  furnace: 0.5,
+  /** Houses with a chimney — placed on that wall, never rolled. */
+  mantel: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -1242,7 +1269,6 @@ function placeWarehouseWorkbench(
   if (!guaranteed && rng() >= FURNITURE_SPAWN_CHANCE.workbench) return [];
 
   const { w, h } = furnitureFootprint("workbench");
-  const { dx, dy } = ISO_FACING_TILE_DELTA[furnitureFacing("workbench")];
 
   const candidates: { x: number; y: number }[] = [];
   for (let y = 0; y <= iH - h; y++) {
@@ -1257,12 +1283,29 @@ function placeWarehouseWorkbench(
         }
       }
       if (blocked) continue;
-      // SE approach tile must exist and be free so the piece is searchable.
-      const ax = x + dx;
-      const ay = y + dy;
-      if (ax < 0 || ay < 0 || ax >= iW || ay >= iH) continue;
-      if (ax === exitX && ay === exitY) continue;
-      if (occupied.has(`${ax},${ay}`)) continue;
+      const approaches = furnitureFrontApproachTiles({
+        kind: "furniture",
+        objectType: "workbench",
+        x,
+        y,
+      });
+      if (approaches.length === 0) continue;
+      let approachBlocked = false;
+      for (const tile of approaches) {
+        if (tile.x < 0 || tile.y < 0 || tile.x >= iW || tile.y >= iH) {
+          approachBlocked = true;
+          break;
+        }
+        if (tile.x === exitX && tile.y === exitY) {
+          approachBlocked = true;
+          break;
+        }
+        if (occupied.has(`${tile.x},${tile.y}`)) {
+          approachBlocked = true;
+          break;
+        }
+      }
+      if (approachBlocked) continue;
       candidates.push({ x, y });
     }
   }
@@ -1271,6 +1314,14 @@ function placeWarehouseWorkbench(
   const pick = candidates[Math.floor(rng() * candidates.length)]!;
   for (let ty = pick.y; ty < pick.y + h; ty++) {
     for (let tx = pick.x; tx < pick.x + w; tx++) occupied.add(`${tx},${ty}`);
+  }
+  for (const tile of furnitureFrontApproachTiles({
+    kind: "furniture",
+    objectType: "workbench",
+    x: pick.x,
+    y: pick.y,
+  })) {
+    occupied.add(`${tile.x},${tile.y}`);
   }
 
   return [
@@ -1288,8 +1339,205 @@ function placeWarehouseWorkbench(
 }
 
 /**
+ * Furnace1 flush against a warehouse wall. At most one.
+ * SE art sits on the NW wall. SW art sits on the NE wall.
+ * Placed after shelves and the workbench so those ids stay stable.
+ */
+function placeWarehouseFurnace(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exitX: number,
+  exitY: number,
+  rng: () => number,
+  occupied: Set<string>,
+  startIndex: number,
+  existing: readonly SearchableObject[],
+): SearchableObject[] {
+  if (rng() >= FURNITURE_SPAWN_CHANCE.furnace) return [];
+
+  // Keep the front tile of shelves and the workbench clear.
+  const reservedApproach = new Set<string>();
+  for (const obj of existing) {
+    for (const tile of furnitureFrontApproachTiles(obj)) {
+      reservedApproach.add(`${tile.x},${tile.y}`);
+    }
+  }
+
+  const spotBlocked = (x: number, y: number) =>
+    (x === exitX && y === exitY) ||
+    occupied.has(`${x},${y}`) ||
+    reservedApproach.has(`${x},${y}`);
+
+  const candidates: { x: number; y: number; facing: FurnitureFacing }[] = [];
+  const consider = (x: number, y: number, facing: FurnitureFacing) => {
+    if (spotBlocked(x, y)) return;
+    const { dx, dy } = ISO_FACING_TILE_DELTA[facing];
+    const ax = x + dx;
+    const ay = y + dy;
+    if (ax < 0 || ay < 0 || ax >= iW || ay >= iH) return;
+    if (ax === exitX && ay === exitY) return;
+    if (occupied.has(`${ax},${ay}`)) return;
+    candidates.push({ x, y, facing });
+  };
+
+  // NW wall: back against the wall, SE face into the room.
+  for (let y = 0; y < iH; y++) consider(0, y, "SE");
+  // NE wall: back against the wall, SW face into the room.
+  for (let x = 0; x < iW; x++) consider(x, 0, "SW");
+
+  if (candidates.length === 0) return [];
+
+  const pick = candidates[Math.floor(rng() * candidates.length)]!;
+  occupied.add(`${pick.x},${pick.y}`);
+
+  return [
+    {
+      id: interiorSearchableId(bx, by, "furniture", startIndex),
+      kind: "furniture",
+      objectType: "furnace",
+      x: pick.x,
+      y: pick.y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing: pick.facing,
+    },
+  ];
+}
+
+/**
+ * Mantel1 flush to the chimney wall. One exterior chimney tile covers two
+ * interior tiles along that wall, so the hearth spans both and sits on the
+ * same stretch of wall as the stack outside.
+ * SE art: west wall (x = 0). SW art: north wall (y = 0).
+ */
+export type HouseMantelSpot = {
+  x: number;
+  y: number;
+  facing: "SE" | "SW";
+  w: number;
+  h: number;
+};
+
+export function houseMantelSpot(
+  bld: Pick<BuildingInfo, "ox" | "oy" | "w" | "h" | "chimneyX" | "chimneyY">,
+): HouseMantelSpot | null {
+  const band = houseChimneyInteriorTiles(bld);
+  if (!band || band.tiles.length < 2) return null;
+  if (band.wall === "NE") {
+    const x = Math.min(...band.tiles.map((t) => t.x));
+    return { x, y: 0, facing: "SW", w: 2, h: 1 };
+  }
+  const y = Math.min(...band.tiles.map((t) => t.y));
+  return { x: 0, y, facing: "SE", w: 1, h: 2 };
+}
+
+function placeHouseMantel(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exitX: number,
+  exitY: number,
+  occupied: Set<string>,
+  startIndex: number,
+): SearchableObject[] {
+  const bld = getBuildingAt(bx, by);
+  if (!bld || bld.buildingType !== "house") return [];
+  const spot = houseMantelSpot(bld);
+  if (!spot) return [];
+  if (spot.x < 0 || spot.y < 0 || spot.x + spot.w > iW || spot.y + spot.h > iH) {
+    return [];
+  }
+
+  const { dx, dy } = ISO_FACING_TILE_DELTA[spot.facing];
+  for (let ty = spot.y; ty < spot.y + spot.h; ty++) {
+    for (let tx = spot.x; tx < spot.x + spot.w; tx++) {
+      if (tx === exitX && ty === exitY) return [];
+      const ax = tx + dx;
+      const ay = ty + dy;
+      if (ax < 0 || ay < 0 || ax >= iW || ay >= iH) return [];
+      if (ax === exitX && ay === exitY) return [];
+    }
+  }
+
+  // The hearth wins over anything already reserved on its tiles.
+  for (let ty = spot.y; ty < spot.y + spot.h; ty++) {
+    for (let tx = spot.x; tx < spot.x + spot.w; tx++) {
+      occupied.add(`${tx},${ty}`);
+    }
+  }
+  for (let ty = spot.y; ty < spot.y + spot.h; ty++) {
+    for (let tx = spot.x; tx < spot.x + spot.w; tx++) {
+      occupied.add(`${tx + dx},${ty + dy}`);
+    }
+  }
+
+  return [
+    {
+      id: interiorSearchableId(bx, by, "furniture", startIndex),
+      kind: "furniture",
+      objectType: "mantel",
+      x: spot.x,
+      y: spot.y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing: spot.facing,
+    },
+  ];
+}
+
+/** Bedroom and kitchen pieces keep a tile of space from the mantel. */
+const MANTEL_CLEARANCE = 1;
+
+function activeHouseMantelTiles(
+  bx: number,
+  by: number,
+  occupied: Set<string>,
+): { x: number; y: number }[] | null {
+  const bld = getBuildingAt(bx, by);
+  if (!bld) return null;
+  const spot = houseMantelSpot(bld);
+  if (!spot || !occupied.has(`${spot.x},${spot.y}`)) return null;
+  const tiles: { x: number; y: number }[] = [];
+  for (let ty = spot.y; ty < spot.y + spot.h; ty++) {
+    for (let tx = spot.x; tx < spot.x + spot.w; tx++) {
+      tiles.push({ x: tx, y: ty });
+    }
+  }
+  return tiles;
+}
+
+function footprintTooCloseToMantel(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  mantel: { x: number; y: number }[] | null,
+): boolean {
+  if (!mantel) return false;
+  for (let ty = y; ty < y + h; ty++) {
+    for (let tx = x; tx < x + w; tx++) {
+      for (const tile of mantel) {
+        if (
+          Math.max(Math.abs(tx - tile.x), Math.abs(ty - tile.y)) <=
+          MANTEL_CLEARANCE
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Place Bed1 flush against the NW wall in residential (house) interiors.
  * SE-facing 2×1 footprint — headboard NW against the wall, foot SE; approach from the foot.
+ * Kept off the mantel so the bed is not parked against the fire.
  */
 function placeResidentialBed(
   bx: number,
@@ -1306,9 +1554,11 @@ function placeResidentialBed(
 
   const { w, h } = furnitureFootprint("bed");
   const { dx, dy } = ISO_FACING_TILE_DELTA[furnitureFacing("bed")];
+  const mantelTiles = activeHouseMantelTiles(bx, by, occupied);
 
   const canPlaceAt = (x: number, y: number) => {
     if (x < 0 || y < 0 || x + w > iW || y + h > iH) return false;
+    if (footprintTooCloseToMantel(x, y, w, h, mantelTiles)) return false;
     for (let ty = y; ty < y + h; ty++) {
       for (let tx = x; tx < x + w; tx++) {
         if (tx === exitX && ty === exitY) return false;
@@ -1369,8 +1619,10 @@ function placeGenericFurniture(
   exitY: number,
   rng: () => number,
   occupied: Set<string>,
+  startIndex = 0,
 ): SearchableObject[] {
   // Bed first so it claims a wall-flush slot before other furniture.
+  // A chimney mantel, when present, is already reserved.
   const furnitures = placeResidentialBed(
     bx,
     by,
@@ -1380,8 +1632,9 @@ function placeGenericFurniture(
     exitY,
     rng,
     occupied,
-    0,
+    startIndex,
   );
+  const mantelTiles = activeHouseMantelTiles(bx, by, occupied);
 
   const markOccupied = (x: number, y: number, w: number, h: number) => {
     for (let ty = y; ty < y + h; ty++) {
@@ -1439,7 +1692,7 @@ function placeGenericFurniture(
     }
   };
 
-  let furnitureIndex = furnitures.length;
+  let furnitureIndex = startIndex + furnitures.length;
 
   // Nightstand1 — optional, only beside a bed, flush to a wall (SE on NW / SW on NE).
   const bed = furnitures.find((f) => f.objectType === "bed");
@@ -1448,6 +1701,7 @@ function placeGenericFurniture(
     const candidates: { x: number; y: number; facing: FurnitureFacing }[] = [];
     // SE: NW wall (x=0), immediately north/south of the bed.
     for (const y of [bed.y - 1, bed.y + bh]) {
+      if (footprintTooCloseToMantel(0, y, 1, 1, mantelTiles)) continue;
       if (canPlaceFurniture("nightstand", 0, y, "SE")) {
         candidates.push({ x: 0, y, facing: "SE" });
       }
@@ -1455,7 +1709,10 @@ function placeGenericFurniture(
     // SW: NE wall (y=0), immediately east of the bed when the bed sits on that wall.
     if (bed.y === 0) {
       const x = bed.x + bw;
-      if (canPlaceFurniture("nightstand", x, 0, "SW")) {
+      if (
+        !footprintTooCloseToMantel(x, 0, 1, 1, mantelTiles) &&
+        canPlaceFurniture("nightstand", x, 0, "SW")
+      ) {
         candidates.push({ x, y: 0, facing: "SW" });
       }
     }
@@ -1490,6 +1747,7 @@ function placeGenericFurniture(
       current: { x: number; y: number; facing: FurnitureFacing; dist: number } | null;
     } = { current: null };
     const consider = (x: number, y: number, facing: FurnitureFacing) => {
+      if (footprintTooCloseToMantel(x, y, fw, fh, mantelTiles)) return;
       if (!canPlaceFurniture("fridge", x, y, facing)) return;
       // Require a free 2-tile sink slot beside the fridge on the same wall.
       const { w: sw, h: sh } = furnitureFootprint("kitchensink", facing);
@@ -1504,8 +1762,10 @@ function placeGenericFurniture(
               { x: 0, y: y + fh },
             ];
       if (
-        !sinkOrigins.some((n) =>
-          canPlaceFurniture("kitchensink", n.x, n.y, facing),
+        !sinkOrigins.some(
+          (n) =>
+            canPlaceFurniture("kitchensink", n.x, n.y, facing) &&
+            !footprintTooCloseToMantel(n.x, n.y, sw, sh, mantelTiles),
         )
       ) {
         return;
@@ -1557,6 +1817,7 @@ function placeGenericFurniture(
       }
       sinkOrigins.sort(() => rng() - 0.5);
       for (const n of sinkOrigins) {
+        if (footprintTooCloseToMantel(n.x, n.y, sw, sh, mantelTiles)) continue;
         if (!canPlaceFurniture("kitchensink", n.x, n.y, sinkFacing)) continue;
         furnitures.push({
           id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
@@ -1653,6 +1914,13 @@ function placeGenericFurniture(
     }
     for (const fy of rowOrder) {
       const fx = 0;
+      // Dressers read as bedroom furniture, so they stay off the hearth.
+      if (
+        type === "dresser" &&
+        footprintTooCloseToMantel(fx, fy, w, h, mantelTiles)
+      ) {
+        continue;
+      }
       if (!canPlaceFurniture(type, fx, fy)) continue;
       furnitures.push({
         id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
@@ -1697,6 +1965,7 @@ function placeGenericFurniture(
       for (let fy = 0; fy <= iH - th; fy++) {
         for (let fx = 0; fx <= iW - tw; fx++) {
           if (!canPlaceFurniture("dinnertable", fx, fy, facing)) continue;
+          if (footprintTooCloseToMantel(fx, fy, tw, th, mantelTiles)) continue;
           if (
             !dinnerTableNearBound(fx, fy, tw, th, 0, 0, iW - 1, iH - 1)
           ) {
@@ -4598,6 +4867,8 @@ export type HouseRoom = {
   entranceY: number;
   /** Partition tiles whose faces hide this room's furniture. */
   wallTiles: InteriorWallTile[];
+  /** Chimney mantel is on this bay's wall. Furnished as a living room. */
+  hearth?: boolean;
 };
 
 function houseRoomDoorAt(bayStart: number, inner: number): number {
@@ -4656,7 +4927,12 @@ function houseBayBlocksEntrance(room: HouseRoom, exit: InteriorExit): boolean {
  * first bay's door would open directly onto the SW-line's bay0 floor at the
  * NW corner (rooms would block each other's access).
  */
-function houseSeBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
+function houseSeBays(
+  iW: number,
+  iH: number,
+  exit?: InteriorExit,
+  mantel?: HouseMantelSpot | null,
+): HouseRoom[] {
   const DEPTH = HOUSE_ROOM_DEPTH;
   const INNER = HOUSE_ROOM_INNER;
   const PITCH = HOUSE_ROOM_PITCH;
@@ -4672,9 +4948,15 @@ function houseSeBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
     );
   }
   const bays: HouseRoom[] = [];
-  for (let k = 0; k < HOUSE_MAX_BAYS_PER_LINE; k++) {
-    const along = DEPTH + k * PITCH;
-    if (along + INNER > maxY1) break;
+  const spans: { a0: number; a1: number }[] = [];
+  const overlaps = (a0: number, a1: number) =>
+    spans.some((s) => a0 <= s.a1 && s.a0 <= a1);
+
+  const tryAdd = (along: number, hearth: boolean): boolean => {
+    if (along < 0 || along + INNER > maxY1) return false;
+    const a0 = along;
+    const a1 = along + PITCH;
+    if (overlaps(a0, a1)) return false;
     const doorY = houseRoomDoorAt(along, INNER);
     const wallTiles: InteriorWallTile[] = [];
     for (let x = 0; x <= DEPTH; x++) {
@@ -4685,7 +4967,7 @@ function houseSeBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
       if (y === doorY) continue;
       wallTiles.push({ x: DEPTH, y });
     }
-    bays.push({
+    const room: HouseRoom = {
       role: "bedroom",
       facing: "SE",
       x0: 0,
@@ -4695,13 +4977,38 @@ function houseSeBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
       entranceX: DEPTH,
       entranceY: doorY,
       wallTiles,
-    });
+      hearth,
+    };
+    if (exit && houseBayBlocksEntrance(room, exit)) return false;
+    bays.push(room);
+    spans.push({ a0, a1 });
+    return true;
+  };
+
+  // Chimney on the west wall: slide a bay so both hearth tiles are floor,
+  // and keep it out of the north-wall depth band.
+  if (mantel?.facing === "SE") {
+    for (const along of [mantel.y - 1, mantel.y - 2]) {
+      if (along < DEPTH) continue;
+      if (tryAdd(along, true)) break;
+    }
+  }
+
+  for (let k = 0; k < HOUSE_MAX_BAYS_PER_LINE; k++) {
+    const along = DEPTH + k * PITCH;
+    if (along + INNER > maxY1) break;
+    tryAdd(along, false);
   }
   return bays;
 }
 
 /** Bays lining the north wall (y = 0), stacked along X starting past the west-wall bays. */
-function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
+function houseSwBays(
+  iW: number,
+  iH: number,
+  exit?: InteriorExit,
+  mantel?: HouseMantelSpot | null,
+): HouseRoom[] {
   const DEPTH = HOUSE_ROOM_DEPTH;
   const INNER = HOUSE_ROOM_INNER;
   const PITCH = HOUSE_ROOM_PITCH;
@@ -4714,9 +5021,15 @@ function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
     );
   }
   const bays: HouseRoom[] = [];
-  for (let k = 0; k < HOUSE_MAX_BAYS_PER_LINE; k++) {
-    const along = DEPTH + k * PITCH;
-    if (along + INNER > maxX1) break;
+  const spans: { a0: number; a1: number }[] = [];
+  const overlaps = (a0: number, a1: number) =>
+    spans.some((s) => a0 <= s.a1 && s.a0 <= a1);
+
+  const tryAdd = (along: number, hearth: boolean): boolean => {
+    if (along < 0 || along + INNER > maxX1) return false;
+    const a0 = along;
+    const a1 = along + PITCH;
+    if (overlaps(a0, a1)) return false;
     const doorX = houseRoomDoorAt(along, INNER);
     const wallTiles: InteriorWallTile[] = [];
     for (let y = 0; y <= DEPTH; y++) {
@@ -4740,7 +5053,7 @@ function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
         wallTiles.push({ x, y: DEPTH });
       }
     }
-    bays.push({
+    const room: HouseRoom = {
       role: "kitchen",
       facing: "SW",
       x0: along + 1,
@@ -4750,9 +5063,47 @@ function houseSwBays(iW: number, iH: number, exit?: InteriorExit): HouseRoom[] {
       entranceX: doorX,
       entranceY: DEPTH,
       wallTiles,
-    });
+      hearth,
+    };
+    if (exit && houseBayBlocksEntrance(room, exit)) return false;
+    bays.push(room);
+    spans.push({ a0, a1 });
+    return true;
+  };
+
+  // Chimney on the north wall: slide a bay so both hearth tiles are floor.
+  if (mantel?.facing === "SW") {
+    for (const along of [mantel.x - 1, mantel.x - 2]) {
+      if (along < DEPTH) continue;
+      if (tryAdd(along, true)) break;
+    }
+  }
+
+  for (let k = 0; k < HOUSE_MAX_BAYS_PER_LINE; k++) {
+    const along = DEPTH + k * PITCH;
+    if (along + INNER > maxX1) break;
+    tryAdd(along, false);
   }
   return bays;
+}
+
+/** Drop partition tiles that would cut through a mantel or its stand tiles. */
+function stripHouseMantelWalls(
+  rooms: HouseRoom[],
+  mantel: HouseMantelSpot | null,
+): void {
+  if (!mantel) return;
+  const { dx, dy } = ISO_FACING_TILE_DELTA[mantel.facing];
+  const clear = new Set<string>();
+  for (let ty = mantel.y; ty < mantel.y + mantel.h; ty++) {
+    for (let tx = mantel.x; tx < mantel.x + mantel.w; tx++) {
+      clear.add(`${tx},${ty}`);
+      clear.add(`${tx + dx},${ty + dy}`);
+    }
+  }
+  for (const room of rooms) {
+    room.wallTiles = room.wallTiles.filter((w) => !clear.has(`${w.x},${w.y}`));
+  }
 }
 
 /**
@@ -4865,9 +5216,10 @@ function finalizeHouseRoomsWithEnclosedBounds(
 }
 
 /**
- * Deterministic room layout for a house-sized interior — bedroom + kitchen
- * when both wall lines fit, otherwise whichever bays clear the house entrance.
- * Grows to office/living room on bigger town/city footprints.
+ * Deterministic room layout for a house-sized interior. The fireplace bay
+ * is a living room. Bedroom and kitchen go in the other bays, so a small
+ * house may have one of those instead of both. Grows to office as well
+ * on bigger town/city footprints.
  *
  * Bays are clamped away from the overworld door so partition walls never sit
  * on the entrance row (hole-punching that row left open corners). Floor AABBs
@@ -4877,11 +5229,12 @@ function layoutHouseRooms(
   iW: number,
   iH: number,
   exit?: InteriorExit,
+  mantel?: HouseMantelSpot | null,
 ): HouseRoom[] {
-  const seBays = houseSeBays(iW, iH, exit).filter(
+  const seBays = houseSeBays(iW, iH, exit, mantel).filter(
     (room) => !exit || !houseBayBlocksEntrance(room, exit),
   );
-  const swBays = houseSwBays(iW, iH, exit).filter(
+  const swBays = houseSwBays(iW, iH, exit, mantel).filter(
     (room) => !exit || !houseBayBlocksEntrance(room, exit),
   );
   if (seBays.length === 0 && swBays.length === 0) return [];
@@ -4893,27 +5246,40 @@ function layoutHouseRooms(
     if (swBays[i]) ordered.push(swBays[i]!);
   }
 
+  stripHouseMantelWalls(ordered, mantel ?? null);
   finalizeHouseRoomsWithEnclosedBounds(ordered, iW, iH, exit);
+  assignHouseRoomRoles(ordered);
+  return ordered;
+}
 
-  // Assign roles: bedroom always the first SE bay, kitchen the next bay,
-  // then office/living room for whatever else fits.
-  let bedroomAssigned = false;
-  let kitchenAssigned = false;
-  const extraRoles: HouseRoomRole[] = ["office", "livingroom"];
+/**
+ * Fireplace bays stay living rooms. The first other west-wall bay is the
+ * bedroom (beds only face SE). The next other bay is the kitchen.
+ * Houses with no mantel keep the old order: first SE bay, then kitchen,
+ * then office and living room.
+ */
+function assignHouseRoomRoles(rooms: HouseRoom[]): void {
+  let bedroom: HouseRoom | undefined;
+  let kitchen: HouseRoom | undefined;
+  for (const room of rooms) {
+    if (room.hearth) continue;
+    if (!bedroom && room.facing === "SE") {
+      bedroom = room;
+      continue;
+    }
+    if (!kitchen) kitchen = room;
+  }
   let extraIdx = 0;
-  for (const room of ordered) {
-    if (!bedroomAssigned && room.facing === "SE") {
-      room.role = "bedroom";
-      bedroomAssigned = true;
-    } else if (!kitchenAssigned) {
-      room.role = "kitchen";
-      kitchenAssigned = true;
-    } else {
-      room.role = extraRoles[extraIdx % extraRoles.length]!;
+  const extras: HouseRoomRole[] = ["office", "livingroom"];
+  for (const room of rooms) {
+    if (room === bedroom) room.role = "bedroom";
+    else if (room === kitchen) room.role = "kitchen";
+    else if (room.hearth) room.role = "livingroom";
+    else {
+      room.role = extras[extraIdx % extras.length]!;
       extraIdx++;
     }
   }
-  return ordered;
 }
 
 /**
@@ -4936,7 +5302,13 @@ export function isMultiRoomHouseInterior(bx: number, by: number): boolean {
 export function houseRoomsForBuilding(bx: number, by: number): HouseRoom[] {
   if (!isMultiRoomHouseInterior(bx, by)) return [];
   const { iW, iH } = interiorDimensions(bx, by);
-  return layoutHouseRooms(iW, iH, interiorExitForBuildingAt(bx, by));
+  const bld = getBuildingAt(bx, by);
+  return layoutHouseRooms(
+    iW,
+    iH,
+    interiorExitForBuildingAt(bx, by),
+    bld ? houseMantelSpot(bld) : null,
+  );
 }
 
 /** Room containing this interior tile (floor or entrance), or null. */
@@ -5144,6 +5516,7 @@ function placeBedroomFurniture(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
+  reserveKitchenRun = false,
 ): SearchableObject[] {
   const furnitures: SearchableObject[] = [];
   let idx = startIndex;
@@ -5160,7 +5533,17 @@ function placeBedroomFurniture(
       slots.push(y);
     }
     if (slots.length > 0) {
-      const y = slots[Math.floor(rng() * slots.length)]!;
+      let y: number;
+      if (reserveKitchenRun) {
+        // Park the bed at an end so a sink still fits on this wall.
+        const ends = slots.filter(
+          (slot) => slot === room.y0 || slot === room.y1 - h + 1,
+        );
+        const pool = ends.length > 0 ? ends : slots;
+        y = pool[Math.floor(rng() * pool.length)]!;
+      } else {
+        y = slots[Math.floor(rng() * slots.length)]!;
+      }
       markHouseRoomOccupied(occupied, room.x0, y, w, h);
       for (const t of furnitureFrontApproachTiles({ kind: "furniture", objectType: "bed", x: room.x0, y })) {
         occupied.add(`${t.x},${t.y}`);
@@ -5179,7 +5562,7 @@ function placeBedroomFurniture(
     }
   }
 
-  if (bed && rng() < FURNITURE_SPAWN_CHANCE.nightstand) {
+  if (bed && !reserveKitchenRun && rng() < FURNITURE_SPAWN_CHANCE.nightstand) {
     const { h: bh } = furnitureFootprint("bed");
     const candidates: number[] = [];
     for (const y of [bed.y - 1, bed.y + bh]) {
@@ -5215,6 +5598,22 @@ function placeBedroomFurniture(
     }
   }
 
+  if (reserveKitchenRun) {
+    const kitchen = placeKitchenFurniture(
+      room,
+      bx,
+      by,
+      exitX,
+      exitY,
+      rng,
+      occupied,
+      idx,
+      true,
+    );
+    for (const piece of kitchen) furnitures.push(piece);
+    idx += kitchen.length;
+  }
+
   for (const type of ["dresser", "drawers", "guncabinet"] as const) {
     const placed = placeHouseWallItem(room, type, bx, by, exitX, exitY, rng, occupied, idx);
     if (placed) {
@@ -5236,6 +5635,7 @@ function placeKitchenFurniture(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
+  appliancesOnly = false,
 ): SearchableObject[] {
   const furnitures: SearchableObject[] = [];
   let idx = startIndex;
@@ -5396,7 +5796,7 @@ function placeKitchenFurniture(
   // DinnerTable1 after appliances — prefer the far end of the room (toward the
   // door wall), but stay within 1 tile of a room edge so it cannot sit mid-floor
   // and block fridge/sink access.
-  if (rng() < FURNITURE_SPAWN_CHANCE.dinnertable) {
+  if (!appliancesOnly && rng() < FURNITURE_SPAWN_CHANCE.dinnertable) {
     const tableFacings: FurnitureFacing[] =
       room.facing === "SE" ? ["SW", "SE"] : ["SE", "SW"];
     const tableSlots: {
@@ -5528,8 +5928,8 @@ function placeLivingRoomFurniture(
 }
 
 /**
- * Partitioned multi-room house — bedroom + kitchen always, plus office and/or
- * living room for bigger town/city footprints. `doors` are the room-entrance
+ * Partitioned multi-room house. The mantel bay is a living room. Bedroom
+ * and kitchen fill the other bays when they fit. `doors` are the room-entrance
  * gap tiles WorldRoom should materialize as real openable doors.
  */
 function placeHouseRooms(
@@ -5543,7 +5943,9 @@ function placeHouseRooms(
   occupied: Set<string>,
   startIndex: number,
 ): { furnitures: SearchableObject[]; walls: InteriorWallTile[]; doors: { x: number; y: number }[] } {
-  const rooms = layoutHouseRooms(iW, iH, interiorExitForBuildingAt(bx, by));
+  const bld = getBuildingAt(bx, by);
+  const mantelSpot = bld ? houseMantelSpot(bld) : null;
+  const rooms = layoutHouseRooms(iW, iH, interiorExitForBuildingAt(bx, by), mantelSpot);
   const walls: InteriorWallTile[] = [];
   const doors: { x: number; y: number }[] = [];
   const wallSet = new Set<string>();
@@ -5572,13 +5974,34 @@ function placeHouseRooms(
     }
   }
 
-  let furnitures: SearchableObject[] = [];
-  let idx = startIndex;
+  const mantel = placeHouseMantel(
+    bx,
+    by,
+    iW,
+    iH,
+    exitX,
+    exitY,
+    occupied,
+    startIndex,
+  );
+  let furnitures: SearchableObject[] = [...mantel];
+  let idx = startIndex + mantel.length;
+  const shareKitchen = !rooms.some((room) => room.role === "kitchen");
   for (const room of rooms) {
     let placed: SearchableObject[];
     switch (room.role) {
       case "bedroom":
-        placed = placeBedroomFurniture(room, bx, by, exitX, exitY, rng, occupied, idx);
+        placed = placeBedroomFurniture(
+          room,
+          bx,
+          by,
+          exitX,
+          exitY,
+          rng,
+          occupied,
+          idx,
+          shareKitchen,
+        );
         break;
       case "kitchen":
         placed = placeKitchenFurniture(room, bx, by, exitX, exitY, rng, occupied, idx);
@@ -5953,7 +6376,20 @@ export function generateInteriorContent(bx: number, by: number): {
           occupied,
           office.length + earlyBench.length + shelves.length,
         );
-    furnitures = [...office, ...earlyBench, ...shelves, ...lateBench];
+    const placed = [...office, ...earlyBench, ...shelves, ...lateBench];
+    const furnace = placeWarehouseFurnace(
+      bx,
+      by,
+      iW,
+      iH,
+      exitX,
+      exitY,
+      rng,
+      occupied,
+      placed.length,
+      placed,
+    );
+    furnitures = [...placed, ...furnace];
   } else if (multiRoomHouse) {
     const rooms = placeHouseRooms(
       bx,
@@ -5970,15 +6406,28 @@ export function generateInteriorContent(bx: number, by: number): {
     walls = rooms.walls;
     doors = rooms.doors;
   } else if (residential) {
-    furnitures = placeGenericFurniture(
+    const mantel = placeHouseMantel(
       bx,
       by,
       iW,
       iH,
       exitX,
       exitY,
-      rng,
       occupied,
+      0,
+    );
+    furnitures = mantel.concat(
+      placeGenericFurniture(
+        bx,
+        by,
+        iW,
+        iH,
+        exitX,
+        exitY,
+        rng,
+        occupied,
+        mantel.length,
+      ),
     );
   } else if (police) {
     const wall = placePoliceWallFurniture(

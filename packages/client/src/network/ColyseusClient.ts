@@ -481,6 +481,8 @@ export type SearchableSchema = {
   buildingX: number;
   buildingY: number;
   facing: string;
+  /** Unix ms when a furnace's fire goes out. 0 when cold or not a furnace. */
+  activeUntil: number;
 };
 
 export type WorldRoomState = {
@@ -506,6 +508,33 @@ export type WorldRoomState = {
   guards: {
     get(id: string): GuardSchema | undefined;
     forEach(cb: (guard: GuardSchema, id: string) => void): void;
+  };
+  coywolves: {
+    get(id: string): {
+      x: number;
+      y: number;
+      facing: number;
+      anim: string;
+      animFrame: number;
+      health: number;
+      isDead: boolean;
+      looted?: boolean;
+    } | undefined;
+    forEach(
+      cb: (
+        wolf: {
+          x: number;
+          y: number;
+          facing: number;
+          anim: string;
+          animFrame: number;
+          health: number;
+          isDead: boolean;
+          looted?: boolean;
+        },
+        id: string,
+      ) => void,
+    ): void;
   };
   corpses: {
     get(id: string): PlayerCorpseSchema | undefined;
@@ -640,6 +669,8 @@ export type CraftSyncEvent = {
     workbenchId: string;
     inventoryJson: string;
     crafted?: { id: string; quantity: number; name: string };
+    salvaged?: { id: string; quantity: number; name: string }[];
+    ruined?: { name: string }[];
   };
 };
 

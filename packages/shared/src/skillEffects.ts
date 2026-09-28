@@ -15,7 +15,7 @@ import {
   STAMINA_MAX,
   ZOMBIE_AGGRO_RANGE,
 } from "./constants.js";
-import { craftRecipeDurationMs, type CraftRecipe } from "./crafting.js";
+import { CRAFT_DURATION_MS } from "./crafting.js";
 import { ANTIBIOTIC_DURATION_MS, ZOMBIE_INFECTION_CHANCE } from "./infection.js";
 import { SEARCH_DURATION_MS } from "./interior.js";
 import { BASE_INVENTORY_SLOTS } from "./items.js";
@@ -235,13 +235,11 @@ export function computePlayerSkillMods(
 }
 
 export function craftDurationForSkill(
-  recipe: CraftRecipe,
+  recipe: { durationMs?: number },
   craftDurationScale: number,
 ): number {
-  return Math.max(
-    1,
-    Math.round(craftRecipeDurationMs(recipe) * craftDurationScale),
-  );
+  const base = recipe.durationMs ?? CRAFT_DURATION_MS;
+  return Math.max(1, Math.round(base * craftDurationScale));
 }
 
 export function barterAdjustedRates(

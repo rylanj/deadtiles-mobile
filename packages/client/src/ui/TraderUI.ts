@@ -9,6 +9,7 @@ import {
   parseInventory,
   tradeOfferTotals,
   tradeOfferCashSettlement,
+  tradeOfferFitsTraderStock,
   traderBuyPrice,
   traderSellPrice,
   type Inventory,
@@ -609,10 +610,11 @@ export class TraderUI {
       this.traderBanknotes,
       this.playerBanknotes,
     );
+    const fits = tradeOfferFitsTraderStock(this.stock, sells, buys);
     const repGain =
       buyTotal * ASHEN_REP_PER_DOLLAR_GIVEN +
       sellTotal * ASHEN_REP_PER_DOLLAR_TAKEN +
-      cash.shortfall * ASHEN_REP_PER_DOLLAR_GIVEN;
+      cash.shortfall * ASHEN_REP_PER_DOLLAR_TAKEN;
 
     this.settlementEl.hidden = false;
     this.settlementEl.replaceChildren();
@@ -632,9 +634,15 @@ export class TraderUI {
       amount.className = "trader-settlement-amount";
       amount.textContent = formatNotes(cash.playerReceives);
       cashLine.append(amount);
+      const shortfallRep = cash.shortfall * ASHEN_REP_PER_DOLLAR_TAKEN;
+      const shortfallRepText =
+        Number.isInteger(shortfallRep) ||
+        Math.abs(shortfallRep - Math.round(shortfallRep)) < 1e-9
+          ? String(Math.round(shortfallRep))
+          : shortfallRep.toFixed(1);
       this.settlementEl.title =
         cash.shortfall > 0
-          ? `Trader is short $${cash.shortfall}. You still get their remaining cash, plus +${cash.shortfall} Ashen reputation`
+          ? `Trader is short $${cash.shortfall}. You still get their remaining cash, plus +${shortfallRepText} Ashen reputation`
           : "";
     } else {
       cashLine.append("You pay ");
@@ -660,12 +668,15 @@ export class TraderUI {
     this.clearOfferBtn.hidden = false;
     this.clearOfferBtn.disabled = this.confirmPending;
     this.confirmBtn.hidden = false;
-    this.confirmBtn.disabled = !cash.playerCanAfford || this.confirmPending;
+    this.confirmBtn.disabled =
+      !cash.playerCanAfford || !fits || this.confirmPending;
     this.confirmBtn.title = this.confirmPending
       ? "Confirming…"
-      : cash.playerCanAfford
-        ? ""
-        : "Not enough banknotes";
+      : !fits
+        ? "Trader can't carry that much"
+        : cash.playerCanAfford
+          ? ""
+          : "Not enough banknotes";
   }
 
   private updateActionButtons() {

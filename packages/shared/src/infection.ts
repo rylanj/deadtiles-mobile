@@ -2,6 +2,8 @@ import { PLAYER_MAX_HEALTH } from "./constants.js";
 
 /** Zombie melee: chance to start an infection (0–1). */
 export const ZOMBIE_INFECTION_CHANCE = 0.1;
+/** Eating raw meat: same infection, cured by antibiotics. */
+export const RAW_MEAT_INFECTION_CHANCE = 0.5;
 /** Infection percent changes on this interval. */
 export const INFECTION_TICK_MS = 60_000;
 /** Percent gained per tick while untreated. */

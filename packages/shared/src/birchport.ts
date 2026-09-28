@@ -322,6 +322,37 @@ export function birchportSafezoneRects(): BirchportSafezoneRect[] {
   return [city, yard];
 }
 
+/** Searched container and zombie pocket spawn chances inside the safezone. */
+export const BIRCHPORT_LOOT_CHANCE_SCALE = 0.5;
+
+function inBirchportSafezone(x: number, y: number): boolean {
+  for (const rect of birchportSafezoneRects()) {
+    if (x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True for streets inside the Birchport safezone, and for interiors whose
+ * building center sits in that same area.
+ */
+export function isBirchportLootSite(opts: {
+  inInterior: boolean;
+  buildingX: number;
+  buildingY: number;
+  x: number;
+  y: number;
+}): boolean {
+  if (opts.inInterior) {
+    const bld = getBuildingAt(opts.buildingX, opts.buildingY);
+    if (!bld) return false;
+    return inBirchportSafezone(bld.ox + bld.w / 2, bld.oy + bld.h / 2);
+  }
+  return inBirchportSafezone(opts.x, opts.y);
+}
+
 /**
  * Streets and the barracks yard, plus the hospital, military tents, and mess hall.
  * Other Birchport interiors stay armed.

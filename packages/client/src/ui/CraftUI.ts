@@ -1,12 +1,15 @@
 import {
   CRAFT_RECIPES,
+  DISASSEMBLY_RECIPES,
   canCraftRecipe,
+  canDisassemble,
   countItemInInventory,
   getItemDefinition,
   isCraftItemQty,
   parseInventory,
   type CraftIngredient,
   type CraftRecipe,
+  type DisassemblyRecipe,
   type Inventory,
 } from "@zombie/shared";
 import { appendItemIcon } from "./itemIcons";
@@ -124,7 +127,7 @@ export class CraftUI {
     );
     const hint = document.createElement("span");
     hint.className = "inventory-hint";
-    hint.textContent = "Craft items from materials";
+    hint.textContent = "Craft materials, or break a firearm into parts";
     header.append(headerTop, hint);
 
     const body = document.createElement("div");
@@ -182,6 +185,14 @@ export class CraftUI {
     this.listEl.replaceChildren();
     for (const recipe of CRAFT_RECIPES) {
       this.listEl.appendChild(this.buildRecipeCard(recipe));
+    }
+
+    const breakHead = document.createElement("div");
+    breakHead.className = "red-dialog-task-heading craft-break-heading";
+    breakHead.textContent = "Break down";
+    this.listEl.appendChild(breakHead);
+    for (const recipe of DISASSEMBLY_RECIPES) {
+      this.listEl.appendChild(this.buildDisassemblyCard(recipe));
     }
   }
 
@@ -283,6 +294,86 @@ export class CraftUI {
       hint.className = "craft-recipe-hint";
       hint.textContent = "Inventory full";
       details.appendChild(hint);
+    }
+
+    section.appendChild(details);
+    return section;
+  }
+
+  private buildDisassemblyCard(recipe: DisassemblyRecipe): HTMLElement {
+    const expanded = this.expandedRecipeId === recipe.id;
+    const hasWeapon =
+      countItemInInventory(this.inventory, recipe.weaponId) >= 1;
+    const can = canDisassemble(this.inventory, recipe);
+    const weapon = getItemDefinition(recipe.weaponId);
+    const name = weapon?.name ?? recipe.weaponId;
+
+    const section = document.createElement("div");
+    section.className = "craft-recipe";
+    if (expanded) section.classList.add("craft-recipe--expanded");
+    if (can) section.classList.add("craft-recipe--ready");
+
+    const summary = document.createElement("button");
+    summary.type = "button";
+    summary.className = "craft-recipe-summary";
+    summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    summary.setAttribute(
+      "aria-label",
+      `${expanded ? "Collapse" : "Expand"} break down ${name}`,
+    );
+    summary.appendChild(
+      makeDisplayCell({
+        itemId: recipe.weaponId,
+        qtyLabel: "×1",
+        ariaLabel: name,
+      }),
+    );
+
+    const label = document.createElement("div");
+    label.className = "craft-recipe-summary-text";
+    const nameEl = document.createElement("span");
+    nameEl.className = "craft-recipe-summary-name";
+    nameEl.textContent = `Break down ${name}`;
+    const meta = document.createElement("span");
+    meta.className = "craft-recipe-summary-meta";
+    meta.textContent = can
+      ? "Ready to break down"
+      : hasWeapon
+        ? "Not enough room"
+        : "No weapon";
+    label.append(nameEl, meta);
+    summary.appendChild(label);
+
+    const chevron = document.createElement("span");
+    chevron.className = "craft-recipe-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.textContent = expanded ? "▾" : "▸";
+    summary.appendChild(chevron);
+    summary.addEventListener("click", () => {
+      this.expandedRecipeId =
+        this.expandedRecipeId === recipe.id ? null : recipe.id;
+      this.render();
+    });
+    section.appendChild(summary);
+    if (!expanded) return section;
+
+    const details = document.createElement("div");
+    details.className = "craft-recipe-details";
+    const hint = document.createElement("div");
+    hint.className = "craft-recipe-hint";
+    hint.textContent = `Destroys the ${name}. Returns 3 of ${recipe.parts.length} parts at random.`;
+    details.appendChild(hint);
+
+    if (can) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "red-dialog-complete-btn";
+      btn.textContent = "Break down";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onCraft(recipe.id);
+      });
+      details.appendChild(btn);
     }
 
     section.appendChild(details);
