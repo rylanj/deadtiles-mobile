@@ -48,6 +48,10 @@ export type LootCoyoteMessage = {
   coywolfId: string;
 };
 
+export type LootBearMessage = {
+  bearId: string;
+};
+
 export type LootGuardMessage = {
   guardId: string;
 };
@@ -85,6 +89,13 @@ export type TakeFromContainerMessage = {
 
 export type MoveInContainerMessage = {
   /** Furniture searchable id, zombie id, or guard id. */
+  containerId: string;
+  fromSlot: number;
+  toSlot: number;
+};
+
+/** Move a player stack into a storage box (or swap with the box slot). */
+export type StoreInContainerMessage = {
   containerId: string;
   fromSlot: number;
   toSlot: number;
@@ -195,6 +206,12 @@ export type EnterDoorCodeMessage = {
 
 /** Open the Fireplace1 fuel dialog at a structure tile. */
 export type FireplaceOpenMessage = {
+  x: number;
+  y: number;
+};
+
+/** Open a player-built storage box at a structure tile. */
+export type StorageBoxOpenMessage = {
   x: number;
   y: number;
 };
@@ -315,6 +332,7 @@ export type ClientMessage =
   | { type: "searchCancel" }
   | { type: "lootZombieStart"; payload: LootZombieMessage }
   | { type: "lootCoyoteStart"; payload: LootCoyoteMessage }
+  | { type: "lootBearStart"; payload: LootBearMessage }
   | { type: "lootGuardStart"; payload: LootGuardMessage }
   | { type: "lootPlayerStart"; payload: LootPlayerMessage }
   | { type: "equipWeapon"; payload: EquipWeaponMessage }
@@ -324,6 +342,7 @@ export type ClientMessage =
   | { type: "moveInventorySlot"; payload: MoveInventorySlotMessage }
   | { type: "takeFromContainer"; payload: TakeFromContainerMessage }
   | { type: "moveInContainer"; payload: MoveInContainerMessage }
+  | { type: "storeInContainer"; payload: StoreInContainerMessage }
   | { type: "consumeStart"; payload: ConsumeStartMessage }
   | { type: "consumeCancel" }
   | { type: "tradeOpen"; payload: TradeOpenMessage }
@@ -340,6 +359,7 @@ export type ClientMessage =
   | { type: "buildCancel" }
   | { type: "chopTreeCancel" }
   | { type: "fireplaceOpen"; payload: FireplaceOpenMessage }
+  | { type: "storageBoxOpen"; payload: StorageBoxOpenMessage }
   | { type: "fireplaceAddWood"; payload: FireplaceAddWoodMessage }
   | { type: "fireplaceLight"; payload: FireplaceLightMessage }
   | { type: "fireplaceExtinguish"; payload: FireplaceExtinguishMessage }
@@ -478,6 +498,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isIdString(p.coywolfId)) return null;
       return { type, payload: { coywolfId: p.coywolfId } };
     }
+    case "lootBearStart": {
+      if (!isIdString(p.bearId)) return null;
+      return { type, payload: { bearId: p.bearId } };
+    }
     case "lootGuardStart": {
       if (!isIdString(p.guardId)) return null;
       return { type, payload: { guardId: p.guardId } };
@@ -525,7 +549,8 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       };
     }
     case "takeFromContainer":
-    case "moveInContainer": {
+    case "moveInContainer":
+    case "storeInContainer": {
       if (!isIdString(p.containerId)) return null;
       if (!isIntInRange(p.fromSlot, 0, 63) || !isIntInRange(p.toSlot, 0, 63)) {
         return null;
@@ -663,6 +688,7 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       };
     }
     case "fireplaceOpen":
+    case "storageBoxOpen":
     case "fireplaceAddWood":
     case "fireplaceLight":
     case "fireplaceExtinguish":

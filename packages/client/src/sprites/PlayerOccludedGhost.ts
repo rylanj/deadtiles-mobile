@@ -3,6 +3,7 @@ import {
   getOccludingBuildingsForPlayerOutline,
   getOccludingTreesForPlayerOutline,
   OCCLUSION_OVERLAY_DEPTH,
+  playerBuiltWallsCoverSprite,
 } from "../world/BuildingOcclusion";
 
 /** Faint enough to read as "behind that", solid enough to track while moving. */
@@ -43,7 +44,8 @@ export class PlayerOccludedGhost {
     const occluded =
       getOccludingBuildingsForPlayerOutline(tileX, tileY, playerDepth).length >
         0 ||
-      getOccludingTreesForPlayerOutline(tileX, tileY, playerDepth).length > 0;
+      getOccludingTreesForPlayerOutline(tileX, tileY, playerDepth).length > 0 ||
+      playerBuiltWallsCoverSprite(tileX, tileY, playerDepth);
     if (!occluded) {
       this.hide();
       return;

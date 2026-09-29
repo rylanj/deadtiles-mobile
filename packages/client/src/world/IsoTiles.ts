@@ -103,6 +103,8 @@ import {
   applyBuildingTreeDepth,
   applyBuildingStreetlightDepth,
   applyBuildingFenceDepth,
+  playerWallOccluderDepth,
+  tuckBehindPlayerWalls,
 } from "./depthSort";
 
 export {
@@ -128,6 +130,7 @@ export {
   tileIndicatorDepth,
   wallRenderDepth,
   applyBuildingTreeDepth,
+  setOverworldStructureFootprintProvider,
   type FurnitureDepthFootprint,
 } from "./depthSort";
 
@@ -465,10 +468,29 @@ export function createTreeMaskImage(
   });
 }
 
+/**
+ * A yard fence a couple of tiles south or east of this tree. Those panels
+ * share the tree's front band, so when one slips under a player wall the
+ * tree has to follow or its canopy paints over the panel.
+ */
+function yardFenceInFrontOfTree(tx: number, ty: number): boolean {
+  const reach = 3;
+  for (let y = ty; y <= ty + reach; y++) {
+    for (let x = tx; x <= tx + reach; x++) {
+      if (x === tx && y === ty) continue;
+      if (getFencesAt(x, y).length > 0) return true;
+    }
+  }
+  return false;
+}
+
 /** Sort depth for a tree sprite (matches createTreeSprite). */
 export function treeRenderDepth(tree: TreeInfo): number {
   const base = entityRenderDepth(tree.ox + 0.5, tree.oy + 0.5);
-  return applyBuildingTreeDepth(base, tree.ox, tree.oy);
+  const depth = applyBuildingTreeDepth(base, tree.ox, tree.oy);
+  if (playerWallOccluderDepth(tree.ox, tree.oy) == null) return depth;
+  if (!yardFenceInFrontOfTree(tree.ox, tree.oy)) return depth;
+  return tuckBehindPlayerWalls(depth, tree.ox, tree.oy);
 }
 
 /** Streetlight1 on curb centre; SE/SW lamp overhangs into the arterial. */
@@ -512,7 +534,11 @@ function fenceRenderDepth(fence: FenceInfo): number {
   const base =
     entityRenderDepth(fence.ox + 0.5, fence.oy + 0.5) +
     FENCE_DEPTH_BY_FACING[fence.facing];
-  return applyBuildingFenceDepth(base, fence.ox, fence.oy);
+  return tuckBehindPlayerWalls(
+    applyBuildingFenceDepth(base, fence.ox, fence.oy),
+    fence.ox,
+    fence.oy,
+  );
 }
 
 function fenceCornerRenderDepth(
@@ -521,7 +547,11 @@ function fenceCornerRenderDepth(
   corner: FenceCorner,
 ): number {
   const base = entityRenderDepth(ox + 0.5, oy + 0.5) + FENCE_DEPTH_BY_CORNER[corner];
-  return applyBuildingFenceDepth(base, ox, oy);
+  return tuckBehindPlayerWalls(
+    applyBuildingFenceDepth(base, ox, oy),
+    ox,
+    oy,
+  );
 }
 
 function fenceDisplaySize(): number {
@@ -1417,6 +1447,37 @@ export class WorldTileManager {
       const light = getStreetlightAt(tx, ty);
       if (light) img.setDepth(streetlightRenderDepth(light));
     }
+  }
+
+  /**
+   * Player walls changed. Re-read tree and yard-fence depths so a panel that
+   * was lifted with a nearby tree slips back under the wall in front of it.
+   */
+  refreshPlayerWallOcclusion() {
+    for (const [key, img] of this.treeObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const tree = getTreeAt(tx, ty);
+      if (!tree) continue;
+      const depth = treeRenderDepth(tree);
+      if (img.depth !== depth) img.setDepth(depth);
+    }
+    for (const [key, img] of this.fenceObjects) {
+      const depth = this.depthForFenceObject(key);
+      if (img.depth !== depth) img.setDepth(depth);
+    }
+  }
+
+  private depthForFenceObject(key: string): number {
+    const parts = key.split(",");
+    const ox = Number(parts[0]);
+    const oy = Number(parts[1]);
+    const tag = parts[2] ?? "";
+    if (tag === "NE" || tag === "NW" || tag === "SE" || tag === "SW") {
+      return fenceRenderDepth({ ox, oy, facing: tag });
+    }
+    return fenceCornerRenderDepth(ox, oy, tag as FenceCorner);
   }
 
   /**

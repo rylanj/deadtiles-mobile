@@ -16,7 +16,13 @@ import {
   BUILDING_OCCLUSION_SEARCH_REACH,
   buildingCuboidCoversSprite,
   buildingCuboidCoversTile,
+  tileIndicatorDepth,
 } from "./depthSort";
+import {
+  playerWallOccluderHits,
+  stampPlayerWallOccluder,
+  type PlayerWallOccluder,
+} from "./InteriorView";
 
 /** Renders above all building cuboids (occluded portions of overlays). */
 export const OCCLUSION_OVERLAY_DEPTH = 2_000_000;
@@ -85,6 +91,61 @@ export function getOccludingTreesForPlayerOutline(
   });
 }
 
+type PlayerWallOcclusionQuery = (
+  tileX: number,
+  tileY: number,
+) => readonly PlayerWallOccluder[];
+
+let playerWallOccluders: PlayerWallOcclusionQuery | null = null;
+
+/** WorldScene fills this with the player walls currently on screen. */
+export function setPlayerWallOcclusionProvider(
+  fn: PlayerWallOcclusionQuery | null,
+) {
+  playerWallOccluders = fn;
+}
+
+function stampPlayerWallsOnMask(
+  g: Phaser.GameObjects.Graphics,
+  tileX: number,
+  tileY: number,
+  depthLimit: number,
+  coverSprite: boolean,
+): boolean {
+  const walls = playerWallOccluders?.(tileX, tileY);
+  if (!walls || walls.length === 0) return false;
+  let stamped = false;
+  for (const wall of walls) {
+    if (
+      stampPlayerWallOccluder(
+        g,
+        wall,
+        depthLimit,
+        tileX,
+        tileY,
+        coverSprite,
+      )
+    ) {
+      stamped = true;
+    }
+  }
+  return stamped;
+}
+
+/** A player wall is in front of the standing sprite at this tile. */
+export function playerBuiltWallsCoverSprite(
+  tileX: number,
+  tileY: number,
+  sortDepth: number,
+): boolean {
+  const walls = playerWallOccluders?.(tileX, tileY);
+  if (!walls) return false;
+  for (const wall of walls) {
+    if (playerWallOccluderHits(wall, sortDepth, tileX, tileY, true)) return true;
+  }
+  return false;
+}
+
 export class BuildingOcclusionMask {
   readonly maskContainer: Phaser.GameObjects.Container;
   readonly maskGraphics: Phaser.GameObjects.Graphics;
@@ -108,7 +169,7 @@ export class BuildingOcclusionMask {
   }
 
   /**
-   * Tile indicators (move / loot) — buildings (cuboid) + trees (sprite alpha).
+   * Tile indicators (move / loot) — buildings, trees, and player walls.
    * Used as a mask on a high-depth overlay so the diamond redraws over occluders.
    */
   applyForTile(tileX: number, tileY: number, sortDepth: number): boolean {
@@ -116,7 +177,14 @@ export class BuildingOcclusionMask {
     const buildings = getOccludingBuildings(tileX, tileY, sortDepth);
     const trees = getOccludingTreesForPlayerOutline(tileX, tileY, sortDepth);
     this.maskGraphics.clear();
-    if (buildings.length === 0 && trees.length === 0) return false;
+    const walls = stampPlayerWallsOnMask(
+      this.maskGraphics,
+      tileX,
+      tileY,
+      tileIndicatorDepth(tileX, tileY),
+      false,
+    );
+    if (buildings.length === 0 && trees.length === 0 && !walls) return false;
 
     for (const bld of buildings) {
       drawBuildingCuboidMask(this.maskGraphics, bld);
@@ -130,13 +198,20 @@ export class BuildingOcclusionMask {
     return true;
   }
 
-  /** Player sprite outline — buildings (cuboid) + trees (sprite alpha). */
+  /** Player sprite outline — buildings, trees, and player walls. */
   applyForPlayerOutline(tileX: number, tileY: number, sortDepth: number): boolean {
     this.clearSpriteMasks();
     const buildings = getOccludingBuildingsForPlayerOutline(tileX, tileY, sortDepth);
     const trees = getOccludingTreesForPlayerOutline(tileX, tileY, sortDepth);
     this.maskGraphics.clear();
-    if (buildings.length === 0 && trees.length === 0) return false;
+    const walls = stampPlayerWallsOnMask(
+      this.maskGraphics,
+      tileX,
+      tileY,
+      sortDepth,
+      true,
+    );
+    if (buildings.length === 0 && trees.length === 0 && !walls) return false;
 
     for (const bld of buildings) {
       drawBuildingCuboidMask(this.maskGraphics, bld);

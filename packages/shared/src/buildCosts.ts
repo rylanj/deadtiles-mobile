@@ -10,6 +10,8 @@ export const STRUCTURE_BUILD_KINDS = [
   "fence",
   "fence_corner",
   "bargate",
+  "storage_box",
+  "storage_box_2",
 ] as const;
 
 export type StructureBuildKind = (typeof STRUCTURE_BUILD_KINDS)[number];
@@ -21,7 +23,9 @@ export function isStructureBuildKind(kind: unknown): kind is StructureBuildKind 
     kind === "fireplace" ||
     kind === "fence" ||
     kind === "fence_corner" ||
-    kind === "bargate"
+    kind === "bargate" ||
+    kind === "storage_box" ||
+    kind === "storage_box_2"
   );
 }
 
@@ -54,6 +58,8 @@ export const STRUCTURE_MAX_HEALTH: Record<StructureBuildKind, number> = {
   fence: 80,
   fence_corner: 80,
   bargate: 80,
+  storage_box: 80,
+  storage_box_2: 120,
 };
 
 export const STRUCTURE_BUILD_COSTS: Record<
@@ -74,12 +80,83 @@ export const STRUCTURE_BUILD_COSTS: Record<
     { itemId: "wood", quantity: 4 },
     { itemId: "rags", quantity: 2 },
   ],
-  // Temporary cheap cost while fence building is tuned.
-  fence: [{ itemId: "scrap_metal", quantity: 1 }],
+  // 3-tile barbed-wire run: two posts, the wire, and the clamps.
+  fence: [
+    { itemId: "wood", quantity: 2 },
+    { itemId: "scrap_metal", quantity: 4 },
+    { itemId: "bolts", quantity: 4 },
+  ],
   // Auto-built where SE/SW panels meet. Players never deposit or channel it.
   fence_corner: [],
-  bargate: [{ itemId: "scrap_metal", quantity: 1 }],
+  // 3-tile gate: frame and mesh, plus hinge hardware. Heavier than a fence run.
+  bargate: [
+    { itemId: "wood", quantity: 4 },
+    { itemId: "scrap_metal", quantity: 8 },
+    { itemId: "bolts", quantity: 8 },
+  ],
+  storage_box: [
+    { itemId: "wood", quantity: 1 },
+    { itemId: "duct_tape", quantity: 1 },
+  ],
+  storage_box_2: [
+    { itemId: "wood", quantity: 4 },
+    { itemId: "screws", quantity: 4 },
+    { itemId: "scrap_metal", quantity: 2 },
+  ],
 } as const;
+
+export type StorageBoxKind = "storage_box" | "storage_box_2";
+
+/** Slots in Storage Box 1. */
+export const STORAGE_BOX_SLOTS = 8;
+
+/** Slots in Storage Box 2. */
+export const STORAGE_BOX2_SLOTS = 24;
+
+/**
+ * How many slots to read from a saved box. Covers the old 12-slot Storage Box 1
+ * saves so extras can be spilled instead of deleted.
+ */
+export const STORAGE_BOX_INVENTORY_READ_CAP = 24;
+
+/** Object type sent with the Storage Box 1 container UI. */
+export const STORAGE_BOX_OBJECT_TYPE = "storagebox";
+
+/** Object type sent with the Storage Box 2 container UI. */
+export const STORAGE_BOX2_OBJECT_TYPE = "storagebox2";
+
+export function isStorageBoxKind(kind: unknown): kind is StorageBoxKind {
+  return kind === "storage_box" || kind === "storage_box_2";
+}
+
+export function storageBoxSlotCount(kind: StorageBoxKind): number {
+  return kind === "storage_box_2" ? STORAGE_BOX2_SLOTS : STORAGE_BOX_SLOTS;
+}
+
+export function storageBoxObjectType(kind: StorageBoxKind): string {
+  return kind === "storage_box_2"
+    ? STORAGE_BOX2_OBJECT_TYPE
+    : STORAGE_BOX_OBJECT_TYPE;
+}
+
+export function storageBoxSlotsForObjectType(objectType: string): number | null {
+  if (objectType === STORAGE_BOX2_OBJECT_TYPE) return STORAGE_BOX2_SLOTS;
+  if (objectType === STORAGE_BOX_OBJECT_TYPE) return STORAGE_BOX_SLOTS;
+  return null;
+}
+
+/** Same id scheme as WorldRoom placement (`in:bx,by:x,y` / `ow:x,y`). */
+export function playerStructureId(
+  inInterior: boolean,
+  buildingX: number,
+  buildingY: number,
+  x: number,
+  y: number,
+): string {
+  return inInterior
+    ? `in:${buildingX},${buildingY}:${x},${y}`
+    : `ow:${x},${y}`;
+}
 
 export function getStructureBuildCosts(
   kind: StructureBuildKind,

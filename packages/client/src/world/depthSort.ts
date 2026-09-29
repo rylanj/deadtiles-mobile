@@ -1362,6 +1362,81 @@ export function applyBuildingFenceDepth(
   });
 }
 
+/**
+ * Player walls / doors (1×1 partitions). Chain-link sets an axis or entity
+ * step and keeps its own sort.
+ */
+function isPlayerWallFootprint(f: FurnitureDepthFootprint): boolean {
+  return (
+    !!f.partition &&
+    !f.axis &&
+    f.entityStep === undefined &&
+    f.w === 1 &&
+    f.h === 1
+  );
+}
+
+type StructureFootprintQuery = (
+  tx: number,
+  ty: number,
+) => readonly FurnitureDepthFootprint[];
+
+/**
+ * WorldScene fills this so yard fences and trees can resolve against the
+ * player walls that are actually on screen. Unset in checker scripts, so
+ * those keep the building-only depths.
+ */
+let overworldStructureFootprints: StructureFootprintQuery | null = null;
+
+export function setOverworldStructureFootprintProvider(
+  fn: StructureFootprintQuery | null,
+) {
+  overworldStructureFootprints = fn;
+}
+
+/**
+ * Lowest player-wall depth that should occlude (tx, ty), or null when no
+ * wall stands south or east of it.
+ */
+export function playerWallOccluderDepth(
+  tx: number,
+  ty: number,
+): number | null {
+  const footprints = overworldStructureFootprints?.(tx, ty);
+  if (!footprints || footprints.length === 0) return null;
+  let ceiling = Number.POSITIVE_INFINITY;
+  for (const f of footprints) {
+    if (!isPlayerWallFootprint(f)) continue;
+    if (!isWestOrNorthOfFurniture(tx, ty, f, PARTITION_DEPTH_REACH)) continue;
+    if (wallSunkBehindBuildingInFrontOfEntity(f, tx, ty)) continue;
+    const top = footprintSortDepth(f);
+    if (top < ceiling) ceiling = top;
+  }
+  return ceiling < Number.POSITIVE_INFINITY ? ceiling : null;
+}
+
+/**
+ * Yard fences and trees share the entity front band, which sits above player
+ * walls. A panel just inside a wall (often the one beside a lifted tree)
+ * then paints over that wall. Slip it into the open sliver under the wall
+ * and above the behind-wall entity clamp, keeping nearer sprites in front.
+ * Sprites already under the wall are left alone.
+ */
+export function tuckBehindPlayerWalls(
+  depth: number,
+  tx: number,
+  ty: number,
+): number {
+  const wallDepth = playerWallOccluderDepth(tx, ty);
+  if (wallDepth == null) return depth;
+  const floor = wallDepth - PARTITION_ENTITY_STEP;
+  const cap = wallDepth - PARTITION_ENTITY_STEP / 2;
+  if (depth <= cap) return depth;
+  const excess = depth - floor;
+  const t = excess / (excess + 1);
+  return floor + (cap - floor) * t;
+}
+
 function isChainLinkCornerFootprint(f: FurnitureDepthFootprint): boolean {
   return (
     !!f.partition &&

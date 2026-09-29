@@ -260,6 +260,15 @@
         opacity: 1;
         box-shadow: inset 0 0 90px 20px rgba(220, 70, 30, 0.22);
       }
+      #infection-fx {
+        position: fixed;
+        inset: 0;
+        z-index: 45;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s ease;
+        box-shadow: inset 0 0 90px 24px rgba(110, 190, 50, 0.42);
+      }
       @keyframes bar-flash-red {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.25; }
@@ -1408,16 +1417,24 @@
         font-weight: 700;
         opacity: 0.85;
       }
-      .fireplace-light-section {
+      .fireplace-light-section,
+      .fireplace-craft-section {
         margin-top: 4px;
       }
       /* Author `display: flex` on .red-dialog-task would otherwise ignore [hidden]. */
-      .fireplace-light-section[hidden] {
+      .fireplace-light-section[hidden],
+      .fireplace-craft-section[hidden] {
         display: none !important;
       }
-      .fireplace-light-section .fireplace-section-label {
+      .fireplace-light-section .fireplace-section-label,
+      .fireplace-craft-section .fireplace-section-label {
         color: #d4f0d4;
         opacity: 1;
+      }
+      .fireplace-craft-section .red-dialog-complete-btn {
+        width: 100%;
+        margin-top: 8px;
+        box-sizing: border-box;
       }
       .fireplace-actions {
         display: flex;
@@ -1430,7 +1447,8 @@
         box-sizing: border-box;
       }
       .fireplace-actions .red-dialog-complete-btn:disabled,
-      .fireplace-light-section .red-dialog-complete-btn:disabled {
+      .fireplace-light-section .red-dialog-complete-btn:disabled,
+      .fireplace-craft-section .red-dialog-complete-btn:disabled {
         opacity: 0.45;
         cursor: not-allowed;
         pointer-events: none;
@@ -4050,6 +4068,7 @@
       </div>
     </div>
     <div id="temperature-fx" aria-hidden="true"></div>
+    <div id="infection-fx" aria-hidden="true"></div>
     <div id="game"></div>
     <div id="chat-bar">
       <input id="chat-input" type="text" maxlength="120" placeholder="Type a message…" autocomplete="off" spellcheck="false" enterkeyhint="send" />

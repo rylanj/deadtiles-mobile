@@ -28,6 +28,8 @@ export type FireplaceUIHandlers = {
   onLight: () => void;
   onExtinguish: () => void;
   onCookSlot: (slot: number, itemId?: string) => void;
+  /** Warehouse furnace only. Opens metal recipes while the fire is lit. */
+  onCraft?: () => void;
 };
 
 export type FireplaceUIState = {
@@ -41,6 +43,8 @@ export type FireplaceUIState = {
   title?: string;
   /** Null hides cooking. Warehouse furnaces do not cook. */
   cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
+  /** Set on warehouse furnaces so metal recipes can be opened from this fire. */
+  stationId?: string;
 };
 
 function makeReqCell(opts: {
@@ -73,6 +77,7 @@ export class FireplaceUI {
   private fuelWood = 0;
   private activeUntil = 0;
   private hasLighter = false;
+  private stationId = "";
   private inventory: Inventory = [];
 
   private overlay: HTMLElement;
@@ -83,6 +88,9 @@ export class FireplaceUI {
   private addBtn: HTMLButtonElement;
   private lightBtn: HTMLButtonElement;
   private extinguishBtn: HTMLButtonElement;
+  private craftSectionEl: HTMLElement;
+  private craftHintEl: HTMLElement;
+  private craftBtn: HTMLButtonElement;
   private titleEl: HTMLHeadingElement;
   private titleName = "Fireplace";
   private cookSlots: { itemId: string; stageStartedAt: number }[] | null = null;
@@ -204,12 +212,28 @@ export class FireplaceUI {
       this.lightBtn,
     );
 
+    this.craftSectionEl = document.createElement("div");
+    this.craftSectionEl.className = "fireplace-craft-section";
+    this.craftSectionEl.hidden = true;
+    const craftTitle = document.createElement("div");
+    craftTitle.className = "fireplace-section-label";
+    craftTitle.textContent = "Metalwork";
+    this.craftHintEl = document.createElement("div");
+    this.craftHintEl.className = "inventory-hint";
+    this.craftBtn = document.createElement("button");
+    this.craftBtn.type = "button";
+    this.craftBtn.className = "red-dialog-complete-btn";
+    this.craftBtn.textContent = "Craft";
+    this.craftBtn.addEventListener("click", () => this.handlers.onCraft?.());
+    this.craftSectionEl.append(craftTitle, this.craftHintEl, this.craftBtn);
+
     body.append(
       fuelLabel,
       this.fuelRowEl,
       this.cookSectionEl,
       fuelActions,
       this.lightSectionEl,
+      this.craftSectionEl,
     );
     panel.append(header, body);
     layout.appendChild(panel);
@@ -228,6 +252,10 @@ export class FireplaceUI {
 
   getTile() {
     return this.tile;
+  }
+
+  getStationId() {
+    return this.stationId;
   }
 
   open(state: FireplaceUIState) {
@@ -256,6 +284,7 @@ export class FireplaceUI {
     this.fuelWood = 0;
     this.activeUntil = 0;
     this.hasLighter = false;
+    this.stationId = "";
     this.inventory = [];
     this.cookSlots = null;
     this.cookTimerEls = [];
@@ -268,6 +297,7 @@ export class FireplaceUI {
     this.fuelWood = Math.max(0, Math.min(FIREPLACE_MAX_FUEL, state.fuelWood));
     this.activeUntil = state.activeUntil;
     this.hasLighter = state.hasLighter;
+    this.stationId = state.stationId ?? "";
     this.titleName = state.title?.trim() || "Fireplace";
     this.titleEl.textContent = this.titleName;
     this.inventory = parseInventory(state.inventoryJson);
@@ -344,6 +374,18 @@ export class FireplaceUI {
         : this.fuelWood <= 0
           ? "Add wood first"
           : "Need a lighter with uses remaining";
+    }
+
+    const metal = this.stationId.length > 0;
+    this.craftSectionEl.hidden = !metal;
+    if (metal) {
+      this.craftBtn.disabled = !burning;
+      this.craftHintEl.textContent = burning
+        ? "Screws, bolts, hammers, and hatchets. Break those tools back into scrap. The fire must stay lit."
+        : "Light the furnace to work metal.";
+      this.craftBtn.title = burning
+        ? "Open metal recipes"
+        : "Light the furnace first";
     }
 
     this.renderCookSlots();

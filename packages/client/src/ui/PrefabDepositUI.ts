@@ -38,6 +38,8 @@ const KIND_LABELS: Record<StructureBuildKind, string> = {
   fence: "Barbed Wire Fence",
   fence_corner: "Barbed Wire Fence Corner",
   bargate: "Bargate",
+  storage_box: "Storage Box",
+  storage_box_2: "Storage Box 2",
 };
 
 function makeCostCell(opts: {

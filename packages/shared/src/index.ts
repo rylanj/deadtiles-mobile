@@ -33,4 +33,5 @@ export * from "./buildPlacement.js";
 export * from "./birchport.js";
 export * from "./birchportBarracks.js";
 export * from "./coywolf.js";
+export * from "./bear.js";
 export * from "./onboarding.js";

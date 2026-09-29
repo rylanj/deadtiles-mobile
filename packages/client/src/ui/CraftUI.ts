@@ -9,6 +9,7 @@ import {
   parseInventory,
   type CraftIngredient,
   type CraftRecipe,
+  type CraftStationKind,
   type DisassemblyRecipe,
   type Inventory,
 } from "@zombie/shared";
@@ -100,8 +101,11 @@ export class CraftUI {
   /** Recipe id currently expanded (null = all collapsed). */
   private expandedRecipeId: string | null = null;
 
+  private station: CraftStationKind = "workbench";
   private overlay: HTMLElement;
   private listEl: HTMLElement;
+  private titleEl: HTMLHeadingElement;
+  private hintEl: HTMLElement;
 
   constructor(private handlers: CraftUIHandlers) {
     this.overlay = document.createElement("div");
@@ -121,6 +125,7 @@ export class CraftUI {
     const title = document.createElement("h2");
     title.className = "inventory-title";
     title.textContent = "Workbench";
+    this.titleEl = title;
     headerTop.append(
       title,
       createDialogCloseButton(() => this.handlers.onClose()),
@@ -128,6 +133,7 @@ export class CraftUI {
     const hint = document.createElement("span");
     hint.className = "inventory-hint";
     hint.textContent = "Craft materials, or break a firearm into parts";
+    this.hintEl = hint;
     header.append(headerTop, hint);
 
     const body = document.createElement("div");
@@ -155,10 +161,25 @@ export class CraftUI {
     return this.workbenchId;
   }
 
-  open(opts: { workbenchId: string; inventoryJson: string }) {
+  getStation(): CraftStationKind {
+    return this.station;
+  }
+
+  open(opts: {
+    workbenchId: string;
+    inventoryJson: string;
+    station?: CraftStationKind;
+  }) {
     this.workbenchId = opts.workbenchId;
+    this.station = opts.station === "furnace" ? "furnace" : "workbench";
     this.inventory = parseInventory(opts.inventoryJson);
     this.expandedRecipeId = null;
+    this.titleEl.textContent =
+      this.station === "furnace" ? "Furnace" : "Workbench";
+    this.hintEl.textContent =
+      this.station === "furnace"
+        ? "The fire must stay lit. If it goes out, the craft stops."
+        : "Craft materials, or break a firearm into parts";
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("craft-open");
@@ -177,20 +198,32 @@ export class CraftUI {
     this.overlay.hidden = true;
     document.body.classList.remove("craft-open");
     this.workbenchId = "";
+    this.station = "workbench";
     this.inventory = [];
     this.expandedRecipeId = null;
   }
 
   private render() {
     this.listEl.replaceChildren();
-    for (const recipe of CRAFT_RECIPES) {
+    const stationRecipes = CRAFT_RECIPES.filter(
+      (recipe) => recipe.station === this.station,
+    );
+    for (const recipe of stationRecipes) {
+      if (recipe.breakdown) continue;
       this.listEl.appendChild(this.buildRecipeCard(recipe));
     }
+
+    const breakdowns = stationRecipes.filter((recipe) => recipe.breakdown);
+    if (breakdowns.length === 0 && this.station !== "workbench") return;
 
     const breakHead = document.createElement("div");
     breakHead.className = "red-dialog-task-heading craft-break-heading";
     breakHead.textContent = "Break down";
     this.listEl.appendChild(breakHead);
+    for (const recipe of breakdowns) {
+      this.listEl.appendChild(this.buildToolBreakdownCard(recipe));
+    }
+    if (this.station !== "workbench") return;
     for (const recipe of DISASSEMBLY_RECIPES) {
       this.listEl.appendChild(this.buildDisassemblyCard(recipe));
     }
@@ -294,6 +327,108 @@ export class CraftUI {
       hint.className = "craft-recipe-hint";
       hint.textContent = "Inventory full";
       details.appendChild(hint);
+    }
+
+    section.appendChild(details);
+    return section;
+  }
+
+  private buildToolBreakdownCard(recipe: CraftRecipe): HTMLElement {
+    const input = recipe.inputs[0];
+    const toolId = input && isCraftItemQty(input) ? input.itemId : "";
+    const expanded = this.expandedRecipeId === recipe.id;
+    const hasTool = countItemInInventory(this.inventory, toolId) >= 1;
+    const can = canCraftRecipe(this.inventory, recipe);
+    const tool = getItemDefinition(toolId);
+    const name = tool?.name ?? toolId;
+    const outDef = getItemDefinition(recipe.output.itemId);
+    const outName = outDef?.name ?? recipe.output.itemId;
+
+    const section = document.createElement("div");
+    section.className = "craft-recipe";
+    if (expanded) section.classList.add("craft-recipe--expanded");
+    if (can) section.classList.add("craft-recipe--ready");
+
+    const summary = document.createElement("button");
+    summary.type = "button";
+    summary.className = "craft-recipe-summary";
+    summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    summary.setAttribute(
+      "aria-label",
+      `${expanded ? "Collapse" : "Expand"} break down ${name}`,
+    );
+    summary.appendChild(
+      makeDisplayCell({
+        itemId: toolId,
+        qtyLabel: "×1",
+        ariaLabel: name,
+      }),
+    );
+
+    const label = document.createElement("div");
+    label.className = "craft-recipe-summary-text";
+    const nameEl = document.createElement("span");
+    nameEl.className = "craft-recipe-summary-name";
+    nameEl.textContent = `Break down ${name}`;
+    const meta = document.createElement("span");
+    meta.className = "craft-recipe-summary-meta";
+    meta.textContent = can
+      ? "Ready to break down"
+      : hasTool
+        ? "Not enough room"
+        : "Not in inventory";
+    label.append(nameEl, meta);
+    summary.appendChild(label);
+
+    const chevron = document.createElement("span");
+    chevron.className = "craft-recipe-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.textContent = expanded ? "▾" : "▸";
+    summary.appendChild(chevron);
+    summary.addEventListener("click", () => {
+      this.expandedRecipeId =
+        this.expandedRecipeId === recipe.id ? null : recipe.id;
+      this.render();
+    });
+    section.appendChild(summary);
+    if (!expanded) return section;
+
+    const details = document.createElement("div");
+    details.className = "craft-recipe-details";
+
+    const returnTitle = document.createElement("div");
+    returnTitle.className = "red-dialog-task-heading";
+    returnTitle.textContent = "Returns";
+    details.appendChild(returnTitle);
+
+    const returnRow = document.createElement("div");
+    returnRow.className = "red-dialog-task-row";
+    returnRow.appendChild(
+      makeDisplayCell({
+        itemId: recipe.output.itemId,
+        qtyLabel: `×${recipe.output.quantity}`,
+        ariaLabel: `${outName} ×${recipe.output.quantity}`,
+      }),
+    );
+    details.appendChild(returnRow);
+
+    if (recipe.note) {
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent = recipe.note;
+      details.appendChild(hint);
+    }
+
+    if (can) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "red-dialog-complete-btn";
+      btn.textContent = "Break down";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onCraft(recipe.id);
+      });
+      details.appendChild(btn);
     }
 
     section.appendChild(details);

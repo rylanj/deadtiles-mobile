@@ -46,7 +46,6 @@ import {
   UNLOAD_DURATION_MS,
   playerNearEntity,
   weaponIndexFromItemId,
-  WEAPON_SLOT_COUNT,
   parseInventory,
   countItemInInventory,
   PLAYER_MAX_HEALTH,
@@ -97,6 +96,13 @@ import {
   COYWOLF_TILES_PER_RUN_FRAME,
   COYWOLF_TILES_PER_WALK_FRAME,
   COYWOLF_WALK_FRAMES,
+  BEAR_DIE_ANIM_MS,
+  BEAR_DIE_FRAMES,
+  BEAR_RENDER_HEIGHT,
+  BEAR_RUN_FRAMES,
+  BEAR_TILES_PER_RUN_FRAME,
+  BEAR_TILES_PER_WALK_FRAME,
+  BEAR_WALK_FRAMES,
   worldCenter,
   GUARD_WEAPON_INDEX,
   GUARD_NPC_TRADER_MAN,
@@ -134,6 +140,7 @@ import {
   directionFromScreenInput,
   directionFromWorldDelta,
   getStructureBuildCosts,
+  playerStructureId,
   parseStructureDepositsJson,
   parseStructureFenceFacing,
   parseStructureFenceCorner,
@@ -175,6 +182,7 @@ import {
   wornClothingStats,
   buildingInteriorIsPowered,
   fireplaceAirHeatFromOffset,
+  isStorageBoxKind,
   TEMPERATURE_CORE_DEFAULT,
   countStandingTreesNear,
   phaseOfDay,
@@ -212,6 +220,7 @@ import {
   chainLinkFenceDepthFootprint,
   chainLinkFenceSortDepth,
   overworldPartitionDepth,
+  setOverworldStructureFootprintProvider,
   strokeIsoFootprintOutline,
   strokeIsoTileOutline,
   tileIndicatorDepth,
@@ -228,6 +237,7 @@ import { ChimneySmoke } from "../world/ChimneySmoke";
 import {
   BuildingOcclusionMask,
   OCCLUSION_OVERLAY_DEPTH,
+  setPlayerWallOcclusionProvider,
 } from "../world/BuildingOcclusion";
 import { resetBuildingTextureCache } from "../world/buildingTextureCache";
 import {
@@ -246,10 +256,14 @@ import {
 } from "../sprites/atlasRegistry";
 import {
   InteriorView,
+  createPlywoodPartition,
+  destroyPartitionDisplay,
   drawInteriorPartitionTile,
   drawInteriorDoorTile,
   drawWallTile,
+  PLAYER_WALL_OCCLUSION_REACH,
   type InteriorDoorTile,
+  type PlayerWallOccluder,
   type InteriorFenceCornerTile,
   type InteriorFenceTile,
   type InteriorFireplaceTile,
@@ -274,12 +288,14 @@ import {
   entityFeetY,
   ZOMBIE_CRAWL_TILE_DROP_PX,
   COYWOLF_TILE_DROP_PX,
+  BEAR_TILE_DROP_PX,
   guardIdleAKKey,
   playerManIdleKey,
   resetTreeFallFrameRequests,
   updateEntityVisual,
   zombieIdleKey,
   coywolfIdleKey,
+  bearIdleKey,
 } from "../sprites/EntitySprites";
 import { DamageOverlay } from "../ui/DamageOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
@@ -338,6 +354,9 @@ import {
   resetFurnitureAssets,
   FIREPLACE1_ACTIVE_ANIM,
   FIREPLACE1_INACTIVE_KEY,
+  STORAGE_BOX_RENDER_SCALE,
+  storageBoxGroundOffset,
+  storageBoxTextureKey,
 } from "../sprites/InteriorAssets";
 import {
   ensurePlayerClothingPack,
@@ -352,6 +371,7 @@ import {
   traderGuardPackReady,
   traderManPackReady,
   coywolfPackReady,
+  bearPackReady,
 } from "../sprites/EntityAssetLoader";
 import {
   hideWorldEntering,
@@ -578,9 +598,16 @@ const MISS_DUST_BY_WEAPON: Record<number, MissDustConfig> = {
   },
 };
 
-type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf";
+type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear";
 
 /** Un-built prefab tile — mirrors a server StructureRecord with status "prefab". */
+type StorageBoxTile = {
+  x: number;
+  y: number;
+  ownerWallet: string;
+  kind: "storage_box" | "storage_box_2";
+};
+
 type PrefabTile = {
   x: number;
   y: number;
@@ -608,6 +635,7 @@ export class WorldScene extends Phaser.Scene {
   private corpseSprites = new Map<string, EntitySprite>();
   private zombieSprites = new Map<string, EntitySprite>();
   private coywolfSprites = new Map<string, EntitySprite>();
+  private bearSprites = new Map<string, EntitySprite>();
   private guardSprites = new Map<string, EntitySprite>();
   /** Local /godmode — sprite AABB + id overlay. */
   private godModeDebug = false;
@@ -617,13 +645,21 @@ export class WorldScene extends Phaser.Scene {
   private tempInteriorWallsByBuilding = new Map<string, InteriorWallTile[]>();
   /** Admin-placed overworld walls (`"tx,ty"`). */
   private tempOverworldWallKeys = new Set<string>();
-  private overworldTempWallSprites = new Map<string, Phaser.GameObjects.Graphics>();
+  private overworldTempWallSprites = new Map<
+    string,
+    Phaser.GameObjects.Graphics | Phaser.GameObjects.Image
+  >();
   private overworldBuildGhost?: Phaser.GameObjects.Graphics;
+  private overworldBuildGhostWall?: Phaser.GameObjects.Image;
+  private overworldBuildGhostWallSig = "";
   private overworldBuildGhostFireplace?: Phaser.GameObjects.Sprite;
+  private overworldBuildGhostStorageBox?: Phaser.GameObjects.Sprite;
   private overworldBuildGhostFence?: Phaser.GameObjects.Image;
   private overworldBuildHighlight?: Phaser.GameObjects.Graphics;
   /** Lite base-building — local "place structure" mode + selected kind. */
   private structureBuildMode = false;
+  /** One close request is in flight after the hammer left the hand. */
+  private structureBuildCloseSent = false;
   private structureBuildKind: StructureBuildKind | "deconstruct" = "wall";
   private structureFenceFacing: StructureFenceFacing = "SE";
   private structureFenceRotateWasDown = false;
@@ -635,6 +671,8 @@ export class WorldScene extends Phaser.Scene {
   private structureBuildFireplaceBtn?: HTMLButtonElement;
   private structureBuildFenceBtn?: HTMLButtonElement;
   private structureBuildBargateBtn?: HTMLButtonElement;
+  private structureBuildStorageBoxBtn?: HTMLButtonElement;
+  private structureBuildStorageBox2Btn?: HTMLButtonElement;
   private structureBuildDeconstructBtn?: HTMLButtonElement;
   /** Persistent player-built walls/doors/fireplaces, mirrors server in-memory maps. */
   private structureWallsByBuilding = new Map<
@@ -643,6 +681,7 @@ export class WorldScene extends Phaser.Scene {
   >();
   private structureDoorsByBuilding = new Map<string, InteriorDoorTile[]>();
   private structureFireplacesByBuilding = new Map<string, InteriorFireplaceTile[]>();
+  private structureStorageBoxesByBuilding = new Map<string, StorageBoxTile[]>();
   private structureFencesByBuilding = new Map<string, InteriorFenceTile[]>();
   private structureFenceCornersByBuilding = new Map<
     string,
@@ -653,6 +692,7 @@ export class WorldScene extends Phaser.Scene {
   private structureWallOwnersOverworld = new Map<string, string>();
   private structureDoorsOverworld = new Map<string, InteriorDoorTile>();
   private structureFireplacesOverworld = new Map<string, InteriorFireplaceTile>();
+  private structureStorageBoxesOverworld = new Map<string, StorageBoxTile>();
   private structureFencesOverworld = new Map<string, InteriorFenceTile>();
   /** Any occupied fence tile → origin key. */
   private structureFenceOccupancyOverworld = new Map<string, string>();
@@ -660,8 +700,14 @@ export class WorldScene extends Phaser.Scene {
     string,
     InteriorFenceCornerTile
   >();
-  private overworldStructureSprites = new Map<string, Phaser.GameObjects.Graphics>();
+  private overworldStructureSprites = new Map<
+    string,
+    Phaser.GameObjects.Graphics | Phaser.GameObjects.Image
+  >();
+  private overworldPrefabWalls = new Map<string, Phaser.GameObjects.Image>();
+  private overworldPrefabWallSig = new Map<string, string>();
   private overworldFireplaceSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  private overworldStorageBoxSprites = new Map<string, Phaser.GameObjects.Sprite>();
   private overworldFireplaceExpireEvents = new Map<string, Phaser.Time.TimerEvent>();
   private overworldFenceSprites = new Map<string, Phaser.GameObjects.Image>();
   private overworldFenceCornerSprites = new Map<string, Phaser.GameObjects.Image>();
@@ -670,6 +716,7 @@ export class WorldScene extends Phaser.Scene {
   private prefabsOverworld = new Map<string, PrefabTile>();
   private overworldPrefabGraphics = new Map<string, Phaser.GameObjects.Graphics>();
   private overworldPrefabFireplaces = new Map<string, Phaser.GameObjects.Sprite>();
+  private overworldPrefabStorageBoxes = new Map<string, Phaser.GameObjects.Sprite>();
   private overworldPrefabFences = new Map<string, Phaser.GameObjects.Image>();
   private prefabDepositUI?: PrefabDepositUI;
   private deconstructUI?: DeconstructUI;
@@ -702,6 +749,11 @@ export class WorldScene extends Phaser.Scene {
   private fireplaceSprint = false;
   private lastFireplaceClickKey: string | null = null;
   private lastFireplaceClickAt = 0;
+  /** Storage box the player clicked while out of reach. Walk up, then open it. */
+  private storageBoxTargetTile: { x: number; y: number } | null = null;
+  private storageBoxSprint = false;
+  private lastStorageBoxClickKey: string | null = null;
+  private lastStorageBoxClickAt = 0;
   /** Standing tree the player clicked with a hatchet — walk up, then chop. */
   private treeChopTargetTile: { x: number; y: number } | null = null;
   /** Locked neighbour tile to stand on (set once when the chase starts). */
@@ -734,6 +786,7 @@ export class WorldScene extends Phaser.Scene {
   private thirstLabelEl?: HTMLElement;
   private tempLabelEl?: HTMLElement;
   private temperatureFxEl?: HTMLElement;
+  private infectionFxEl?: HTMLElement;
   private worldClockEl?: HTMLElement;
   private worldClockTimeEl?: HTMLElement;
   private worldClockCoreEl?: HTMLElement;
@@ -887,6 +940,7 @@ export class WorldScene extends Phaser.Scene {
     thirstCritical: null as boolean | null,
     tempCritical: null as boolean | null,
     tempFx: "",
+    infectionFx: "",
   };
   /** Last strings pushed to the world clock (time / core / air readouts). */
   private lastWorldClock = {
@@ -944,7 +998,7 @@ export class WorldScene extends Phaser.Scene {
   private hoveredSearchableId: string | null = null;
   /** Dead unlooted entity under the cursor (zombie, guard, or player corpse). */
   private hoveredLootableId: string | null = null;
-  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | null = null;
+  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
   private searchProgressEl?: HTMLElement;
   private searchProgressLabel?: HTMLElement;
   private searchProgressFill?: HTMLElement;
@@ -984,7 +1038,7 @@ export class WorldScene extends Phaser.Scene {
   private interactSprint = false;
   /** Double-click lootable — approach then auto-start search (no E required). */
   private lootTargetId: string | null = null;
-  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | null = null;
+  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
   private lootSprint = false;
   private lastPursuitMoveSentAt = 0;
   /** Double-click sprint detection (time-only — tiles shift under cursor while moving). */
@@ -1713,12 +1767,17 @@ export class WorldScene extends Phaser.Scene {
     this.thirstLabelEl = document.getElementById("thirst-label") ?? undefined;
     this.tempLabelEl = document.getElementById("temp-label") ?? undefined;
     this.temperatureFxEl = document.getElementById("temperature-fx") ?? undefined;
+    this.infectionFxEl = document.getElementById("infection-fx") ?? undefined;
     this.worldClockEl = document.getElementById("world-clock") ?? undefined;
     this.worldClockTimeEl = document.getElementById("world-clock-time") ?? undefined;
     this.worldClockCoreEl = document.getElementById("world-clock-core") ?? undefined;
     this.worldClockAirEl = document.getElementById("world-clock-air") ?? undefined;
 
     this.tileManager = drawProceduralWorld(this, this.worldBounds);
+    setOverworldStructureFootprintProvider((tx, ty) =>
+      this.overworldStructureDepthFootprints(tx + 0.5, ty + 0.5),
+    );
+    setPlayerWallOcclusionProvider((tx, ty) => this.playerWallOccluders(tx, ty));
     this.dayNightLighting = new DayNightLighting(this);
     this.weatherFx = new WeatherFx(this);
     this.chimneySmoke = new ChimneySmoke(this);
@@ -1756,6 +1815,8 @@ export class WorldScene extends Phaser.Scene {
         this.takeFromContainer(containerId, fromSlot, toSlot),
       onMoveInContainer: (containerId, fromSlot, toSlot) =>
         this.moveInContainer(containerId, fromSlot, toSlot),
+      onStoreInContainer: (containerId, fromSlot, toSlot) =>
+        this.storeInContainer(containerId, fromSlot, toSlot),
       onMovePlayerSlot: (fromSlot, toSlot) =>
         this.moveInventorySlot(fromSlot, toSlot),
       onClose: () => {},
@@ -1770,6 +1831,7 @@ export class WorldScene extends Phaser.Scene {
       onLight: () => this.sendFireplaceLight(),
       onExtinguish: () => this.sendFireplaceExtinguish(),
       onCookSlot: (slot, itemId) => this.sendFireplaceCook(slot, itemId),
+      onCraft: () => this.sendFurnaceCraftOpen(),
     });
     this.prefabDepositUI = new PrefabDepositUI({
       onClose: () => this.closePrefabUI(),
@@ -2596,6 +2658,7 @@ export class WorldScene extends Phaser.Scene {
     this.updateDoorPursuit();
     this.updateBargatePursuit();
     this.updateFireplacePursuit();
+    this.updateStorageBoxPursuit();
     this.updatePrefabPursuit();
     this.updateTreeChopPursuit();
     this.updateTraderProximity();
@@ -2711,6 +2774,7 @@ export class WorldScene extends Phaser.Scene {
       thirstCritical: null,
       tempCritical: null,
       tempFx: "",
+      infectionFx: "",
     };
     this.lastWorldClock = {
       time: "",
@@ -2735,6 +2799,8 @@ export class WorldScene extends Phaser.Scene {
     this.chimneySmoke?.destroy();
     this.chimneySmoke = undefined;
     this.tileManager = undefined;
+    setOverworldStructureFootprintProvider(null);
+    setPlayerWallOcclusionProvider(null);
     setCuboidStatsProvider(null);
     resetBuildingTextureCache(this);
     resetTreeFallFrameRequests();
@@ -2781,17 +2847,20 @@ export class WorldScene extends Phaser.Scene {
     this.structureWallsByBuilding.clear();
     this.structureDoorsByBuilding.clear();
     this.structureFireplacesByBuilding.clear();
+    this.structureStorageBoxesByBuilding.clear();
     this.structureFencesByBuilding.clear();
     this.structureFenceCornersByBuilding.clear();
     this.structureWallKeysOverworld.clear();
     this.structureWallOwnersOverworld.clear();
     this.structureDoorsOverworld.clear();
     this.structureFireplacesOverworld.clear();
+    this.structureStorageBoxesOverworld.clear();
     this.structureFencesOverworld.clear();
     this.structureFenceOccupancyOverworld.clear();
     this.structureFenceCornersOverworld.clear();
     this.clearOverworldStructureSprites();
     this.clearOverworldFireplaceSprites();
+    this.clearOverworldStorageBoxSprites();
     this.clearOverworldFenceSprites();
     this.clearOverworldFenceCornerSprites();
     this.prefabsByBuilding.clear();
@@ -2838,6 +2907,7 @@ export class WorldScene extends Phaser.Scene {
       this.corpseSprites,
       this.zombieSprites,
       this.coywolfSprites,
+      this.bearSprites,
       this.guardSprites,
     ]) {
       for (const sprite of map.values()) {
@@ -2993,14 +3063,15 @@ export class WorldScene extends Phaser.Scene {
     btn.setAttribute("aria-pressed", this.aimHeld ? "true" : "false");
   }
 
-  /** Show reload for ranged weapons, build for hammer, map when inventory has a map. */
+  /** Show reload for ranged weapons, build while a hammer is equipped, map when inventory has a map. */
   private refreshMobileActionButtons() {
     if (this.mobileMapBtn) {
       this.mobileMapBtn.hidden = !this.playerHasMapItem();
     }
     if (this.mobileBuildBtn) {
-      this.mobileBuildBtn.hidden = !this.playerHasHammerInHotbar();
+      this.mobileBuildBtn.hidden = !this.playerHasHammerEquipped();
     }
+    this.closeStructureBuildWithoutHammer();
 
     this.refreshMobileAimButton();
 
@@ -3038,19 +3109,35 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** True when a hammer sits in a hotbar slot, equipped or not. */
-  private playerHasHammerInHotbar(): boolean {
+  /** True when the hammer is the weapon currently in hand. */
+  private playerHasHammerEquipped(): boolean {
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (!me) return false;
-    const inventoryJson =
-      this.localInventorySync?.inventoryJson ?? me.inventoryJson;
-    const inventory = parseInventory(inventoryJson);
-    const hammer = weaponIndexFromItemId("weapon_hammer");
-    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-      const slot = inventory[i];
-      if (slot && weaponIndexFromItemId(slot.id) === hammer) return true;
+    const equipped =
+      this.localInventorySync?.equippedWeaponIndex ??
+      me?.equippedWeaponIndex ??
+      -1;
+    return equipped === weaponIndexFromItemId("weapon_hammer");
+  }
+
+  /**
+   * Build mode stays up only while the hammer is equipped. Hide it immediately
+   * and tell the server once; further frames wait for that reply.
+   */
+  private closeStructureBuildWithoutHammer() {
+    if (!this.structureBuildMode || this.playerHasHammerEquipped()) {
+      this.structureBuildCloseSent = false;
+      return;
     }
-    return false;
+    if (this.structureBuildCloseSent || !this.room) return;
+    this.structureBuildCloseSent = true;
+    this.structureBuildMode = false;
+    document.body.classList.remove("build-mode-open");
+    this.updateStructureBuildHud();
+    if (this.deconstructUI?.isOpen()) this.closeDeconstructUI();
+    this.clearBuildModePreview();
+    if (!this.buildMode) this.game.canvas.style.cursor = "";
+    const message: ClientMessage = { type: "toggleStructureBuild" };
+    this.room.send("action", message);
   }
 
   /** Tab / mobile inventory button — shared open/close path. */
@@ -4028,10 +4115,10 @@ export class WorldScene extends Phaser.Scene {
 
   private toggleStructureBuildMode() {
     if (!this.room) return;
-    // Entering needs a hammer in the hotbar. Exiting (B / Esc / button) always works.
-    if (!this.structureBuildMode && !this.playerHasHammerInHotbar()) {
+    // Entering needs the hammer in hand. Exiting (B / Esc / button) always works.
+    if (!this.structureBuildMode && !this.playerHasHammerEquipped()) {
       this.lootPopup?.show([], {
-        header: "You need a weapon in your hotbar to build",
+        header: "Equip a hammer to build",
       });
       return;
     }
@@ -4092,6 +4179,24 @@ export class WorldScene extends Phaser.Scene {
       this.updateStructureBuildHud();
     });
 
+    const storageBoxBtn = document.createElement("button");
+    storageBoxBtn.type = "button";
+    storageBoxBtn.className = "structure-build-kind-btn";
+    storageBoxBtn.textContent = "Storage Box";
+    storageBoxBtn.addEventListener("click", () => {
+      this.structureBuildKind = "storage_box";
+      this.updateStructureBuildHud();
+    });
+
+    const storageBox2Btn = document.createElement("button");
+    storageBox2Btn.type = "button";
+    storageBox2Btn.className = "structure-build-kind-btn";
+    storageBox2Btn.textContent = "Storage Box 2";
+    storageBox2Btn.addEventListener("click", () => {
+      this.structureBuildKind = "storage_box_2";
+      this.updateStructureBuildHud();
+    });
+
     const deconstructBtn = document.createElement("button");
     deconstructBtn.type = "button";
     deconstructBtn.className =
@@ -4116,6 +4221,8 @@ export class WorldScene extends Phaser.Scene {
       fireplaceBtn,
       fenceBtn,
       bargateBtn,
+      storageBoxBtn,
+      storageBox2Btn,
       deconstructBtn,
       cost,
       hint,
@@ -4127,6 +4234,8 @@ export class WorldScene extends Phaser.Scene {
     this.structureBuildFireplaceBtn = fireplaceBtn;
     this.structureBuildFenceBtn = fenceBtn;
     this.structureBuildBargateBtn = bargateBtn;
+    this.structureBuildStorageBoxBtn = storageBoxBtn;
+    this.structureBuildStorageBox2Btn = storageBox2Btn;
     this.structureBuildDeconstructBtn = deconstructBtn;
   }
 
@@ -4153,6 +4262,14 @@ export class WorldScene extends Phaser.Scene {
       "structure-build-kind-btn--active",
       this.structureBuildKind === "bargate",
     );
+    this.structureBuildStorageBoxBtn?.classList.toggle(
+      "structure-build-kind-btn--active",
+      this.structureBuildKind === "storage_box",
+    );
+    this.structureBuildStorageBox2Btn?.classList.toggle(
+      "structure-build-kind-btn--active",
+      this.structureBuildKind === "storage_box_2",
+    );
     this.structureBuildDeconstructBtn?.classList.toggle(
       "structure-build-kind-btn--active",
       this.structureBuildKind === "deconstruct",
@@ -4161,11 +4278,15 @@ export class WorldScene extends Phaser.Scene {
     if (hint) {
       hint.textContent =
         this.structureBuildKind === "deconstruct"
-          ? "Click your wall/door/fireplace/fence to deconstruct · B or Esc to exit"
+          ? "Click your wall, door, fireplace, fence, or storage box to deconstruct · B or Esc to exit"
           : this.structureBuildKind === "door"
             ? "Doors need walls on both sides · B or Esc to exit"
             : this.structureBuildKind === "fireplace"
               ? "Click a tile to place Fireplace · B or Esc to exit"
+              : this.structureBuildKind === "storage_box"
+                ? "Click a tile to place Storage Box · B or Esc to exit"
+              : this.structureBuildKind === "storage_box_2"
+                ? "Click a tile to place Storage Box 2 · B or Esc to exit"
               : isStructurePanelKind(this.structureBuildKind)
                 ? "R to rotate · 3×1 footprint · B or Esc to exit"
                 : "Click a tile to place · B or Esc to exit";
@@ -4644,6 +4765,7 @@ export class WorldScene extends Phaser.Scene {
       this.setOverworldTempWallsVisible(true);
       this.setOverworldStructuresVisible(true);
       this.syncOverworldFireplaceSprites();
+      this.syncOverworldStorageBoxSprites();
       this.syncOverworldFenceSprites();
       this.syncOverworldFenceCornerSprites();
       this.exteriorSoftPurgeActive = true;
@@ -4730,6 +4852,7 @@ export class WorldScene extends Phaser.Scene {
   /** Fireplaces / fence ghosts that no-op'd while the furniture pack loaded. */
   private refreshFurnitureDependentSprites() {
     this.syncOverworldFireplaceSprites();
+    this.syncOverworldStorageBoxSprites();
     this.redrawOverworldPrefabs();
     const me = this.room?.state?.players?.get(this.sessionId);
     if (me?.inInterior) {
@@ -4835,6 +4958,9 @@ export class WorldScene extends Phaser.Scene {
     for (const f of this.structureFireplacesByBuilding.get(buildingKey(bx, by)) ?? []) {
       out.push({ ox: f.x, oy: f.y, w: 1, h: 1 });
     }
+    for (const box of this.structureStorageBoxesByBuilding.get(buildingKey(bx, by)) ?? []) {
+      out.push({ ox: box.x, oy: box.y, w: 1, h: 1 });
+    }
     for (const f of this.structureFencesByBuilding.get(buildingKey(bx, by)) ?? []) {
       out.push(chainLinkFenceDepthFootprint(f.x, f.y, f.facing));
     }
@@ -4846,8 +4972,9 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * Procedural interior walls plus admin /build extras and persistent
-   * player-built structures. Doors only count as blocking while closed, fences
-   * always block, and fireplaces are walkable. Used for collision / placement.
+   * player-built structures. Doors only count as blocking while closed. Fences
+   * and storage boxes always block. Fireplaces are walkable. Used for collision
+   * and placement.
    */
   private mergedInteriorWalls(
     buildingX: number,
@@ -4870,12 +4997,14 @@ export class WorldScene extends Phaser.Scene {
       }),
     );
     const fenceCorners = this.structureFenceCornersByBuilding.get(key) ?? [];
+    const storageBoxes = this.structureStorageBoxesByBuilding.get(key) ?? [];
     if (
       extras.length === 0 &&
       structWalls.length === 0 &&
       closedDoors.length === 0 &&
       fenceTiles.length === 0 &&
-      fenceCorners.length === 0
+      fenceCorners.length === 0 &&
+      storageBoxes.length === 0
     ) {
       return base;
     }
@@ -4887,6 +5016,7 @@ export class WorldScene extends Phaser.Scene {
       ...closedDoors,
       ...fenceTiles,
       ...fenceCorners,
+      ...storageBoxes,
     ]) {
       const k = `${w.x},${w.y}`;
       if (seen.has(k)) continue;
@@ -5100,6 +5230,21 @@ export class WorldScene extends Phaser.Scene {
           });
           this.structureFenceCornersByBuilding.set(key, list);
         }
+      } else if (isStorageBoxKind(msg.kind)) {
+        const list = this.structureStorageBoxesByBuilding.get(key) ?? [];
+        const existing = list.find((f) => f.x === msg.x && f.y === msg.y);
+        if (existing) {
+          existing.ownerWallet = msg.ownerWallet;
+          existing.kind = msg.kind;
+        } else {
+          list.push({
+            x: msg.x,
+            y: msg.y,
+            ownerWallet: msg.ownerWallet,
+            kind: msg.kind,
+          });
+          this.structureStorageBoxesByBuilding.set(key, list);
+        }
       }
       const me = this.room?.state?.players?.get(this.sessionId);
       if (me?.inInterior && me.buildingX === msg.buildingX && me.buildingY === msg.buildingY) {
@@ -5119,6 +5264,14 @@ export class WorldScene extends Phaser.Scene {
             ownerWallet: msg.ownerWallet,
             activeUntil: msg.activeUntil,
             fuelWood: msg.fuelWood,
+          });
+          if (!isFurniturePackReady()) this.requestFurnitureArt();
+        } else if (isStorageBoxKind(msg.kind)) {
+          this.interiorView?.upsertStorageBox({
+            x: msg.x,
+            y: msg.y,
+            ownerWallet: msg.ownerWallet,
+            kind: msg.kind,
           });
           if (!isFurniturePackReady()) this.requestFurnitureArt();
         } else if (isStructurePanelKind(msg.kind)) {
@@ -5168,6 +5321,15 @@ export class WorldScene extends Phaser.Scene {
           activeUntil: msg.activeUntil,
           fuelWood: msg.fuelWood,
         });
+      } else if (isStorageBoxKind(msg.kind)) {
+        const tile = {
+          x: msg.x,
+          y: msg.y,
+          ownerWallet: msg.ownerWallet,
+          kind: msg.kind,
+        };
+        this.structureStorageBoxesOverworld.set(`${msg.x},${msg.y}`, tile);
+        this.upsertOverworldStorageBoxSprite(tile);
       } else if (isStructurePanelKind(msg.kind)) {
         this.rememberOverworldFence({
           x: msg.x,
@@ -5352,6 +5514,13 @@ export class WorldScene extends Phaser.Scene {
           if (next.length === 0) this.structureFireplacesByBuilding.delete(key);
           else this.structureFireplacesByBuilding.set(key, next);
         }
+      } else if (isStorageBoxKind(msg.kind)) {
+        const list = this.structureStorageBoxesByBuilding.get(key);
+        if (list) {
+          const next = list.filter((f) => f.x !== msg.x || f.y !== msg.y);
+          if (next.length === 0) this.structureStorageBoxesByBuilding.delete(key);
+          else this.structureStorageBoxesByBuilding.set(key, next);
+        }
       } else if (isStructurePanelKind(msg.kind)) {
         const list = this.structureFencesByBuilding.get(key);
         if (list) {
@@ -5372,6 +5541,7 @@ export class WorldScene extends Phaser.Scene {
         if (msg.kind === "wall") this.interiorView?.removeStructureWall(msg.x, msg.y);
         else if (msg.kind === "door") this.interiorView?.removeExtraDoor(msg.x, msg.y);
         else if (msg.kind === "fireplace") this.interiorView?.removeFireplace(msg.x, msg.y);
+        else if (isStorageBoxKind(msg.kind)) this.interiorView?.removeStorageBox(msg.x, msg.y);
         else if (isStructurePanelKind(msg.kind)) this.interiorView?.removeFence(msg.x, msg.y);
         else if (msg.kind === "fence_corner") {
           this.interiorView?.removeFenceCorner(msg.x, msg.y);
@@ -5389,6 +5559,9 @@ export class WorldScene extends Phaser.Scene {
       } else if (msg.kind === "fireplace") {
         this.structureFireplacesOverworld.delete(`${msg.x},${msg.y}`);
         this.removeOverworldFireplaceSprite(msg.x, msg.y);
+      } else if (isStorageBoxKind(msg.kind)) {
+        this.structureStorageBoxesOverworld.delete(`${msg.x},${msg.y}`);
+        this.removeOverworldStorageBoxSprite(msg.x, msg.y);
       } else if (isStructurePanelKind(msg.kind)) {
         const fence = this.structureFencesOverworld.get(`${msg.x},${msg.y}`);
         this.forgetOverworldFence(msg.x, msg.y);
@@ -5442,6 +5615,24 @@ export class WorldScene extends Phaser.Scene {
       this.clearFireplaceTarget();
     }
     if (
+      this.storageBoxTargetTile &&
+      this.storageBoxTargetTile.x === msg.x &&
+      this.storageBoxTargetTile.y === msg.y
+    ) {
+      this.storageBoxTargetTile = null;
+      this.storageBoxSprint = false;
+    }
+    const removedId = playerStructureId(
+      msg.inInterior,
+      msg.buildingX,
+      msg.buildingY,
+      msg.x,
+      msg.y,
+    );
+    if (this.containerLootUI?.getContainerIds().includes(removedId)) {
+      this.containerLootUI.close();
+    }
+    if (
       this.prefabTargetTile &&
       this.prefabTargetTile.x === msg.x &&
       this.prefabTargetTile.y === msg.y
@@ -5481,6 +5672,7 @@ export class WorldScene extends Phaser.Scene {
       const walls: { x: number; y: number; ownerWallet: string }[] = [];
       const doors: InteriorDoorTile[] = [];
       const fireplaces: InteriorFireplaceTile[] = [];
+      const storageBoxes: StorageBoxTile[] = [];
       const fences: InteriorFenceTile[] = [];
       const fenceCorners: InteriorFenceCornerTile[] = [];
       const prefabs: PrefabTile[] = [];
@@ -5515,6 +5707,13 @@ export class WorldScene extends Phaser.Scene {
             activeUntil: Number(s.activeUntil ?? 0) || 0,
             fuelWood: Number(s.fuelWood ?? 0) || 0,
           });
+        } else if (isStorageBoxKind(s.kind)) {
+          storageBoxes.push({
+            x: s.x,
+            y: s.y,
+            ownerWallet: s.ownerWallet,
+            kind: s.kind,
+          });
         } else if (isStructurePanelKind(s.kind)) {
           fences.push({
             x: s.x,
@@ -5535,6 +5734,7 @@ export class WorldScene extends Phaser.Scene {
       this.structureWallsByBuilding.set(key, walls);
       this.structureDoorsByBuilding.set(key, doors);
       this.structureFireplacesByBuilding.set(key, fireplaces);
+      this.structureStorageBoxesByBuilding.set(key, storageBoxes);
       this.structureFencesByBuilding.set(key, fences);
       this.structureFenceCornersByBuilding.set(key, fenceCorners);
       this.prefabsByBuilding.set(key, prefabs);
@@ -5547,6 +5747,7 @@ export class WorldScene extends Phaser.Scene {
     this.structureWallOwnersOverworld.clear();
     this.structureDoorsOverworld.clear();
     this.structureFireplacesOverworld.clear();
+    this.structureStorageBoxesOverworld.clear();
     this.structureFencesOverworld.clear();
     this.structureFenceOccupancyOverworld.clear();
     this.structureFenceCornersOverworld.clear();
@@ -5584,6 +5785,13 @@ export class WorldScene extends Phaser.Scene {
           activeUntil: Number(s.activeUntil ?? 0) || 0,
           fuelWood: Number(s.fuelWood ?? 0) || 0,
         });
+      } else if (isStorageBoxKind(s.kind)) {
+        this.structureStorageBoxesOverworld.set(`${s.x},${s.y}`, {
+          x: s.x,
+          y: s.y,
+          ownerWallet: s.ownerWallet,
+          kind: s.kind,
+        });
       } else if (isStructurePanelKind(s.kind)) {
         this.rememberOverworldFence({
           x: s.x,
@@ -5604,6 +5812,7 @@ export class WorldScene extends Phaser.Scene {
     this.redrawOverworldPrefabs();
     this.redrawOverworldStructures();
     this.syncOverworldFireplaceSprites();
+    this.syncOverworldStorageBoxSprites();
     this.syncOverworldFenceSprites();
     this.syncOverworldFenceCornerSprites();
     this.syncOverworldBuildingPlacementBlockers();
@@ -5618,6 +5827,7 @@ export class WorldScene extends Phaser.Scene {
     for (const k of this.structureWallKeysOverworld) tiles.push(k);
     for (const k of this.structureDoorsOverworld.keys()) tiles.push(k);
     for (const k of this.structureFireplacesOverworld.keys()) tiles.push(k);
+    for (const k of this.structureStorageBoxesOverworld.keys()) tiles.push(k);
     for (const k of this.structureFenceOccupancyOverworld.keys()) tiles.push(k);
     for (const k of this.structureFenceCornersOverworld.keys()) tiles.push(k);
     for (const p of this.prefabsOverworld.values()) {
@@ -5644,13 +5854,17 @@ export class WorldScene extends Phaser.Scene {
     this.interiorView?.setFireplaces(
       this.structureFireplacesByBuilding.get(key) ?? [],
     );
+    this.interiorView?.setStorageBoxes(
+      this.structureStorageBoxesByBuilding.get(key) ?? [],
+    );
     this.interiorView?.setFences(this.structureFencesByBuilding.get(key) ?? []);
     this.interiorView?.setFenceCorners(
       this.structureFenceCornersByBuilding.get(key) ?? [],
     );
     if (
       !isFurniturePackReady() &&
-      (this.structureFireplacesByBuilding.get(key) ?? []).length > 0
+      ((this.structureFireplacesByBuilding.get(key) ?? []).length > 0 ||
+        (this.structureStorageBoxesByBuilding.get(key) ?? []).length > 0)
     ) {
       this.requestFurnitureArt();
     }
@@ -5733,7 +5947,7 @@ export class WorldScene extends Phaser.Scene {
     const key = buildingKey(buildingX, buildingY);
     const tiles = this.prefabsByBuilding.get(key) ?? [];
     if (
-      tiles.some((t) => t.kind === "fireplace") &&
+      tiles.some((t) => t.kind === "fireplace" || isStorageBoxKind(t.kind)) &&
       !isFurniturePackReady()
     ) {
       this.requestFurnitureArt();
@@ -5741,11 +5955,26 @@ export class WorldScene extends Phaser.Scene {
     this.interiorView?.setPrefabGhosts(tiles);
   }
 
+  private dropOverworldPrefabWall(key: string) {
+    const wall = this.overworldPrefabWalls.get(key);
+    if (!wall) return;
+    destroyPartitionDisplay(this, wall);
+    this.overworldPrefabWalls.delete(key);
+    this.overworldPrefabWallSig.delete(key);
+  }
+
   private clearOverworldPrefabSprites() {
     for (const g of this.overworldPrefabGraphics.values()) g.destroy();
     this.overworldPrefabGraphics.clear();
+    for (const wall of this.overworldPrefabWalls.values()) {
+      destroyPartitionDisplay(this, wall);
+    }
+    this.overworldPrefabWalls.clear();
+    this.overworldPrefabWallSig.clear();
     for (const s of this.overworldPrefabFireplaces.values()) s.destroy();
     this.overworldPrefabFireplaces.clear();
+    for (const s of this.overworldPrefabStorageBoxes.values()) s.destroy();
+    this.overworldPrefabStorageBoxes.clear();
     for (const s of this.overworldPrefabFences.values()) s.destroy();
     this.overworldPrefabFences.clear();
   }
@@ -5761,13 +5990,23 @@ export class WorldScene extends Phaser.Scene {
     for (const key of [...this.overworldPrefabGraphics.keys()]) {
       if (!want.has(key)) {
         this.overworldPrefabGraphics.get(key)?.destroy();
+        this.dropOverworldPrefabWall(key);
         this.overworldPrefabGraphics.delete(key);
       }
+    }
+    for (const key of [...this.overworldPrefabWalls.keys()]) {
+      if (!want.has(key)) this.dropOverworldPrefabWall(key);
     }
     for (const key of [...this.overworldPrefabFireplaces.keys()]) {
       if (!want.has(key)) {
         this.overworldPrefabFireplaces.get(key)?.destroy();
         this.overworldPrefabFireplaces.delete(key);
+      }
+    }
+    for (const key of [...this.overworldPrefabStorageBoxes.keys()]) {
+      if (!want.has(key)) {
+        this.overworldPrefabStorageBoxes.get(key)?.destroy();
+        this.overworldPrefabStorageBoxes.delete(key);
       }
     }
     for (const key of [...this.overworldPrefabFences.keys()]) {
@@ -5790,9 +6029,12 @@ export class WorldScene extends Phaser.Scene {
       const key = `${tile.x},${tile.y}`;
       if (tile.kind === "fireplace") {
         this.overworldPrefabGraphics.get(key)?.destroy();
+        this.dropOverworldPrefabWall(key);
         this.overworldPrefabGraphics.delete(key);
         this.overworldPrefabFences.get(key)?.destroy();
         this.overworldPrefabFences.delete(key);
+        this.overworldPrefabStorageBoxes.get(key)?.destroy();
+        this.overworldPrefabStorageBoxes.delete(key);
         if (!textureKeyExists(this, FIREPLACE1_INACTIVE_KEY)) {
           this.requestFurnitureArt();
           continue;
@@ -5816,11 +6058,50 @@ export class WorldScene extends Phaser.Scene {
         continue;
       }
 
+      if (isStorageBoxKind(tile.kind)) {
+        this.overworldPrefabGraphics.get(key)?.destroy();
+        this.dropOverworldPrefabWall(key);
+        this.overworldPrefabGraphics.delete(key);
+        this.overworldPrefabFences.get(key)?.destroy();
+        this.overworldPrefabFences.delete(key);
+        this.overworldPrefabFireplaces.get(key)?.destroy();
+        this.overworldPrefabFireplaces.delete(key);
+        const textureKey = storageBoxTextureKey(tile.kind);
+        if (!textureKeyExists(this, textureKey)) {
+          this.requestFurnitureArt();
+          continue;
+        }
+        const layout = this.storageBoxScreenLayout(tile.x, tile.y, tile.kind);
+        let sprite = this.overworldPrefabStorageBoxes.get(key);
+        if (!sprite) {
+          sprite = addSpriteForKey(
+            this,
+            layout.isoX,
+            layout.groundY,
+            textureKey,
+          );
+          sprite.setOrigin(0.5, 1);
+          sprite.setAlpha(0.45);
+          this.overworldPrefabStorageBoxes.set(key, sprite);
+        } else {
+          applyTextureKey(sprite, textureKey);
+          sprite.setPosition(layout.isoX, layout.groundY);
+        }
+        this.fitFurnitureSprite(sprite, layout.renderHeight);
+        sprite.setDepth(this.placeableRenderDepth(tile.x + 0.5, tile.y + 0.5));
+        sprite.setAlpha(0.45);
+        sprite.setVisible(true);
+        continue;
+      }
+
       if (isStructurePanelKind(tile.kind)) {
         this.overworldPrefabGraphics.get(key)?.destroy();
+        this.dropOverworldPrefabWall(key);
         this.overworldPrefabGraphics.delete(key);
         this.overworldPrefabFireplaces.get(key)?.destroy();
         this.overworldPrefabFireplaces.delete(key);
+        this.overworldPrefabStorageBoxes.get(key)?.destroy();
+        this.overworldPrefabStorageBoxes.delete(key);
         const facing = parseStructureFenceFacing(tile.facing);
         const texKey = structurePanelTextureKey(tile.kind, facing);
         if (!textureKeyExists(this, texKey)) continue;
@@ -5839,9 +6120,12 @@ export class WorldScene extends Phaser.Scene {
 
       if (tile.kind === "fence_corner") {
         this.overworldPrefabGraphics.get(key)?.destroy();
+        this.dropOverworldPrefabWall(key);
         this.overworldPrefabGraphics.delete(key);
         this.overworldPrefabFireplaces.get(key)?.destroy();
         this.overworldPrefabFireplaces.delete(key);
+        this.overworldPrefabStorageBoxes.get(key)?.destroy();
+        this.overworldPrefabStorageBoxes.delete(key);
         const texKey = chainLinkFenceCornerTextureKey(
           parseStructureFenceCorner(tile.facing),
         );
@@ -5867,6 +6151,8 @@ export class WorldScene extends Phaser.Scene {
 
       this.overworldPrefabFireplaces.get(key)?.destroy();
       this.overworldPrefabFireplaces.delete(key);
+      this.overworldPrefabStorageBoxes.get(key)?.destroy();
+      this.overworldPrefabStorageBoxes.delete(key);
       this.overworldPrefabFences.get(key)?.destroy();
       this.overworldPrefabFences.delete(key);
       let g = this.overworldPrefabGraphics.get(key);
@@ -5888,15 +6174,37 @@ export class WorldScene extends Phaser.Scene {
       const runNS = hasN || hasS;
       const runEW = hasW || hasE || (!hasN && !hasS);
       if (tile.kind === "door") {
+        this.dropOverworldPrefabWall(key);
         drawInteriorDoorTile(g, tile.x, tile.y, runNS ? "ns" : "ew", false, false);
       } else {
-        drawInteriorPartitionTile(
-          g,
+        g.clear();
+        const axis = runNS && runEW ? "both" : runNS ? "ns" : "ew";
+        const sig = `${hasN ? 1 : 0}${hasS ? 1 : 0}${hasE ? 1 : 0}${hasW ? 1 : 0}`;
+        const depth = overworldPartitionDepth(tile.x, tile.y, bias);
+        const prev = this.overworldPrefabWalls.get(key);
+        if (this.overworldPrefabWallSig.get(key) === sig && prev?.active) {
+          prev.setDepth(depth);
+          prev.setAlpha(0.45);
+          prev.setVisible(true);
+          continue;
+        }
+        this.overworldPrefabWallSig.set(key, sig);
+        const display = createPlywoodPartition(
+          this,
           tile.x,
           tile.y,
           wallSet,
-          runNS && runEW ? "both" : runNS ? "ns" : "ew",
+          axis,
+          depth,
+          0.45,
+          `plywood-wall:oprefab:${tile.x},${tile.y}`,
+          prev ?? null,
         );
+        if (display instanceof Phaser.GameObjects.Image) {
+          this.overworldPrefabWalls.set(key, display);
+        } else {
+          this.overworldPrefabWalls.delete(key);
+        }
       }
     }
   }
@@ -5983,7 +6291,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private clearOverworldStructureSprites() {
-    for (const g of this.overworldStructureSprites.values()) g.destroy();
+    for (const g of this.overworldStructureSprites.values()) {
+      destroyPartitionDisplay(this, g);
+    }
     this.overworldStructureSprites.clear();
   }
 
@@ -5997,6 +6307,7 @@ export class WorldScene extends Phaser.Scene {
   private setOverworldStructuresVisible(visible: boolean) {
     for (const g of this.overworldStructureSprites.values()) g.setVisible(visible);
     for (const sprite of this.overworldFireplaceSprites.values()) sprite.setVisible(visible);
+    for (const sprite of this.overworldStorageBoxSprites.values()) sprite.setVisible(visible);
     for (const sprite of this.overworldFenceSprites.values()) sprite.setVisible(visible);
     for (const sprite of this.overworldFenceCornerSprites.values()) {
       sprite.setVisible(visible);
@@ -6056,6 +6367,68 @@ export class WorldScene extends Phaser.Scene {
     this.overworldFireplaceExpireEvents.delete(key);
     this.overworldFireplaceSprites.get(key)?.destroy();
     this.overworldFireplaceSprites.delete(key);
+  }
+
+  private clearOverworldStorageBoxSprites() {
+    for (const sprite of this.overworldStorageBoxSprites.values()) sprite.destroy();
+    this.overworldStorageBoxSprites.clear();
+  }
+
+  private syncOverworldStorageBoxSprites() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (me?.inInterior) {
+      this.clearOverworldStorageBoxSprites();
+      return;
+    }
+    const want = new Set(this.structureStorageBoxesOverworld.keys());
+    for (const key of [...this.overworldStorageBoxSprites.keys()]) {
+      if (want.has(key)) continue;
+      const [xs, ys] = key.split(",");
+      this.removeOverworldStorageBoxSprite(Number(xs), Number(ys));
+    }
+    for (const tile of this.structureStorageBoxesOverworld.values()) {
+      this.upsertOverworldStorageBoxSprite(tile);
+    }
+  }
+
+  private storageBoxScreenLayout(tx: number, ty: number, kind: string) {
+    const iso = cartesianToIso(tx + 0.5, ty + 0.5);
+    const renderHeight = Math.round(
+      FURNITURE_RENDER_HEIGHT_PX * STORAGE_BOX_RENDER_SCALE,
+    );
+    const groundY =
+      iso.y + TILE_HEIGHT / 2 + storageBoxGroundOffset(kind, renderHeight);
+    return { isoX: iso.x, groundY, renderHeight, textureKey: storageBoxTextureKey(kind) };
+  }
+
+  private upsertOverworldStorageBoxSprite(tile: StorageBoxTile) {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (me?.inInterior) return;
+    const textureKey = storageBoxTextureKey(tile.kind);
+    if (!textureKeyExists(this, textureKey)) {
+      this.requestFurnitureArt();
+      return;
+    }
+    const key = `${tile.x},${tile.y}`;
+    const layout = this.storageBoxScreenLayout(tile.x, tile.y, tile.kind);
+    let sprite = this.overworldStorageBoxSprites.get(key);
+    if (!sprite) {
+      sprite = addSpriteForKey(this, layout.isoX, layout.groundY, textureKey);
+      sprite.setOrigin(0.5, 1);
+      this.overworldStorageBoxSprites.set(key, sprite);
+    } else {
+      applyTextureKey(sprite, textureKey);
+      sprite.setPosition(layout.isoX, layout.groundY);
+    }
+    this.fitFurnitureSprite(sprite, layout.renderHeight);
+    sprite.setDepth(this.placeableRenderDepth(tile.x + 0.5, tile.y + 0.5));
+    sprite.setVisible(true);
+  }
+
+  private removeOverworldStorageBoxSprite(x: number, y: number) {
+    const key = `${x},${y}`;
+    this.overworldStorageBoxSprites.get(key)?.destroy();
+    this.overworldStorageBoxSprites.delete(key);
   }
 
   /** Bake the Birchport barracks courtyard into the overworld fence maps. */
@@ -6323,14 +6696,32 @@ export class WorldScene extends Phaser.Scene {
           interiorWallCornerDepthBias(wallSet, tx, ty, "ns"),
           interiorWallCornerDepthBias(wallSet, tx, ty, "ew"),
         );
-        const g = this.add.graphics();
-        g.setDepth(overworldPartitionDepth(tx, ty, bias));
-        drawWallTile(g, tx, ty, wallSet, axis, door);
-        this.overworldStructureSprites.set(key, g);
+        const depth = overworldPartitionDepth(tx, ty, bias);
+        if (door) {
+          const g = this.add.graphics();
+          g.setDepth(depth);
+          drawWallTile(g, tx, ty, wallSet, axis, door);
+          this.overworldStructureSprites.set(key, g);
+        } else {
+          this.overworldStructureSprites.set(
+            key,
+            createPlywoodPartition(
+              this,
+              tx,
+              ty,
+              wallSet,
+              axis,
+              depth,
+              1,
+              `plywood-wall:ow:${tx},${ty}`,
+            ),
+          );
+        }
       }
     }
     // Wall Graphics depths changed — re-clamp fireplaces against them.
     this.refreshPlaceableDepths();
+    this.tileManager?.refreshPlayerWallOcclusion();
   }
 
   /** Find a persistent door at (tx, ty) in the player's current context. */
@@ -6368,6 +6759,8 @@ export class WorldScene extends Phaser.Scene {
   private clearFireplaceTarget() {
     this.fireplaceTargetTile = null;
     this.fireplaceSprint = false;
+    this.storageBoxTargetTile = null;
+    this.storageBoxSprint = false;
   }
 
   private clearTreeChopTarget() {
@@ -6572,6 +6965,7 @@ export class WorldScene extends Phaser.Scene {
         !this.structureDoorsOverworld.has(`${nx},${ny}`) &&
         !this.structureFenceOccupancyOverworld.has(`${nx},${ny}`) &&
         !this.structureFenceCornersOverworld.has(`${nx},${ny}`) &&
+        !this.structureStorageBoxesOverworld.has(`${nx},${ny}`) &&
         !worldChainlinkOccupiesTile(nx, ny);
     }
 
@@ -6832,6 +7226,8 @@ export class WorldScene extends Phaser.Scene {
 
     const fireplace = this.findFireplaceAt(me, tx, ty);
     if (!fireplace) return false;
+    this.storageBoxTargetTile = null;
+    this.storageBoxSprint = false;
 
     const now = Date.now();
     const clickKey = `${tx},${ty}`;
@@ -6932,7 +7328,8 @@ export class WorldScene extends Phaser.Scene {
     const ty = Math.floor(cart.y);
 
     const fireplace = this.findFireplaceAt(me, tx, ty);
-    if (!fireplace) return;
+    const storageBox = fireplace ? undefined : this.findStorageBoxAt(me, tx, ty);
+    if (!fireplace && !storageBox) return;
 
     this.game.canvas.style.cursor = "pointer";
     if (me.inInterior) {
@@ -7116,7 +7513,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private clearOverworldTempWallSprites() {
-    for (const g of this.overworldTempWallSprites.values()) g.destroy();
+    for (const g of this.overworldTempWallSprites.values()) {
+      destroyPartitionDisplay(this, g);
+    }
     this.overworldTempWallSprites.clear();
   }
 
@@ -7128,7 +7527,10 @@ export class WorldScene extends Phaser.Scene {
 
   private redrawOverworldTempWalls() {
     this.clearOverworldTempWallSprites();
-    if (this.tempOverworldWallKeys.size === 0) return;
+    if (this.tempOverworldWallKeys.size === 0) {
+      this.tileManager?.refreshPlayerWallOcclusion();
+      return;
+    }
     const wallSet = new Set(this.tempOverworldWallKeys);
     for (const key of wallSet) {
       const [xs, ys] = key.split(",");
@@ -7145,17 +7547,22 @@ export class WorldScene extends Phaser.Scene {
         interiorWallCornerDepthBias(wallSet, tx, ty, "ns"),
         interiorWallCornerDepthBias(wallSet, tx, ty, "ew"),
       );
-      const g = this.add.graphics();
-      g.setDepth(overworldPartitionDepth(tx, ty, bias));
-      drawInteriorPartitionTile(
-        g,
-        tx,
-        ty,
-        wallSet,
-        runNS && runEW ? "both" : runNS ? "ns" : "ew",
+      const axis = runNS && runEW ? "both" : runNS ? "ns" : "ew";
+      this.overworldTempWallSprites.set(
+        key,
+        createPlywoodPartition(
+          this,
+          tx,
+          ty,
+          wallSet,
+          axis,
+          overworldPartitionDepth(tx, ty, bias),
+          1,
+          `plywood-wall:temp:${tx},${ty}`,
+        ),
       );
-      this.overworldTempWallSprites.set(key, g);
     }
+    this.tileManager?.refreshPlayerWallOcclusion();
   }
 
   private clearBuildModePreview() {
@@ -7163,8 +7570,15 @@ export class WorldScene extends Phaser.Scene {
     this.interiorView?.highlightTile(null, null);
     this.overworldBuildGhost?.destroy();
     this.overworldBuildGhost = undefined;
+    if (this.overworldBuildGhostWall) {
+      destroyPartitionDisplay(this, this.overworldBuildGhostWall);
+      this.overworldBuildGhostWall = undefined;
+      this.overworldBuildGhostWallSig = "";
+    }
     this.overworldBuildGhostFireplace?.destroy();
     this.overworldBuildGhostFireplace = undefined;
+    this.overworldBuildGhostStorageBox?.destroy();
+    this.overworldBuildGhostStorageBox = undefined;
     this.overworldBuildGhostFence?.destroy();
     this.overworldBuildGhostFence = undefined;
     this.overworldBuildHighlight?.destroy();
@@ -7248,6 +7662,8 @@ export class WorldScene extends Phaser.Scene {
       if (this.interiorFenceAt(me, tx, ty)) return false;
       const corners = this.structureFenceCornersByBuilding.get(bKey) ?? [];
       if (corners.some((c) => c.x === tx && c.y === ty)) return false;
+      const boxes = this.structureStorageBoxesByBuilding.get(bKey) ?? [];
+      if (boxes.some((b) => b.x === tx && b.y === ty)) return false;
       const prefabs = this.prefabsByBuilding.get(bKey) ?? [];
       if (prefabs.some((p) => this.prefabOccupiesTile(p, tx, ty))) return false;
       for (const s of this.searchablesCache) {
@@ -7264,6 +7680,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.structureWallKeysOverworld.has(`${tx},${ty}`)) return false;
     if (this.structureDoorsOverworld.has(`${tx},${ty}`)) return false;
     if (this.structureFireplacesOverworld.has(`${tx},${ty}`)) return false;
+    if (this.structureStorageBoxesOverworld.has(`${tx},${ty}`)) return false;
     if (this.structureFenceOccupancyOverworld.has(`${tx},${ty}`)) return false;
     if (this.structureFenceCornersOverworld.has(`${tx},${ty}`)) return false;
     if (worldChainlinkOccupiesTile(tx, ty)) return false;
@@ -7298,12 +7715,15 @@ export class WorldScene extends Phaser.Scene {
       if (fireplaces.some((f) => f.x === tx && f.y === ty)) return true;
       if (this.interiorFenceAt(me, tx, ty)) return true;
       const corners = this.structureFenceCornersByBuilding.get(key) ?? [];
-      return corners.some((c) => c.x === tx && c.y === ty);
+      if (corners.some((c) => c.x === tx && c.y === ty)) return true;
+      const boxes = this.structureStorageBoxesByBuilding.get(key) ?? [];
+      return boxes.some((b) => b.x === tx && b.y === ty);
     }
     const k = `${tx},${ty}`;
     if (this.structureWallKeysOverworld.has(k)) return true;
     if (this.structureDoorsOverworld.has(k)) return true;
     if (this.structureFireplacesOverworld.has(k)) return true;
+    if (this.structureStorageBoxesOverworld.has(k)) return true;
     const fence = this.overworldFenceAt(tx, ty);
     if (fence) return fence.ownerWallet !== WORLD_CHAINLINK_OWNER;
     const corner = this.structureFenceCornersOverworld.get(k);
@@ -7339,14 +7759,25 @@ export class WorldScene extends Phaser.Scene {
       const fence = this.interiorFenceAt(me, tx, ty);
       if (fence && fence.ownerWallet === wallet) return true;
       const corners = this.structureFenceCornersByBuilding.get(key) ?? [];
-      return corners.some(
-        (c) => c.x === tx && c.y === ty && c.ownerWallet === wallet,
+      if (
+        corners.some(
+          (c) => c.x === tx && c.y === ty && c.ownerWallet === wallet,
+        )
+      ) {
+        return true;
+      }
+      const boxes = this.structureStorageBoxesByBuilding.get(key) ?? [];
+      return boxes.some(
+        (b) => b.x === tx && b.y === ty && b.ownerWallet === wallet,
       );
     }
     const k = `${tx},${ty}`;
     if (this.structureWallOwnersOverworld.get(k) === wallet) return true;
     if (this.structureDoorsOverworld.get(k)?.ownerWallet === wallet) return true;
     if (this.structureFireplacesOverworld.get(k)?.ownerWallet === wallet) {
+      return true;
+    }
+    if (this.structureStorageBoxesOverworld.get(k)?.ownerWallet === wallet) {
       return true;
     }
     const fence = this.overworldFenceAt(tx, ty);
@@ -7405,6 +7836,7 @@ export class WorldScene extends Phaser.Scene {
     valid: boolean,
     kind: StructureBuildKind | "deconstruct" = "wall",
   ) {
+    this.overworldBuildGhostWall?.setVisible(false);
     if (!this.overworldBuildHighlight) {
       this.overworldBuildHighlight = this.add.graphics();
     }
@@ -7435,6 +7867,7 @@ export class WorldScene extends Phaser.Scene {
     if (kind === "deconstruct") {
       this.overworldBuildGhost?.clear();
       this.overworldBuildGhostFireplace?.setVisible(false);
+      this.overworldBuildGhostStorageBox?.setVisible(false);
       this.overworldBuildGhostFence?.setVisible(false);
       return;
     }
@@ -7442,6 +7875,7 @@ export class WorldScene extends Phaser.Scene {
     if (isStructurePanelKind(kind)) {
       this.overworldBuildGhost?.clear();
       this.overworldBuildGhostFireplace?.setVisible(false);
+      this.overworldBuildGhostStorageBox?.setVisible(false);
       const facing = this.structureFenceFacing;
       const texKey = structurePanelTextureKey(kind, facing);
       if (!textureKeyExists(this, texKey)) {
@@ -7464,6 +7898,7 @@ export class WorldScene extends Phaser.Scene {
     if (kind === "fence_corner") {
       this.overworldBuildGhost?.clear();
       this.overworldBuildGhostFireplace?.setVisible(false);
+      this.overworldBuildGhostStorageBox?.setVisible(false);
       this.overworldBuildGhostFence?.setVisible(false);
       return;
     }
@@ -7472,6 +7907,7 @@ export class WorldScene extends Phaser.Scene {
 
     if (kind === "fireplace") {
       this.overworldBuildGhost?.clear();
+      this.overworldBuildGhostStorageBox?.setVisible(false);
       if (!textureKeyExists(this, FIREPLACE1_INACTIVE_KEY)) {
         this.requestFurnitureArt();
         this.overworldBuildGhostFireplace?.setVisible(false);
@@ -7496,7 +7932,35 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
+    if (isStorageBoxKind(kind)) {
+      this.overworldBuildGhost?.clear();
+      this.overworldBuildGhostFireplace?.setVisible(false);
+      const textureKey = storageBoxTextureKey(kind);
+      if (!textureKeyExists(this, textureKey)) {
+        this.requestFurnitureArt();
+        this.overworldBuildGhostStorageBox?.setVisible(false);
+        return;
+      }
+      const layout = this.storageBoxScreenLayout(tx, ty, kind);
+      let sprite = this.overworldBuildGhostStorageBox;
+      if (!sprite) {
+        sprite = addSpriteForKey(this, layout.isoX, layout.groundY, textureKey);
+        sprite.setOrigin(0.5, 1);
+        sprite.setAlpha(0.45);
+        this.overworldBuildGhostStorageBox = sprite;
+      } else {
+        applyTextureKey(sprite, textureKey);
+        sprite.setPosition(layout.isoX, layout.groundY);
+      }
+      this.fitFurnitureSprite(sprite, layout.renderHeight);
+      sprite.setDepth(this.placeableRenderDepth(tx + 0.5, ty + 0.5));
+      sprite.setAlpha(0.45);
+      sprite.setVisible(true);
+      return;
+    }
+
     this.overworldBuildGhostFireplace?.setVisible(false);
+    this.overworldBuildGhostStorageBox?.setVisible(false);
 
     if (!this.overworldBuildGhost) {
       this.overworldBuildGhost = this.add.graphics();
@@ -7524,14 +7988,30 @@ export class WorldScene extends Phaser.Scene {
       drawInteriorDoorTile(g, tx, ty, runNS ? "ns" : "ew", false, false);
       return;
     }
-    // Isolated tile falls back to a short EW spine so the ghost stays visible.
-    drawInteriorPartitionTile(
-      g,
+    g.clear();
+    const axis = runNS && runEW ? "both" : runNS ? "ns" : "ew";
+    const sig = `${tx},${ty}:${hasN ? 1 : 0}${hasS ? 1 : 0}${hasE ? 1 : 0}${hasW ? 1 : 0}`;
+    const depth = overworldPartitionDepth(tx, ty, 2);
+    if (this.overworldBuildGhostWallSig === sig && this.overworldBuildGhostWall?.active) {
+      this.overworldBuildGhostWall.setDepth(depth);
+      this.overworldBuildGhostWall.setAlpha(0.45);
+      this.overworldBuildGhostWall.setVisible(true);
+      return;
+    }
+    this.overworldBuildGhostWallSig = sig;
+    const display = createPlywoodPartition(
+      this,
       tx,
       ty,
       wallSet,
-      runNS && runEW ? "both" : runNS ? "ns" : "ew",
+      axis,
+      depth,
+      0.45,
+      "plywood-wall:oghost",
+      this.overworldBuildGhostWall ?? null,
     );
+    this.overworldBuildGhostWall =
+      display instanceof Phaser.GameObjects.Image ? display : undefined;
   }
 
   private updateBuildModeHover(
@@ -7552,7 +8032,10 @@ export class WorldScene extends Phaser.Scene {
     const kind: StructureBuildKind | "deconstruct" = this.buildMode
       ? "wall"
       : this.structureBuildKind;
-    if (kind === "fireplace" && !isFurniturePackReady()) {
+    if (
+      (kind === "fireplace" || isStorageBoxKind(kind)) &&
+      !isFurniturePackReady()
+    ) {
       this.requestFurnitureArt();
     }
     const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
@@ -7564,8 +8047,15 @@ export class WorldScene extends Phaser.Scene {
     if (me.inInterior) {
       this.overworldBuildGhost?.destroy();
       this.overworldBuildGhost = undefined;
+      if (this.overworldBuildGhostWall) {
+        destroyPartitionDisplay(this, this.overworldBuildGhostWall);
+        this.overworldBuildGhostWall = undefined;
+        this.overworldBuildGhostWallSig = "";
+      }
       this.overworldBuildGhostFireplace?.destroy();
       this.overworldBuildGhostFireplace = undefined;
+      this.overworldBuildGhostStorageBox?.destroy();
+      this.overworldBuildGhostStorageBox = undefined;
       this.overworldBuildGhostFence?.destroy();
       this.overworldBuildGhostFence = undefined;
       this.overworldBuildHighlight?.destroy();
@@ -7851,6 +8341,85 @@ export class WorldScene extends Phaser.Scene {
    * closed doors) — used for shot line of sight. Fireplaces are excluded:
    * they block walking but not bullets.
    */
+  private playerWallAxis(
+    x: number,
+    y: number,
+    wallSet: Set<string>,
+  ): "ns" | "ew" | "both" {
+    const hasN = wallSet.has(`${x},${y - 1}`);
+    const hasS = wallSet.has(`${x},${y + 1}`);
+    const hasW = wallSet.has(`${x - 1},${y}`);
+    const hasE = wallSet.has(`${x + 1},${y}`);
+    const runNS = hasN || hasS;
+    const runEW = hasW || hasE || (!hasN && !hasS);
+    if (runNS && runEW) return "both";
+    return runNS ? "ns" : "ew";
+  }
+
+  /**
+   * Player walls and doors that may cover a clicked floor diamond. Interior
+   * and overworld use the walls that are actually drawn.
+   */
+  private playerWallOccluders(
+    tileX: number,
+    tileY: number,
+  ): readonly PlayerWallOccluder[] {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (me?.inInterior) {
+      return this.interiorView?.playerWallOccludersNear(tileX, tileY) ?? [];
+    }
+    return this.overworldPlayerWallOccluders(tileX, tileY);
+  }
+
+  private overworldPlayerWallOccluders(
+    tileX: number,
+    tileY: number,
+  ): PlayerWallOccluder[] {
+    const reach = PLAYER_WALL_OCCLUSION_REACH;
+    const wallSet = new Set(this.structureWallKeysOverworld);
+    for (const key of this.structureDoorsOverworld.keys()) wallSet.add(key);
+    for (const tile of this.prefabsOverworld.values()) {
+      if (tile.kind === "wall" || tile.kind === "door") {
+        wallSet.add(`${tile.x},${tile.y}`);
+      }
+    }
+    const out: PlayerWallOccluder[] = [];
+    for (let y = tileY - reach; y <= tileY + reach; y++) {
+      for (let x = tileX - reach; x <= tileX + reach; x++) {
+        const key = `${x},${y}`;
+        const temp = this.tempOverworldWallKeys.has(key);
+        const door = this.structureDoorsOverworld.get(key);
+        const solid = this.structureWallKeysOverworld.has(key);
+        if (!solid && !door && !temp) continue;
+        const placed = this.overworldStructureSprites.get(key);
+        const sprite = placed ?? this.overworldTempWallSprites.get(key);
+        if (!sprite?.visible) continue;
+        const depth = sprite.depth;
+        const shapeSet = placed ? wallSet : this.tempOverworldWallKeys;
+        if (door && placed) {
+          out.push({
+            kind: "door",
+            x,
+            y,
+            axis: this.playerWallAxis(x, y, wallSet),
+            isOpen: door.isOpen,
+            depth,
+          });
+          continue;
+        }
+        out.push({
+          kind: "wall",
+          x,
+          y,
+          axis: this.playerWallAxis(x, y, shapeSet),
+          depth,
+          wallSet: shapeSet,
+        });
+      }
+    }
+    return out;
+  }
+
   private overworldSightBlockedAt(tx: number, ty: number): boolean {
     const key = `${tx},${ty}`;
     if (this.structureWallKeysOverworld.has(key)) return true;
@@ -7912,6 +8481,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.tryInteractDoorAt(screenX, screenY)) return;
     if (this.tryInteractBargateAt(screenX, screenY)) return;
     if (this.tryInteractFireplaceAt(screenX, screenY)) return;
+    if (this.tryInteractStorageBoxAt(screenX, screenY)) return;
     if (this.tryInteractPrefabAt(screenX, screenY)) return;
     if (this.tryInteractTreeChopAt(screenX, screenY)) return;
 
@@ -8330,6 +8900,14 @@ export class WorldScene extends Phaser.Scene {
           sprite?.getData("server") as { isDead?: boolean; alive?: boolean } | undefined,
         );
       }
+      for (const [id, sprite] of this.bearSprites) {
+        considerSprite(
+          id,
+          sprite as unknown as Phaser.GameObjects.Sprite,
+          "bear",
+          sprite?.getData("server") as { isDead?: boolean; alive?: boolean } | undefined,
+        );
+      }
     } else if (!equippedWeapon) {
       // Hands empty — talkable NPCs (Traders / MilitiaGuard / Red Order).
       for (const [id, sprite] of this.guardSprites) {
@@ -8412,6 +8990,7 @@ export class WorldScene extends Phaser.Scene {
     if (kind === "player") return this.playerSprites;
     if (kind === "zombie") return this.zombieSprites;
     if (kind === "coywolf") return this.coywolfSprites;
+    if (kind === "bear") return this.bearSprites;
     return this.guardSprites;
   }
 
@@ -8419,6 +8998,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerSprites.has(id)) return "player";
     if (this.zombieSprites.has(id)) return "zombie";
     if (this.coywolfSprites.has(id)) return "coywolf";
+    if (this.bearSprites.has(id)) return "bear";
     if (this.guardSprites.has(id)) return "guard";
     return null;
   }
@@ -8428,6 +9008,7 @@ export class WorldScene extends Phaser.Scene {
       this.playerSprites.get(id) ??
       this.zombieSprites.get(id) ??
       this.coywolfSprites.get(id) ??
+      this.bearSprites.get(id) ??
       this.guardSprites.get(id)
     );
   }
@@ -8613,7 +9194,7 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || !this.room) return "miss";
 
     let targetId: string | null = null;
-    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | null = null;
+    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
 
     const searchable = this.nearestSearchable();
     if (searchable) {
@@ -8841,6 +9422,28 @@ export class WorldScene extends Phaser.Scene {
       return true;
     }
 
+    if (this.lootTargetKind === "bear") {
+      const entitySprite = this.bearSprites.get(this.lootTargetId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined;
+      if (!entityData?.isDead || entityData.looted || me.inInterior) {
+        this.clearLootTarget();
+        return false;
+      }
+      if (!playerNearEntity(me.x, me.y, entityData.x, entityData.y)) return false;
+      this.stopPlayerMovement();
+      const bearId = this.lootTargetId;
+      this.clearLootTarget();
+      const message: ClientMessage = {
+        type: "lootBearStart",
+        payload: { bearId },
+      };
+      this.beginOptimisticSearch();
+      this.room.send("action", message);
+      return true;
+    }
+
     if (this.lootTargetKind === "player") {
       const entitySprite = this.corpseSprites.get(this.lootTargetId);
       const entityData = entitySprite?.getData("server") as
@@ -8926,7 +9529,7 @@ export class WorldScene extends Phaser.Scene {
       buildingY?: number;
     },
     targetId: string,
-    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf",
+    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear",
   ): { x: number; y: number } | null {
     if (targetKind === "searchable") {
       const target = this.searchablesCache.find((item) => {
@@ -8995,6 +9598,8 @@ export class WorldScene extends Phaser.Scene {
         ? this.zombieSprites.get(targetId)
         : targetKind === "coywolf"
           ? this.coywolfSprites.get(targetId)
+          : targetKind === "bear"
+            ? this.bearSprites.get(targetId)
           : targetKind === "guard"
             ? this.guardSprites.get(targetId)
             : this.corpseSprites.get(targetId);
@@ -9271,6 +9876,8 @@ export class WorldScene extends Phaser.Scene {
       renderHeight:
         kind === "coywolf"
           ? COYWOLF_RENDER_HEIGHT
+          : kind === "bear"
+            ? BEAR_RENDER_HEIGHT
           : zombie
             ? zombieRenderHeight(zombie.skin, isZombieCrawler(targetId, zombie.skin))
             : undefined,
@@ -10128,7 +10735,7 @@ export class WorldScene extends Phaser.Scene {
     const cursorTY = Math.floor(cart.y);
 
     let bestId: string | null = null;
-    let bestKind: "zombie" | "guard" | "player" | "coywolf" | null = null;
+    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
     let bestTX = 0;
     let bestTY = 0;
     let bestEntityX = 0;
@@ -10181,6 +10788,25 @@ export class WorldScene extends Phaser.Scene {
         bestKind = "coywolf";
         bestTX = wTX;
         bestTY = wTY;
+        bestEntityX = data.x;
+        bestEntityY = data.y;
+        break;
+      }
+    }
+
+    if (!bestId && !me.inInterior) {
+      for (const [id, sprite] of this.bearSprites) {
+        const data = sprite?.getData("server") as
+          | { x: number; y: number; isDead?: boolean; looted?: boolean }
+          | undefined;
+        if (!data?.isDead || data.looted) continue;
+        const bTX = Math.floor(data.x);
+        const bTY = Math.floor(data.y);
+        if (cursorTX !== bTX || cursorTY !== bTY) continue;
+        bestId = id;
+        bestKind = "bear";
+        bestTX = bTX;
+        bestTY = bTY;
         bestEntityX = data.x;
         bestEntityY = data.y;
         break;
@@ -10348,6 +10974,19 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    if (!started) {
+      const box = this.nearestAdjacentStorageBox(me);
+      if (box) {
+        this.stopPlayerMovement();
+        const message: ClientMessage = {
+          type: "storageBoxOpen",
+          payload: { x: box.x, y: box.y },
+        };
+        this.room.send("action", message);
+        started = true;
+      }
+    }
+
     // Open adjacent un-built prefab (deposit UI).
     if (!started) {
       const prefab = this.nearestAdjacentPrefab(me);
@@ -10389,6 +11028,30 @@ export class WorldScene extends Phaser.Scene {
         const message: ClientMessage = {
           type: "lootZombieStart",
           payload: { zombieId: this.hoveredLootableId },
+        };
+        this.beginOptimisticSearch();
+        this.room.send("action", message);
+        started = true;
+      }
+    }
+
+    if (
+      !started &&
+      this.hoveredLootableId &&
+      this.hoveredLootableKind === "bear"
+    ) {
+      const entitySprite = this.bearSprites.get(this.hoveredLootableId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number }
+        | undefined;
+      if (
+        entityData &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, entityData.x, entityData.y)
+      ) {
+        const message: ClientMessage = {
+          type: "lootBearStart",
+          payload: { bearId: this.hoveredLootableId },
         };
         this.beginOptimisticSearch();
         this.room.send("action", message);
@@ -10796,6 +11459,13 @@ export class WorldScene extends Phaser.Scene {
       this.temperatureFxEl?.classList.toggle("temp-fx-cold", tempLook.fx === "cold");
       this.temperatureFxEl?.classList.toggle("temp-fx-hot", tempLook.fx === "hot");
     }
+    const infectionOpacity = infected
+      ? (0.22 + (Math.max(0, Math.min(100, infection)) / 100) * 0.78).toFixed(2)
+      : "0";
+    if (this.infectionFxEl && bars.infectionFx !== infectionOpacity) {
+      bars.infectionFx = infectionOpacity;
+      this.infectionFxEl.style.opacity = infectionOpacity;
+    }
 
     const moving =
       me.anim === "walk" || me.anim === "sprint" || me.anim === "run";
@@ -10915,6 +11585,23 @@ export class WorldScene extends Phaser.Scene {
         if (Date.now() >= action.holdUntil) {
           this.localTimedAction = null;
         }
+      } else if (
+        action.kind === "craft" &&
+        age < action.durationMs - 500
+      ) {
+        // Fire went out or the player moved. Drop the bar instead of
+        // flashing a finished craft.
+        this.localTimedAction = null;
+      } else if (action.kind === "build") {
+        // A build cancelled by a step or a hit must not snap to 100%.
+        // The server can still finish a few hundred ms before this clock
+        // because the bar starts when the schema patch arrives.
+        if (age >= action.durationMs - 750) {
+          action.startedAt = Date.now() - action.durationMs;
+          action.holdUntil = Date.now() + 180;
+        } else {
+          this.localTimedAction = null;
+        }
       } else if (age >= Math.min(400, action.durationMs * 0.2)) {
         // Server cleared the busy flag after a confirmed action — treat as
         // success. Only very short ages are real cancels (sprint / unequip).
@@ -10947,7 +11634,12 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private spawnBlood(worldX: number, worldY: number, weaponIndex = -1) {
+  private spawnBlood(
+    worldX: number,
+    worldY: number,
+    weaponIndex = -1,
+    nearGround = false,
+  ) {
     if (!this.textures.exists("blood-drop")) return;
     const iso = cartesianToIso(worldX, worldY);
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -10960,8 +11652,12 @@ export class WorldScene extends Phaser.Scene {
     const cfg = BLOOD_BY_WEAPON[weaponIndex] ?? BLOOD_BY_WEAPON[-1]!;
     const count = IS_MOBILE ? Math.max(2, Math.ceil(cfg.count * 0.4)) : cfg.count;
 
-    // Origin Y offset: shotgun sprays from higher, rifle burst is tighter
-    const emitter = this.add.particles(iso.x, iso.y - cfg.originY, "blood-drop", {
+    // Standing hits spray from chest height. Crawlers lie on the tile, so
+    // the same lift floats above the body. Start just above their feet.
+    const sprayY = nearGround
+      ? entityFeetY(iso.y) + ZOMBIE_CRAWL_TILE_DROP_PX - 8
+      : iso.y - cfg.originY;
+    const emitter = this.add.particles(iso.x, sprayY, "blood-drop", {
       speed: cfg.speed,
       angle: cfg.angle,
       scale: cfg.scale,
@@ -10984,7 +11680,10 @@ export class WorldScene extends Phaser.Scene {
   ) {
     this.recentGunHits.add(targetId);
     this.time.delayedCall(700, () => this.recentGunHits.delete(targetId));
-    this.spawnBlood(worldX, worldY, weaponIndex);
+    const zombie = this.room?.state?.zombies?.get(targetId);
+    const crawler =
+      !!zombie && isZombieCrawler(targetId, zombie.skin);
+    this.spawnBlood(worldX, worldY, weaponIndex, crawler);
   }
 
   private centerWorld() {
@@ -11248,7 +11947,7 @@ export class WorldScene extends Phaser.Scene {
         fuelWood?: number;
         facing?: StructureFenceFacing | StructureFenceCorner;
       }) => {
-        if (msg.x == null || msg.y == null || !msg.kind || !msg.ownerWallet) return;
+        if (msg.x == null || msg.y == null || !msg.kind) return;
         this.applyPrefabBuilt({
           inInterior: msg.inInterior === true,
           buildingX: msg.buildingX,
@@ -11256,7 +11955,7 @@ export class WorldScene extends Phaser.Scene {
           x: msg.x,
           y: msg.y,
           kind: msg.kind,
-          ownerWallet: msg.ownerWallet,
+          ownerWallet: msg.ownerWallet ?? "",
           isOpen: msg.isOpen === true,
           isLocked: msg.isLocked === true,
           activeUntil: Number(msg.activeUntil ?? 0) || 0,
@@ -11490,6 +12189,10 @@ export class WorldScene extends Phaser.Scene {
         onAdd: (cb: (wolf: ZombieSchema, id: string) => void) => void;
         onRemove: (cb: (wolf: ZombieSchema, id: string) => void) => void;
       };
+      bears?: {
+        onAdd: (cb: (bear: ZombieSchema, id: string) => void) => void;
+        onRemove: (cb: (bear: ZombieSchema, id: string) => void) => void;
+      };
       corpses: {
         onAdd: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
         onRemove: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
@@ -11688,6 +12391,12 @@ export class WorldScene extends Phaser.Scene {
     });
     state$.coywolves?.onRemove((_w, id) => this.removeEntity(this.coywolfSprites, id));
 
+    state$.bears?.onAdd((bear, id) => {
+      this.refreshBear(id, bear);
+      $(bear).onChange(() => this.refreshBear(id, bear));
+    });
+    state$.bears?.onRemove((_b, id) => this.removeEntity(this.bearSprites, id));
+
     if (state$.searchables) {
       state$.searchables.onAdd((item, id) => {
         refreshSearchables();
@@ -11735,7 +12444,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private entityVisible(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
     data: {
       x?: number;
       y?: number;
@@ -11852,6 +12561,49 @@ export class WorldScene extends Phaser.Scene {
     this.applyCoywolfMotion(sprite, prev, next);
     sprite.setData("server", next);
     this.updateEntityFromState(sprite, "coywolf", id);
+  }
+
+  private refreshBear(
+    id: string,
+    data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
+  ) {
+    if (!this.entityVisible("bear", data, id)) {
+      const existing = this.bearSprites.get(id);
+      if (existing) {
+        existing.setData("server", {
+          ...data,
+          isDead: !!data.isDead,
+          looted: !!data.looted,
+        });
+        this.softHideEntitySprite(existing);
+      }
+      return;
+    }
+
+    const sprite = this.ensureEntity(this.bearSprites, id, "bear");
+    const prev = sprite.getData("server") as { isDead?: boolean; x?: number; y?: number; anim?: string } | undefined;
+    const next = {
+      x: data.x,
+      y: data.y,
+      facing: data.facing,
+      anim: data.anim,
+      animFrame: data.animFrame,
+      health: data.health,
+      isDead: !!data.isDead,
+      looted: !!data.looted,
+      alive: !data.isDead,
+    };
+    if (!prev && next.isDead) {
+      this.freezeEntityDieAnim(id);
+    } else if (prev && !prev.isDead && next.isDead) {
+      this.startEntityDieAnim(id);
+      sprite.setData("visualKey", "");
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+    }
+    this.applyCoywolfMotion(sprite, prev, next);
+    sprite.setData("server", next);
+    this.updateEntityFromState(sprite, "bear", id);
   }
 
   private applyCoywolfMotion(
@@ -12088,6 +12840,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.tempOverworldWallKeys.has(`${tx},${ty}`)) return true;
     if (this.structureFenceOccupancyOverworld.has(`${tx},${ty}`)) return true;
     if (this.structureFenceCornersOverworld.has(`${tx},${ty}`)) return true;
+    if (this.structureStorageBoxesOverworld.has(`${tx},${ty}`)) return true;
     const door = this.structureDoorsOverworld.get(`${tx},${ty}`);
     return !!door && !door.isOpen;
   }
@@ -12610,7 +13363,7 @@ export class WorldScene extends Phaser.Scene {
   private ensureEntity(
     map: Map<string, EntitySprite>,
     id: string,
-    kind: "player" | "zombie" | "guard" | "coywolf",
+    kind: "player" | "zombie" | "guard" | "coywolf" | "bear",
   ) {
     let sprite = map.get(id);
     // Stale entries after kick/reconnect: GameObject destroyed, scene unset.
@@ -12620,6 +13373,7 @@ export class WorldScene extends Phaser.Scene {
     }
     if (!sprite) {
       const coywolfKey = coywolfIdleKey("S");
+      const bearKey = bearIdleKey("S");
       const placeholder =
         kind === "player"
           ? playerManIdleKey("S")
@@ -12629,6 +13383,10 @@ export class WorldScene extends Phaser.Scene {
               ? coywolfKey
               : kind === "coywolf"
                 ? "__DEFAULT"
+                : kind === "bear" && this.textures.exists(bearKey)
+                  ? bearKey
+                  : kind === "bear"
+                    ? "__DEFAULT"
                 : zombieIdleKey("S");
       sprite = this.add.sprite(0, 0, placeholder, 0) as EntitySprite;
       sprite.entityId = id;
@@ -12652,6 +13410,7 @@ export class WorldScene extends Phaser.Scene {
   private refreshAllVisuals(delta = 0) {
     this.tickZombieWalkAnims(delta / 1000);
     this.tickCoywolfWalkAnims(delta / 1000);
+    this.tickBearWalkAnims(delta / 1000);
     this.syncNearbyEntityAssets();
     this.ensureVisibleEntities();
     // Create any zombies queued by ensure (living flush already ran earlier).
@@ -12704,6 +13463,18 @@ export class WorldScene extends Phaser.Scene {
         continue;
       }
       this.updateEntityFromState(sprite, "coywolf", sprite.entityId);
+    }
+
+    for (const sprite of this.bearSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; isDead?: boolean }
+        | undefined;
+      if (!data) continue;
+      if (!this.entityVisible("bear", data, sprite.entityId)) {
+        this.softHideEntitySprite(sprite);
+        continue;
+      }
+      this.updateEntityFromState(sprite, "bear", sprite.entityId);
     }
 
     for (const sprite of this.guardSprites.values()) {
@@ -12775,6 +13546,7 @@ export class WorldScene extends Phaser.Scene {
     for (const sprite of this.zombieSprites.values()) draw(sprite, 0xff4444);
     for (const sprite of this.guardSprites.values()) draw(sprite, 0x44aaff);
     for (const sprite of this.coywolfSprites.values()) draw(sprite, 0xffaa33);
+    for (const sprite of this.bearSprites.values()) draw(sprite, 0xc4783a);
 
     for (const [id, label] of this.entityBoundsLabels) {
       if (!seen.has(id)) {
@@ -12866,6 +13638,12 @@ export class WorldScene extends Phaser.Scene {
       if (!this.entityVisible("coywolf", wolf, id)) return;
       this.refreshCoywolf(id, wolf);
     });
+
+    state.bears?.forEach((bear, id) => {
+      if (this.bearSprites.has(id)) return;
+      if (!this.entityVisible("bear", bear, id)) return;
+      this.refreshBear(id, bear);
+    });
   }
 
   /** Lazy-load NPC sprite packs for entities near the local player. */
@@ -12933,6 +13711,13 @@ export class WorldScene extends Phaser.Scene {
         });
         return list;
       })(),
+      bears: (() => {
+        const list: { x: number; y: number }[] = [];
+        this.room.state.bears?.forEach((bear) => {
+          list.push({ x: bear.x, y: bear.y });
+        });
+        return list;
+      })(),
     });
   }
 
@@ -12965,6 +13750,41 @@ export class WorldScene extends Phaser.Scene {
           dist,
           ZOMBIE_TILES_PER_WALK_FRAME,
           ZOMBIE_WALK_FRAMES,
+        ),
+      );
+    }
+  }
+
+  /** Advance bear walk and charge frames from rendered displacement. */
+  private tickBearWalkAnims(dtSec: number) {
+    if (dtSec <= 0) return;
+    for (const sprite of this.bearSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; anim?: string; isDead?: boolean }
+        | undefined;
+      if (!data || data.isDead) continue;
+      const running = data.anim === "run";
+      if (data.anim !== "walk" && !running) continue;
+      if (data.x == null || data.y == null || !this.tileManager?.isTileDrawn(Math.floor(data.x), Math.floor(data.y))) {
+        continue;
+      }
+      const rx = (sprite.getData("renderX") as number | undefined) ?? data.x;
+      const ry = (sprite.getData("renderY") as number | undefined) ?? data.y;
+      const prevRx = (sprite.getData("prevRenderX") as number | undefined) ?? rx;
+      const prevRy = (sprite.getData("prevRenderY") as number | undefined) ?? ry;
+      sprite.setData("prevRenderX", rx);
+      sprite.setData("prevRenderY", ry);
+      const dist = Math.hypot(rx - prevRx, ry - prevRy);
+      if (dist < 0.0005) continue;
+      const localAnimFrame =
+        (sprite.getData("localAnimFrame") as number | undefined) ?? 0;
+      sprite.setData(
+        "localAnimFrame",
+        advanceWalkAnimFrame(
+          localAnimFrame,
+          dist,
+          running ? BEAR_TILES_PER_RUN_FRAME : BEAR_TILES_PER_WALK_FRAME,
+          running ? BEAR_RUN_FRAMES : BEAR_WALK_FRAMES,
         ),
       );
     }
@@ -13006,7 +13826,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildEntityVisualKey(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
     data: {
       facing: number;
       anim: string;
@@ -13048,6 +13868,8 @@ export class WorldScene extends Phaser.Scene {
       }
     } else if (kind === "coywolf") {
       packReady = coywolfPackReady() ? "1" : "0";
+    } else if (kind === "bear") {
+      packReady = bearPackReady() ? "1" : "0";
     }
 
     return [
@@ -13071,7 +13893,7 @@ export class WorldScene extends Phaser.Scene {
 
   private updateEntityFromState(
     sprite: EntitySprite,
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
     entityId: string,
   ) {
     let data = sprite.getData("server") as
@@ -13135,7 +13957,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const animFrame =
-      kind === "zombie" || kind === "coywolf"
+      kind === "zombie" || kind === "coywolf" || kind === "bear"
         ? Math.floor(
             (sprite.getData("localAnimFrame") as number | undefined) ??
               data.animFrame ??
@@ -13146,7 +13968,7 @@ export class WorldScene extends Phaser.Scene {
     const isDead =
       kind === "corpse"
         ? true
-        : kind === "zombie" || kind === "coywolf"
+        : kind === "zombie" || kind === "coywolf" || kind === "bear"
           ? this.isZombieDead(data)
           : kind === "guard"
             ? data.alive === false
@@ -13167,6 +13989,13 @@ export class WorldScene extends Phaser.Scene {
                 isDead,
                 COYWOLF_DIE_FRAMES,
                 COYWOLF_DIE_ANIM_MS,
+              )
+          : kind === "bear"
+            ? this.resolveDieFrame(
+                entityId,
+                isDead,
+                BEAR_DIE_FRAMES,
+                BEAR_DIE_ANIM_MS,
               )
           : kind === "guard"
             ? this.resolveDieFrame(
@@ -13257,7 +14086,7 @@ export class WorldScene extends Phaser.Scene {
     sprite.setVisible(true);
 
     const renderPos =
-      kind === "zombie" || kind === "coywolf"
+      kind === "zombie" || kind === "coywolf" || kind === "bear"
         ? this.getZombieRenderPosition(sprite, data.x, data.y)
         : kind === "player"
           ? this.getPlayerRenderPosition(sprite, data.x, data.y)
@@ -13288,7 +14117,8 @@ export class WorldScene extends Phaser.Scene {
     }
     const crawlDrop = zombieCrawling && !isDead ? ZOMBIE_CRAWL_TILE_DROP_PX : 0;
     const coyoteDrop = kind === "coywolf" ? COYWOLF_TILE_DROP_PX : 0;
-    sprite.setPosition(iso.x, entityFeetY(iso.y) + crawlDrop + coyoteDrop);
+    const bearDrop = kind === "bear" ? BEAR_TILE_DROP_PX : 0;
+    sprite.setPosition(iso.x, entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop);
     sprite.setDepth(depth);
 
     if (entityId === this.sessionId && kind === "player") {
@@ -13424,7 +14254,11 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
-  private openCraftUI(payload: { workbenchId: string; inventoryJson: string }) {
+  private openCraftUI(payload: {
+    workbenchId: string;
+    inventoryJson: string;
+    station?: "workbench" | "furnace";
+  }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
@@ -13590,6 +14424,157 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     return best;
+  }
+
+  private findStorageBoxAt(
+    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    tx: number,
+    ty: number,
+  ): StorageBoxTile | undefined {
+    if (me.inInterior) {
+      return this.structureStorageBoxesByBuilding
+        .get(buildingKey(me.buildingX, me.buildingY))
+        ?.find((box) => box.x === tx && box.y === ty);
+    }
+    return this.structureStorageBoxesOverworld.get(`${tx},${ty}`);
+  }
+
+  private findStorageBoxById(
+    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    containerId: string,
+  ): StorageBoxTile | undefined {
+    if (me.inInterior) {
+      const list =
+        this.structureStorageBoxesByBuilding.get(
+          buildingKey(me.buildingX, me.buildingY),
+        ) ?? [];
+      return list.find(
+        (box) =>
+          playerStructureId(true, me.buildingX, me.buildingY, box.x, box.y) ===
+          containerId,
+      );
+    }
+    for (const box of this.structureStorageBoxesOverworld.values()) {
+      if (playerStructureId(false, 0, 0, box.x, box.y) === containerId) return box;
+    }
+    return undefined;
+  }
+
+  private nearestAdjacentStorageBox(me: {
+    x: number;
+    y: number;
+    inInterior: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): StorageBoxTile | null {
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    const list = me.inInterior
+      ? (this.structureStorageBoxesByBuilding.get(
+          buildingKey(me.buildingX, me.buildingY),
+        ) ?? [])
+      : [...this.structureStorageBoxesOverworld.values()];
+    let best: StorageBoxTile | null = null;
+    let bestDist = Infinity;
+    for (const box of list) {
+      const d = Math.max(Math.abs(ptx - box.x), Math.abs(pty - box.y));
+      if (d > 1) continue;
+      if (d < bestDist) {
+        bestDist = d;
+        best = box;
+      }
+    }
+    return best;
+  }
+
+  private tryInteractStorageBoxAt(screenX: number, screenY: number): boolean {
+    if (!this.room || this.structureBuildMode) return false;
+    const me = this.room.state?.players?.get(this.sessionId);
+    if (!me?.alive) return false;
+    const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
+    const cart = isoToCartesian(worldPt.x, worldPt.y);
+    const tx = Math.floor(cart.x);
+    const ty = Math.floor(cart.y);
+    const box = this.findStorageBoxAt(me, tx, ty);
+    if (!box) return false;
+
+    const now = Date.now();
+    const clickKey = `${tx},${ty}`;
+    const isDoubleClick =
+      clickKey === this.lastStorageBoxClickKey &&
+      now - this.lastStorageBoxClickAt < WorldScene.DOUBLE_CLICK_MS;
+    this.lastStorageBoxClickKey = clickKey;
+    this.lastStorageBoxClickAt = now;
+    this.lastClickTime = now;
+
+    this.clearCombatTarget();
+    this.clearInteractTarget();
+    this.clearLootTarget();
+    this.clearDoorTarget();
+    this.clearTreeChopTarget();
+    this.fireplaceTargetTile = null;
+    this.fireplaceSprint = false;
+
+    if (this.tryStartStorageBoxInteract(me, tx, ty)) return true;
+
+    this.storageBoxTargetTile = { x: tx, y: ty };
+    this.storageBoxSprint = isDoubleClick && (me.stamina ?? 0) > 0;
+    const goal = this.doorApproachGoal(me, tx, ty);
+    if (goal) {
+      this.sendMoveToCoords(goal.x, goal.y, this.storageBoxSprint);
+      this.drawMoveTarget(goal.x, goal.y, this.storageBoxSprint);
+      this.moveTargetFadeUntil = now + 800;
+      this.lastPursuitMoveSentAt = now;
+    }
+    return true;
+  }
+
+  private tryStartStorageBoxInteract(
+    me: { x: number; y: number },
+    tx: number,
+    ty: number,
+  ): boolean {
+    if (!this.room) return false;
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    if (Math.max(Math.abs(ptx - tx), Math.abs(pty - ty)) > 1) return false;
+    this.clearFireplaceTarget();
+    this.stopPlayerMovement();
+    const message: ClientMessage = {
+      type: "storageBoxOpen",
+      payload: { x: tx, y: ty },
+    };
+    this.room.send("action", message);
+    return true;
+  }
+
+  private updateStorageBoxPursuit() {
+    if (!this.storageBoxTargetTile) return;
+    const { x: tx, y: ty } = this.storageBoxTargetTile;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me?.alive) {
+      this.clearFireplaceTarget();
+      return;
+    }
+    if (!this.findStorageBoxAt(me, tx, ty)) {
+      this.storageBoxTargetTile = null;
+      this.storageBoxSprint = false;
+      return;
+    }
+    if (this.tryStartStorageBoxInteract(me, tx, ty)) return;
+    if (this.isBusyWithTimedAction(me)) return;
+    const now = Date.now();
+    if (now - this.lastPursuitMoveSentAt > 300) {
+      const goal = this.doorApproachGoal(me, tx, ty);
+      if (!goal) {
+        this.storageBoxTargetTile = null;
+        this.storageBoxSprint = false;
+        return;
+      }
+      const sprint = this.storageBoxSprint && me.stamina > 0;
+      this.sendMoveToCoords(goal.x, goal.y, sprint);
+      this.lastPursuitMoveSentAt = now;
+    }
   }
 
   private nearestAdjacentPrefab(me: {
@@ -13919,10 +14904,21 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private sendFurnaceCraftOpen() {
+    const stationId = this.fireplaceUI?.getStationId();
+    if (!stationId || !this.room) return;
+    const message: ClientMessage = {
+      type: "craftOpen",
+      payload: { workbenchId: stationId },
+    };
+    this.room.send("action", message);
+  }
+
   private sendCraftPerform(recipeId: string) {
     if (!this.room || !this.craftUI?.isOpen()) return;
     const workbenchId = this.craftUI.getWorkbenchId();
     if (!workbenchId) return;
+    const furnace = this.craftUI.getStation() === "furnace";
     const recipe = getCraftRecipe(recipeId) ?? getDisassemblyRecipe(recipeId);
     const durationMs = recipe
       ? craftDurationForSkill(
@@ -13936,7 +14932,9 @@ export class WorldScene extends Phaser.Scene {
     this.craftUI.close();
     document.body.classList.remove("craft-open");
 
-    this.beginOptimisticCraft(durationMs);
+    // Furnace crafts wait for the server. A cold or extinguished fire
+    // must not leave a progress bar running.
+    if (!furnace) this.beginOptimisticCraft(durationMs);
     const message: ClientMessage = {
       type: "craftPerform",
       payload: { workbenchId, recipeId },
@@ -14409,6 +15407,18 @@ export class WorldScene extends Phaser.Scene {
     this.lastHotbarRenderKey = "";
   }
 
+  private storeInContainer(containerId: string, fromSlot: number, toSlot: number) {
+    if (!this.room || !this.containerLootUI?.isOpen()) return;
+    if (!containerId) return;
+    const message: ClientMessage = {
+      type: "storeInContainer",
+      payload: { containerId, fromSlot, toSlot },
+    };
+    this.room.send("action", message);
+    this.lastInventoryRenderKey = "";
+    this.lastHotbarRenderKey = "";
+  }
+
   private moveInContainer(containerId: string, fromSlot: number, toSlot: number) {
     if (!this.room || !this.containerLootUI?.isOpen()) return;
     if (!containerId) return;
@@ -14446,6 +15456,13 @@ export class WorldScene extends Phaser.Scene {
     },
     containerId: string,
   ): boolean {
+    const storageBox = this.findStorageBoxById(me, containerId);
+    if (storageBox) {
+      const ptx = Math.floor(me.x);
+      const pty = Math.floor(me.y);
+      return Math.max(Math.abs(ptx - storageBox.x), Math.abs(pty - storageBox.y)) <= 1;
+    }
+
     const searchable = this.searchablesCache.find((s) => s.id === containerId);
     if (searchable) {
       const overworldBag = searchable.buildingX === OVERWORLD_BAG_BUILDING;
@@ -14523,6 +15540,21 @@ export class WorldScene extends Phaser.Scene {
         !wolfData.looted &&
         !me.inInterior &&
         playerNearEntity(me.x, me.y, wolfData.x, wolfData.y)
+      );
+    }
+
+    const bear = room.state.bears?.get(containerId);
+    const bearData =
+      bear ??
+      (this.bearSprites.get(containerId)?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined);
+    if (bearData) {
+      return (
+        !!bearData.isDead &&
+        !bearData.looted &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, bearData.x, bearData.y)
       );
     }
 

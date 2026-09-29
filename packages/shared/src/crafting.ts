@@ -4,6 +4,7 @@ import {
   countItemInInventory,
   itemFitsInSlot,
   maxStackForItem,
+  isPocketSlot,
   removeItemFromInventory,
   type Inventory,
 } from "./items.js";
@@ -13,13 +14,20 @@ export type CraftItemQty = { itemId: string; quantity: number };
 /** Single required stack, or any one option from a list (e.g. Old Teddy / Teddy). */
 export type CraftIngredient = CraftItemQty | { anyOf: CraftItemQty[] };
 
+/** Workbench for cloth and wood. Furnace for metal, and only while the fire is lit. */
+export type CraftStationKind = "workbench" | "furnace";
+
 export type CraftRecipe = {
   id: string;
-  station: "workbench";
+  station: CraftStationKind;
   output: CraftItemQty;
   inputs: CraftIngredient[];
   /** Craft channel duration; defaults to CRAFT_DURATION_MS. */
   durationMs?: number;
+  /** Break an item down into the output. Other materials are lost. */
+  breakdown?: boolean;
+  /** Extra line on a breakdown card. */
+  note?: string;
 };
 
 /** Default workbench craft channel time. */
@@ -75,19 +83,19 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "screws_from_scrap",
-    station: "workbench",
+    station: "furnace",
     output: { itemId: "screws", quantity: 1 },
     inputs: [{ itemId: "scrap_metal", quantity: 1 }],
   },
   {
     id: "bolts_from_scrap",
-    station: "workbench",
+    station: "furnace",
     output: { itemId: "bolts", quantity: 1 },
     inputs: [{ itemId: "scrap_metal", quantity: 1 }],
   },
   {
     id: "hammer_from_scrap",
-    station: "workbench",
+    station: "furnace",
     output: { itemId: "weapon_hammer", quantity: 1 },
     inputs: [
       { itemId: "scrap_metal", quantity: 3 },
@@ -97,7 +105,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "hatchet_from_scrap",
-    station: "workbench",
+    station: "furnace",
     output: { itemId: "weapon_hatchet", quantity: 1 },
     inputs: [
       { itemId: "wood", quantity: 2 },
@@ -105,6 +113,22 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
       { itemId: "bolts", quantity: 2 },
       { itemId: "duct_tape", quantity: 2 },
     ],
+  },
+  {
+    id: "scrap_from_hammer",
+    station: "furnace",
+    breakdown: true,
+    output: { itemId: "scrap_metal", quantity: 3 },
+    inputs: [{ itemId: "weapon_hammer", quantity: 1 }],
+    note: "Screws and duct tape are lost.",
+  },
+  {
+    id: "scrap_from_hatchet",
+    station: "furnace",
+    breakdown: true,
+    output: { itemId: "scrap_metal", quantity: 2 },
+    inputs: [{ itemId: "weapon_hatchet", quantity: 1 }],
+    note: "Wood, bolts, and duct tape are lost.",
   },
   {
     id: "bat_from_wood",
@@ -125,7 +149,20 @@ export function isCraftItemQty(ing: CraftIngredient): ing is CraftItemQty {
   return "itemId" in ing;
 }
 
-/** First matching anyOf option the player can afford, or the single required stack. */
+function countItemInPockets(inventory: Inventory, itemId: string): number {
+  let total = 0;
+  for (let i = 0; i < inventory.length; i++) {
+    if (!isPocketSlot(i)) continue;
+    const slot = inventory[i];
+    if (slot?.id === itemId) total += slot.quantity;
+  }
+  return total;
+}
+
+/**
+ * First matching anyOf option the pockets can cover.
+ * Worn clothing is only chosen when no pocket stack can pay the cost.
+ */
 export function resolveCraftIngredient(
   inventory: Inventory,
   ing: CraftIngredient,
@@ -134,6 +171,9 @@ export function resolveCraftIngredient(
     return countItemInInventory(inventory, ing.itemId) >= ing.quantity
       ? ing
       : null;
+  }
+  for (const opt of ing.anyOf) {
+    if (countItemInPockets(inventory, opt.itemId) >= opt.quantity) return opt;
   }
   for (const opt of ing.anyOf) {
     if (countItemInInventory(inventory, opt.itemId) >= opt.quantity) return opt;
@@ -158,13 +198,20 @@ export function canCraftRecipe(inventory: Inventory, recipe: CraftRecipe): boole
 export function applyCraftRecipe(
   inventory: Inventory,
   recipe: CraftRecipe,
+  deferSlots: readonly number[] = [],
 ): Inventory | null {
   if (!canCraftRecipe(inventory, recipe)) return null;
   let next = inventory;
   for (const ing of recipe.inputs) {
     const resolved = resolveCraftIngredient(next, ing);
     if (!resolved) return null;
-    next = removeItemFromInventory(next, resolved.itemId, resolved.quantity);
+    next = removeItemFromInventory(
+      next,
+      resolved.itemId,
+      resolved.quantity,
+      "pockets-first",
+      deferSlots,
+    );
   }
   if (!canAddToInventory(next, recipe.output.itemId, recipe.output.quantity)) {
     return null;

@@ -5,6 +5,9 @@ import {
   PLAYER_SKIN_DEFAULT,
   PLAYER_WALK_FRAMES,
   COYWOLF_RUN_FRAMES,
+  BEAR_RUN_FRAMES,
+  BEAR_WALK_FRAMES,
+  BEAR_DIE_FRAMES,
   ZOMBIE_WALK_FRAMES,
   zombieHasCrawlVariant,
   zombieDieFrameCount,
@@ -38,7 +41,8 @@ export type EntityPackId =
   | `player-${number}`
   | "traderman"
   | "traderguard"
-  | "coywolf";
+  | "coywolf"
+  | "bear";
 
 /** Packs that are not entities but still benefit from atlasing. */
 export type ExtraPackId = "furniture";
@@ -124,6 +128,33 @@ function scheduleCoywolfPack(track: TrackFn) {
       track(
         `coywolf-die-${dir}-${tag}`,
         `Coywolf1/Die/Coywolf1_Die_${dir}_${tag}.png`,
+      );
+    }
+  }
+}
+
+function scheduleBearPack(track: TrackFn) {
+  for (const dir of DIRECTION_LABELS) {
+    track(`bear-idle-${dir}`, `Bear1/Idle/Bear1_Idle_${dir}.png`);
+    for (let f = 1; f <= BEAR_WALK_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `bear-walk-${dir}-${tag}`,
+        `Bear1/Walk/Bear1_Walk_${dir}_${tag}.png`,
+      );
+    }
+    for (let f = 1; f <= BEAR_RUN_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `bear-run-${dir}-${tag}`,
+        `Bear1/Run/Bear1_Run_${dir}_${tag}.png`,
+      );
+    }
+    for (let f = 1; f <= BEAR_DIE_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `bear-die-${dir}-${tag}`,
+        `Bear1/Die/Bear1_Die_${dir}_${tag}.png`,
       );
     }
   }
@@ -425,6 +456,14 @@ function scheduleFurniturePack(track: TrackFn) {
     "furniture-fireplace1-inactive",
     "Furniture/Fireplace1/Fireplace1_Inactive_SE.png",
   );
+  track(
+    "furniture-storagebox1",
+    "Furniture/StorageBox1/StorageBox1_Inactive_SE.png",
+  );
+  track(
+    "furniture-storagebox2",
+    "Furniture/StorageBox2/StorageBox2_Inactive_SE.png",
+  );
   for (let frame = 1; frame <= FIREPLACE_ACTIVE_FRAMES; frame++) {
     const tag = animFrameTag(frame);
     track(
@@ -479,6 +518,8 @@ export function schedulePackTextures(id: PackId, track: TrackFn) {
     scheduleTraderGuardPack(track);
   } else if (id === "coywolf") {
     scheduleCoywolfPack(track);
+  } else if (id === "bear") {
+    scheduleBearPack(track);
   }
 }
 
@@ -498,7 +539,7 @@ export function allPackIds(): PackId[] {
   }
   for (let s = 1; s <= 4; s++) ids.push(`redman-${s}`);
   for (let s = 1; s <= 3; s++) ids.push(`player-${s}`);
-  ids.push("traderman", "traderguard", "coywolf", "furniture");
+  ids.push("traderman", "traderguard", "coywolf", "bear", "furniture");
   return ids;
 }
 

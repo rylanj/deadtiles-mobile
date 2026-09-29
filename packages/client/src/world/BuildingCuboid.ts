@@ -230,7 +230,7 @@ function drawImageOnWallFace(
  * Draw a wall face with the texture tiled once per storey (WALL_DEPTH band),
  * so 2-storey buildings get two full wall tiles instead of one stretch.
  */
-function drawTexturedWallFace(
+export function drawTexturedWallFace(
   ctx: CanvasRenderingContext2D,
   img: CanvasImageSource,
   bottomLeft: Point,

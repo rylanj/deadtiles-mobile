@@ -917,11 +917,44 @@ export function countItemInInventory(inventory: Inventory, itemId: string): numb
   return total;
 }
 
+/** `slots` walks the grid in order. `pockets-first` empties pockets before worn gear. */
+export type InventoryRemovalOrder = "slots" | "pockets-first";
+
+function inventoryRemovalIndices(
+  length: number,
+  order: InventoryRemovalOrder,
+  deferSlots: readonly number[],
+): number[] {
+  const indices: number[] = [];
+  for (let i = 0; i < length; i++) indices.push(i);
+  let ordered = indices;
+  if (order === "pockets-first") {
+    const pockets: number[] = [];
+    const rest: number[] = [];
+    for (const i of indices) {
+      if (isPocketSlot(i)) pockets.push(i);
+      else rest.push(i);
+    }
+    ordered = pockets.concat(rest);
+  }
+  if (deferSlots.length === 0) return ordered;
+  const deferred = new Set(deferSlots);
+  const early: number[] = [];
+  const late: number[] = [];
+  for (const i of ordered) {
+    if (deferred.has(i)) late.push(i);
+    else early.push(i);
+  }
+  return early.concat(late);
+}
+
 /** Remove up to `quantity` of `itemId` across slots (no-op if stock is short). */
 export function removeItemFromInventory(
   inventory: Inventory,
   itemId: string,
   quantity: number,
+  order: InventoryRemovalOrder = "slots",
+  deferSlots: readonly number[] = [],
 ): Inventory {
   if (quantity <= 0) return inventory;
   if (countItemInInventory(inventory, itemId) < quantity) return inventory;
@@ -929,7 +962,8 @@ export function removeItemFromInventory(
   const next = inventory.map((slot) => (slot ? { ...slot } : null));
   let remaining = quantity;
 
-  for (let i = 0; i < next.length && remaining > 0; i++) {
+  for (const i of inventoryRemovalIndices(next.length, order, deferSlots)) {
+    if (remaining <= 0) break;
     const slot = next[i];
     if (!slot || slot.id !== itemId) continue;
     const take = Math.min(slot.quantity, remaining);
@@ -2287,6 +2321,166 @@ export function createEmptyContainerInventory(): Inventory {
   return Array.from({ length: CONTAINER_INVENTORY_SLOTS }, () => null);
 }
 
+function storageBoxSlotLimit(slotCount: number): number {
+  const n = Math.floor(slotCount);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(64, n);
+}
+
+export function createEmptyStorageBoxInventory(slotCount: number): Inventory {
+  return Array.from({ length: storageBoxSlotLimit(slotCount) }, () => null);
+}
+
+export function parseStorageBoxInventory(
+  json: string | null | undefined,
+  slotCount: number,
+): Inventory {
+  const slots = createEmptyStorageBoxInventory(slotCount);
+  if (typeof json !== "string" || json.length === 0) return slots;
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return slots;
+    for (let i = 0; i < Math.min(parsed.length, slots.length); i++) {
+      const slot = parsed[i];
+      if (
+        slot &&
+        typeof slot === "object" &&
+        typeof (slot as InventoryEntry).id === "string" &&
+        typeof (slot as InventoryEntry).quantity === "number" &&
+        (slot as InventoryEntry).quantity > 0 &&
+        getItemDefinition((slot as InventoryEntry).id)
+      ) {
+        const entry = slot as InventoryEntry;
+        slots[i] = makeInventoryEntry(
+          entry.id,
+          entry.quantity,
+          entry.magazineRounds,
+          inventoryEntryMeta(entry),
+        );
+      }
+    }
+  } catch {
+    return createEmptyStorageBoxInventory(slotCount);
+  }
+  return slots;
+}
+
+export function serializeStorageBoxInventory(
+  inventory: Inventory,
+  slotCount: number,
+): string {
+  const slots = createEmptyStorageBoxInventory(slotCount);
+  for (let i = 0; i < slots.length; i++) {
+    const slot = inventory[i];
+    if (!slot || slot.quantity <= 0 || !getItemDefinition(slot.id)) continue;
+    slots[i] = makeInventoryEntry(
+      slot.id,
+      slot.quantity,
+      slot.magazineRounds,
+      inventoryEntryMeta(slot),
+    );
+  }
+  return JSON.stringify(slots);
+}
+
+/** Move a player stack into a storage box. Swap only when the box item fits the player slot. */
+export function putIntoStorageBoxSlot(
+  playerInventory: Inventory,
+  fromSlot: number,
+  container: Inventory,
+  toSlot: number,
+  slotCount: number,
+): { container: Inventory; playerInventory: Inventory } | null {
+  const limit = storageBoxSlotLimit(slotCount);
+  if (
+    fromSlot < 0 ||
+    toSlot < 0 ||
+    fromSlot >= playerInventory.length ||
+    fromSlot >= MAX_INVENTORY_SLOTS ||
+    toSlot >= limit
+  ) {
+    return null;
+  }
+
+  const nextPlayer = playerInventory.map((slot) => (slot ? { ...slot } : null));
+  const nextContainer = createEmptyStorageBoxInventory(limit);
+  for (let i = 0; i < limit; i++) {
+    const slot = container[i];
+    nextContainer[i] = slot ? { ...slot } : null;
+  }
+  const from = nextPlayer[fromSlot];
+  if (!from || !getItemDefinition(from.id)) return null;
+
+  const to = nextContainer[toSlot];
+  if (!to) {
+    nextContainer[toSlot] = from;
+    nextPlayer[fromSlot] = null;
+    return { container: nextContainer, playerInventory: nextPlayer };
+  }
+
+  if (from.id === to.id && maxStackForItem(from.id) > 1) {
+    const maxStack = maxStackForItem(from.id);
+    const room = maxStack - to.quantity;
+    if (room > 0) {
+      const moveQty = Math.min(room, from.quantity);
+      to.quantity += moveQty;
+      from.quantity -= moveQty;
+      if (from.quantity <= 0) nextPlayer[fromSlot] = null;
+      return { container: nextContainer, playerInventory: nextPlayer };
+    }
+  }
+
+  if (!itemFitsInSlot(to.id, fromSlot)) return null;
+  nextPlayer[fromSlot] = to;
+  nextContainer[toSlot] = from;
+  return { container: nextContainer, playerInventory: nextPlayer };
+}
+
+export function moveStorageBoxSlot(
+  container: Inventory,
+  fromSlot: number,
+  toSlot: number,
+  slotCount: number,
+): Inventory {
+  const limit = storageBoxSlotLimit(slotCount);
+  if (fromSlot === toSlot) return container;
+  if (
+    fromSlot < 0 ||
+    toSlot < 0 ||
+    fromSlot >= limit ||
+    toSlot >= limit
+  ) {
+    return container;
+  }
+  const next = createEmptyStorageBoxInventory(limit);
+  for (let i = 0; i < limit; i++) {
+    const slot = container[i];
+    next[i] = slot ? { ...slot } : null;
+  }
+  const from = next[fromSlot];
+  if (!from || !getItemDefinition(from.id)) return container;
+  const to = next[toSlot];
+  if (!to) {
+    next[toSlot] = from;
+    next[fromSlot] = null;
+    return next;
+  }
+  if (from.id === to.id && maxStackForItem(from.id) > 1) {
+    const maxStack = maxStackForItem(from.id);
+    const room = maxStack - to.quantity;
+    if (room > 0) {
+      const moveQty = Math.min(room, from.quantity);
+      to.quantity += moveQty;
+      from.quantity -= moveQty;
+      if (from.quantity <= 0) next[fromSlot] = null;
+      return next;
+    }
+  }
+  next[fromSlot] = to;
+  next[toSlot] = from;
+  return next;
+}
+
 /** How many more of `itemId` fit in a container inventory. */
 export function remainingContainerAddCapacity(
   inventory: Inventory,
@@ -2558,11 +2752,12 @@ export function takeFromContainerSlot(
   fromSlot: number,
   playerInventory: Inventory,
   toSlot: number,
+  containerSlotCount = CONTAINER_INVENTORY_SLOTS,
 ): { container: Inventory; playerInventory: Inventory } | null {
   if (
     fromSlot < 0 ||
     toSlot < 0 ||
-    fromSlot >= CONTAINER_INVENTORY_SLOTS ||
+    fromSlot >= containerSlotCount ||
     toSlot >= playerInventory.length ||
     toSlot >= MAX_INVENTORY_SLOTS
   ) {

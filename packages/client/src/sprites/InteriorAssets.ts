@@ -122,6 +122,39 @@ export function deskSearchedFrameKey(frame: number): string {
   return furnitureSearchedFrameKey(def, frame);
 }
 
+/** StorageBox1 — single SE still (player-built crate). */
+export const STORAGE_BOX_TEXTURE_KEY = "furniture-storagebox1";
+/** StorageBox2 — larger crate, same canvas size, less transparent padding. */
+export const STORAGE_BOX2_TEXTURE_KEY = "furniture-storagebox2";
+/** Full-canvas height relative to generic furniture. The crate fills most of the PNG. */
+export const STORAGE_BOX_RENDER_SCALE = 0.72;
+/** Source canvas keeps 46 transparent rows under Storage Box 1 (256px art). */
+export const STORAGE_BOX_BOTTOM_PAD_RATIO = 46 / 256;
+/** Storage Box 2 art sits lower in the canvas: 14 transparent rows. */
+export const STORAGE_BOX2_BOTTOM_PAD_RATIO = 14 / 256;
+/** Lift both crates by this fraction of render height (screen Y decreases). */
+export const STORAGE_BOX_RAISE_RATIO = 0.1;
+
+export function storageBoxTextureKey(kind: string): string {
+  return kind === "storage_box_2"
+    ? STORAGE_BOX2_TEXTURE_KEY
+    : STORAGE_BOX_TEXTURE_KEY;
+}
+
+export function storageBoxPadRatio(kind: string): number {
+  return kind === "storage_box_2"
+    ? STORAGE_BOX2_BOTTOM_PAD_RATIO
+    : STORAGE_BOX_BOTTOM_PAD_RATIO;
+}
+
+/** Pixels added to the tile's south edge. Positive sits the sprite lower. */
+export function storageBoxGroundOffset(kind: string, renderHeight: number): number {
+  return (
+    Math.round(renderHeight * storageBoxPadRatio(kind)) -
+    Math.round(renderHeight * STORAGE_BOX_RAISE_RATIO)
+  );
+}
+
 /** Fireplace1 — Active loop + Inactive still (player-built structure). */
 export const FIREPLACE1_INACTIVE_KEY = "furniture-fireplace1-inactive";
 export const FIREPLACE1_ACTIVE_ANIM = "furniture-fireplace1-active";

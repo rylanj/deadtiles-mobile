@@ -14,6 +14,9 @@ export const BUILDING_WALL_WAREHOUSE_KEY = "building-wall-4" as const;
 /** Placeholder wall for types without dedicated art yet. */
 export const BUILDING_WALL_BLANK_KEY = "building-wall-blank" as const;
 
+/** Player-built partition walls. */
+export const BUILDING_WALL_PLYWOOD_KEY = "building-wall-plywood" as const;
+
 export const BUILDING_DOOR_1_KEY = "building-door-1" as const; // houses
 /** Olive canvas tent flap (generated; not the wooden Door1). */
 export const BUILDING_TENT_FLAP_KEY = "building-tent-flap-se" as const;
@@ -98,6 +101,7 @@ const HOUSE_WALL_FILES = [
 ] as const;
 
 const WAREHOUSE_WALL_FILE = "Buildings/Wall4.png";
+const PLYWOOD_WALL_FILE = "Buildings/Plywood.png";
 const DOOR_1_FILE = "Buildings/Door1.png";
 const DOOR_POLICE_FILE = "Buildings/DoorPolice.png";
 const DOOR_3_FILE = "Buildings/Door3.png";
@@ -150,6 +154,7 @@ export function loadBuildingAssets(scene: Phaser.Scene) {
     scene.load.image(BUILDING_WALL_HOUSE_KEYS[i]!, HOUSE_WALL_FILES[i]!);
   }
   scene.load.image(BUILDING_WALL_WAREHOUSE_KEY, WAREHOUSE_WALL_FILE);
+  scene.load.image(BUILDING_WALL_PLYWOOD_KEY, PLYWOOD_WALL_FILE);
   scene.load.image(BUILDING_DOOR_1_KEY, DOOR_1_FILE);
   scene.load.image(BUILDING_DOOR_POLICE_KEY, DOOR_POLICE_FILE);
   scene.load.image(BUILDING_DOOR_3_KEY, DOOR_3_FILE);
@@ -182,6 +187,7 @@ export function configureBuildingTextures(scene: Phaser.Scene) {
   for (const key of [
     ...BUILDING_WALL_HOUSE_KEYS,
     BUILDING_WALL_WAREHOUSE_KEY,
+    BUILDING_WALL_PLYWOOD_KEY,
     BUILDING_WALL_BLANK_KEY,
     BUILDING_TENT_FLAP_KEY,
     BUILDING_DOOR_1_KEY,

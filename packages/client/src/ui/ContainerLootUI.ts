@@ -2,6 +2,8 @@ import {
   BASE_INVENTORY_SLOTS,
   CLOTHING_SLOT_INDEX,
   CONTAINER_INVENTORY_SLOTS,
+  parseStorageBoxInventory,
+  storageBoxSlotsForObjectType,
   RADIO_ITEM_ID,
   RADIO_SLOT_INDEX,
   MAP_ITEM_ID,
@@ -92,6 +94,10 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
+  coyote: "Coyote",
+  bear: "Bear",
+  storagebox: "Storage Box",
+  storagebox2: "Storage Box 2",
 };
 
 function furnitureDisplayName(objectType: string): string {
@@ -118,6 +124,7 @@ export type LootPileView = {
 export type ContainerLootUIHandlers = {
   onTakeFromContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onMoveInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
+  onStoreInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onMovePlayerSlot: (fromSlot: number, toSlot: number) => void;
   onClose: () => void;
 };
@@ -276,7 +283,7 @@ export class ContainerLootUI {
     this.piles = source.map((pile) => ({
       containerId: pile.containerId,
       objectType: pile.objectType,
-      inventory: parseContainerInventory(pile.containerJson),
+      inventory: this.parsePileInventory(pile.objectType, pile.containerJson),
     }));
     this.containerId = this.piles[0]?.containerId ?? containerId;
     this.objectType = this.piles.length > 1 ? "" : (this.piles[0]?.objectType ?? objectType);
@@ -321,8 +328,9 @@ export class ContainerLootUI {
     if (!this.visible) return;
     const pile = this.piles.find((entry) => entry.containerId === containerId);
     if (!pile) return;
-    const inventory = parseContainerInventory(containerJson);
-    if (containerInventoryIsEmpty(inventory)) {
+    const inventory = this.parsePileInventory(pile.objectType, containerJson);
+    const keepWhenEmpty = this.isStorageBoxPile(pile.objectType);
+    if (containerInventoryIsEmpty(inventory) && !keepWhenEmpty) {
       this.piles = this.piles.filter((entry) => entry.containerId !== containerId);
       this.containerId = this.piles[0]?.containerId ?? "";
       if (this.piles.length === 0) {
@@ -346,7 +354,7 @@ export class ContainerLootUI {
 
   render(containerJson: string, playerInventoryJson: string) {
     this.titleEl.textContent = furnitureDisplayName(this.objectType);
-    this.containerInventory = parseContainerInventory(containerJson);
+    this.containerInventory = this.parsePileInventory(this.objectType, containerJson);
     this.playerInventory = parseInventory(playerInventoryJson);
     this.rebuildGrids();
   }
@@ -366,7 +374,8 @@ export class ContainerLootUI {
       }
       const grid = document.createElement("div");
       grid.className = "inventory-grid inventory-grid--container";
-      for (let i = 0; i < CONTAINER_INVENTORY_SLOTS; i++) {
+      const slotCount = this.containerSlotCount(pile.objectType);
+      for (let i = 0; i < slotCount; i++) {
         grid.appendChild(
           this.createCell(
             "container",
@@ -509,6 +518,13 @@ export class ContainerLootUI {
         this.handlers.onTakeFromContainer(containerId, index, toSlot);
       };
 
+      const storeToBox = () => {
+        if (source !== "player" || this.storageBoxSlots() == null) return;
+        const toSlot = this.findFirstStorageBoxSlot(slot.id);
+        if (toSlot < 0) return;
+        this.handlers.onStoreInContainer(this.containerId, index, toSlot);
+      };
+
       bindSlotPointerDnD({
         cell,
         root: this.overlay,
@@ -567,6 +583,15 @@ export class ContainerLootUI {
             this.handlers.onMoveInContainer(containerId, index, toSlot);
           } else if (source === "player" && toSource === "player") {
             this.handlers.onMovePlayerSlot(index, toSlot);
+          } else if (
+            source === "player" &&
+            toSource === "container" &&
+            this.storageBoxSlots() != null
+          ) {
+            // Player cells have no container id. The box id is on the slot dropped onto.
+            const boxId = target.dataset.containerId || this.containerId;
+            if (!boxId) return;
+            this.handlers.onStoreInContainer(boxId, index, toSlot);
           }
         },
         onDragBegan: () => {
@@ -580,7 +605,11 @@ export class ContainerLootUI {
           this.clearDragOverStates();
         },
         onDoubleActivate:
-          source === "container" ? takeToInventory : undefined,
+          source === "container"
+            ? takeToInventory
+            : source === "player" && this.storageBoxSlots() != null
+              ? storeToBox
+              : undefined,
         clearHover: () => this.clearDragOverStates(),
         setHover: (target, valid) => {
           target.classList.toggle("inventory-cell--drag-over", valid);
@@ -612,8 +641,54 @@ export class ContainerLootUI {
         (!toItem || itemFitsInSlot(toItem.id, fromSlot))
       );
     }
-    // Player → container not supported yet.
+    if (
+      fromSource === "player" &&
+      toSource === "container" &&
+      this.storageBoxSlots() != null &&
+      toSlot >= 0 &&
+      toSlot < (this.storageBoxSlots() ?? 0)
+    ) {
+      const dest = this.containerInventory[toSlot];
+      if (!dest) return true;
+      if (dest.id === itemId && maxStackForItem(itemId) > 1) return true;
+      const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
+      return itemFitsInSlot(dest.id, fromSlot);
+    }
     return false;
+  }
+
+  private isStorageBoxPile(objectType: string): boolean {
+    return storageBoxSlotsForObjectType(objectType) != null;
+  }
+
+  private storageBoxSlots(): number | null {
+    return storageBoxSlotsForObjectType(this.objectType);
+  }
+
+  private containerSlotCount(objectType: string): number {
+    return storageBoxSlotsForObjectType(objectType) ?? CONTAINER_INVENTORY_SLOTS;
+  }
+
+  private parsePileInventory(objectType: string, containerJson: string): Inventory {
+    const slots = storageBoxSlotsForObjectType(objectType);
+    return slots != null
+      ? parseStorageBoxInventory(containerJson, slots)
+      : parseContainerInventory(containerJson);
+  }
+
+  private findFirstStorageBoxSlot(itemId: string): number {
+    const limit = this.storageBoxSlots() ?? 0;
+    const maxStack = maxStackForItem(itemId);
+    if (maxStack > 1) {
+      for (let i = 0; i < limit; i++) {
+        const slot = this.containerInventory[i];
+        if (slot?.id === itemId && slot.quantity < maxStack) return i;
+      }
+    }
+    for (let i = 0; i < limit; i++) {
+      if (!this.containerInventory[i]) return i;
+    }
+    return -1;
   }
 
   private findFirstFittingPlayerSlot(itemId: string): number {

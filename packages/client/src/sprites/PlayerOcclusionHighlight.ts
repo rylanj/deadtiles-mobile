@@ -10,7 +10,8 @@ import {
 
 /**
  * Draws a crisp white silhouette outline on the local player wherever a
- * building cuboid occludes them — not the full PNG bounding box.
+ * building, tree, or player wall occludes them. The mask keeps it to real
+ * pixels, not the full PNG bounding box.
  */
 export class PlayerOcclusionHighlight {
   private outlineSprite: Phaser.GameObjects.Sprite;

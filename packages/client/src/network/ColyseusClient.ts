@@ -536,6 +536,33 @@ export type WorldRoomState = {
       ) => void,
     ): void;
   };
+  bears: {
+    get(id: string): {
+      x: number;
+      y: number;
+      facing: number;
+      anim: string;
+      animFrame: number;
+      health: number;
+      isDead: boolean;
+      looted?: boolean;
+    } | undefined;
+    forEach(
+      cb: (
+        bear: {
+          x: number;
+          y: number;
+          facing: number;
+          anim: string;
+          animFrame: number;
+          health: number;
+          isDead: boolean;
+          looted?: boolean;
+        },
+        id: string,
+      ) => void,
+    ): void;
+  };
   corpses: {
     get(id: string): PlayerCorpseSchema | undefined;
     forEach(cb: (corpse: PlayerCorpseSchema, id: string) => void): void;
@@ -660,6 +687,7 @@ export type CraftOpenEvent = {
   payload: {
     workbenchId: string;
     inventoryJson: string;
+    station?: "workbench" | "furnace";
   };
 };
 
@@ -686,6 +714,9 @@ export type FireplaceOpenEvent = {
     activeUntil: number;
     inventoryJson: string;
     hasLighter: boolean;
+    title?: string;
+    cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
+    stationId?: string;
   };
 };
 
@@ -701,6 +732,9 @@ export type FireplaceSyncEvent = {
     activeUntil: number;
     inventoryJson: string;
     hasLighter: boolean;
+    title?: string;
+    cookSlots?: { itemId: string; stageStartedAt: number }[] | null;
+    stationId?: string;
   };
 };
 

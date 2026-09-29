@@ -7,10 +7,22 @@ import {
 } from "./worldgen.js";
 import { INITIAL_WORLD_BOUNDS, type WorldBounds } from "./worldBounds.js";
 
-/** One pack site per this many tiles. */
-export const COYWOLF_PACK_CELL = 80;
-/** Packs inside this Chebyshev distance of an outdoor player wake up. */
-export const COYWOLF_ACTIVATE_RADIUS = 64;
+/**
+ * One group site per this many tiles. Larger than the old 80-tile grid, and
+ * most wooded cells still roll empty, so dens are rarer than they were.
+ * Bear dens are one per 160 tiles at a 40% chance (about one bear per 64,000
+ * tiles of woods). At 45% this grid is about one group per 32,000 tiles, so
+ * coyotes stay a bit more common than bears.
+ */
+export const COYWOLF_PACK_CELL = 120;
+/** Chance a wooded cell actually has coyotes. */
+export const COYWOLF_SPAWN_CHANCE = 0.45;
+/**
+ * Groups inside this Chebyshev distance of an outdoor player wake up.
+ * Wide enough that a pack near the edge of a 120-tile cell exists before
+ * its 30-tile hunt reaches you.
+ */
+export const COYWOLF_ACTIVATE_RADIUS = 96;
 /** Wake stays until every player is farther than this from the pack home. */
 export const COYWOLF_DEACTIVATE_RADIUS = 120;
 /** Wander stays inside this radius of the pack's home tile. */
@@ -18,6 +30,31 @@ export const COYWOLF_HOME_RADIUS = 16;
 
 export const COYWOLF_PACK_MIN = 1;
 export const COYWOLF_PACK_MAX = 5;
+/**
+ * Six singles, five pairs, then a few real packs. About three quarters of
+ * groups are one or two coyotes.
+ */
+const COYWOLF_SIZE_ROLLS = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 4, 5] as const;
+
+/** This many living coyotes hunt. One or two still only flee. */
+export const COYWOLF_PACK_HUNT_SIZE = 3;
+/** A hunting pack notices players and guards inside this distance (tiles). Zombies are ignored until one of them lands a hit. */
+export const COYWOLF_PACK_HUNT_RADIUS = 30;
+/**
+ * Once they have a target, they keep it until it is this far from every
+ * living member. A little past the hunt radius so they do not spin at the edge.
+ */
+export const COYWOLF_PACK_CHASE_RADIUS = 40;
+/** Lunge reach. Longer than a zombie's grab, shorter than a bear's swipe. */
+export const COYWOLF_PACK_ATTACK_RANGE = 0.9;
+/** One bite. Zombies hit for 8, bears for 35. */
+export const COYWOLF_PACK_DAMAGE = 18;
+/** Pause after they reach biting range, before the first snap. */
+export const COYWOLF_PACK_ATTACK_WINDUP_MS = 700;
+/** Wait between bites while they stay in range. */
+export const COYWOLF_PACK_ATTACK_COOLDOWN_MS = 2000;
+/** After a packmate dies, this is the chance the rest break and run. */
+export const COYWOLF_PACK_FLEE_CHANCE = 0.5;
 
 /** Trot. Faster than a shambling zombie, slower than a sprinting player. */
 export const COYWOLF_SPEED = 0.9;
@@ -63,8 +100,9 @@ function packTileOk(tx: number, ty: number, bounds: WorldBounds): boolean {
 }
 
 /**
- * Deterministic pack for one forest cell, or null when the cell has no
- * wooded floor. Size is 1 to 5. Members cluster on walkable forest tiles.
+ * Deterministic group for one forest cell, or null when the roll is empty
+ * or the cell has no wooded floor. Size is usually 1 or 2. Members cluster
+ * on walkable forest tiles.
  */
 export function coywolfPackSpawns(
   cx: number,
@@ -72,6 +110,7 @@ export function coywolfPackSpawns(
   bounds: WorldBounds = INITIAL_WORLD_BOUNDS,
 ): CoywolfSpawn[] | null {
   const rng = seededRandom(`coywolf-pack:${cx},${cy}`);
+  if (rng() > COYWOLF_SPAWN_CHANCE) return null;
   const cell = COYWOLF_PACK_CELL;
   const ox = cx * cell + cell / 2;
   const oy = cy * cell + cell / 2;
@@ -91,8 +130,8 @@ export function coywolfPackSpawns(
   if (!found) return null;
 
   const count =
-    COYWOLF_PACK_MIN +
-    Math.floor(rng() * (COYWOLF_PACK_MAX - COYWOLF_PACK_MIN + 1));
+    COYWOLF_SIZE_ROLLS[Math.floor(rng() * COYWOLF_SIZE_ROLLS.length)] ??
+    COYWOLF_PACK_MIN;
   const used = new Set<string>([`${anchorX},${anchorY}`]);
   const tiles: { x: number; y: number }[] = [{ x: anchorX, y: anchorY }];
 

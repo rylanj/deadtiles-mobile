@@ -15,6 +15,7 @@ import {
   interiorWallCornerDepthBias,
   interiorWallsForBuilding,
   searchableFootprint,
+  ENTITY_RENDER_HEIGHT,
   TILE_HEIGHT,
   TILE_WIDTH,
   WALL_DEPTH,
@@ -23,6 +24,7 @@ import {
   structureFenceFootprint,
   structureOccupiedTiles,
   isStructurePanelKind,
+  isStorageBoxKind,
   type HospitalCubicle,
   type HouseRoom,
   type InteriorWallTile,
@@ -33,15 +35,20 @@ import {
   fireplaceAirHeatFromOffset,
 } from "@zombie/shared";
 import {
+  BUILDING_WALL_PLYWOOD_KEY,
   buildingHospitalDoorKey,
   buildingInternalDoor1Key,
   type InternalDoorFace,
 } from "../sprites/BuildingAssets";
+import { drawTexturedWallFace } from "./BuildingCuboid";
 import {
   animatedFurnitureDef,
   configureInteriorAnimations,
   FIREPLACE1_ACTIVE_ANIM,
   FIREPLACE1_INACTIVE_KEY,
+  STORAGE_BOX_RENDER_SCALE,
+  storageBoxGroundOffset,
+  storageBoxTextureKey,
   furnace1ActiveAnim,
   furnace1InactiveKey,
   mantel1ActiveAnim,
@@ -155,7 +162,21 @@ const HOSPITAL_WALL_FRONT = "#ffffff";
 const HOSPITAL_WALL_SIDE = "#e6e6e6";
 const HOSPITAL_WALL_TOP = "#f2f2f2";
 
-type PartitionWallColors = { front: string; side: string; top: string };
+type PartitionWallColors = {
+  front: string;
+  side: string;
+  top: string;
+  /** Sheet grain and panel seams. Building interiors stay flat. */
+  plywood?: boolean;
+};
+
+/** Player-built walls: plywood sheets, lighter on the south face. */
+export const PLAYER_WALL_STYLE: PartitionWallColors = {
+  front: "#c6a36c",
+  side: "#a78654",
+  top: "#d8bc8e",
+  plywood: true,
+};
 /** Alpha for cubicle SW/SE partitions while the player is inside that bay. */
 const CUBICLE_WALL_FADE_ALPHA = 0.28;
 /** Player-built / house-room door leaf colors — wood vs. stone/drywall partitions. */
@@ -341,6 +362,10 @@ const THREESEATER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 1.
 const THREESEATER_BOTTOM_PAD = Math.round(THREESEATER_RENDER_HEIGHT * 0.125);
 /** VendingMachine1 — raise by 10% of display height. */
 const VENDINGMACHINE_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.1);
+/** Storage boxes share one canvas height. Box 2 reads larger because its art fills more of the PNG. */
+const STORAGE_BOX_RENDER_HEIGHT = Math.round(
+  FURNITURE_RENDER_HEIGHT * STORAGE_BOX_RENDER_SCALE,
+);
 /** Fireplace1 — slightly shorter than generic furniture. */
 const FIREPLACE1_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95);
 /** Fireplace1 — lower by 12.5% of display height. */
@@ -492,7 +517,8 @@ type WallSpriteEntry = {
   /** "both" when the tile carries two runs and shares one Graphics object. */
   axis: "ns" | "ew" | "both";
   depth: number;
-  graphics: Phaser.GameObjects.Graphics;
+  graphics: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
+  plywood: boolean;
 };
 
 export class InteriorView {
@@ -523,11 +549,17 @@ export class InteriorView {
   private searchingState = new Map<string, boolean>();
   private highlightGraphics: Phaser.GameObjects.Graphics | null = null;
   private buildGhostGraphics: Phaser.GameObjects.Graphics | null = null;
+  private buildGhostWall: Phaser.GameObjects.Image | null = null;
+  private buildGhostWallSig = "";
   private buildGhostFireplace: Phaser.GameObjects.Sprite | null = null;
+  private buildGhostStorageBox: Phaser.GameObjects.Sprite | null = null;
   private buildGhostFence: Phaser.GameObjects.Image | null = null;
   /** Persistent un-built prefab ghosts (translucent), keyed by "x,y". */
   private prefabGhostGraphics = new Map<string, Phaser.GameObjects.Graphics>();
+  private prefabGhostWalls = new Map<string, Phaser.GameObjects.Image>();
+  private prefabGhostWallSig = new Map<string, string>();
   private prefabGhostFireplaces = new Map<string, Phaser.GameObjects.Sprite>();
+  private prefabGhostStorageBoxes = new Map<string, Phaser.GameObjects.Sprite>();
   private prefabGhostFences = new Map<string, Phaser.GameObjects.Image>();
   /**
    * Prefab wall/door tiles counted for partition adjacency so solid walls keep
@@ -551,6 +583,13 @@ export class InteriorView {
   /** Persistent player-built fireplaces — furniture sprites, not partitions. */
   private fireplaces: InteriorFireplaceTile[] = [];
   private fireplaceSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  private storageBoxes: {
+    x: number;
+    y: number;
+    ownerWallet: string;
+    kind: string;
+  }[] = [];
+  private storageBoxSprites = new Map<string, Phaser.GameObjects.Sprite>();
   private fireplaceExpireEvents = new Map<string, Phaser.Time.TimerEvent>();
   /** Furnaces and house mantels currently drawn, keyed by searchable id. */
   private furnaceTiles = new Map<
@@ -858,6 +897,35 @@ export class InteriorView {
     this.upsertFireplaceSprite(tile);
   }
 
+  /** Replace all storage boxes for the current building and refresh sprites. */
+  setStorageBoxes(
+    tiles: { x: number; y: number; ownerWallet: string; kind: string }[],
+  ) {
+    this.storageBoxes = tiles.map((t) => ({ ...t }));
+    this.syncStorageBoxSprites();
+  }
+
+  /** Insert or update one storage box and refresh its sprite. */
+  upsertStorageBox(tile: {
+    x: number;
+    y: number;
+    ownerWallet: string;
+    kind: string;
+  }) {
+    const idx = this.storageBoxes.findIndex((f) => f.x === tile.x && f.y === tile.y);
+    if (idx >= 0) this.storageBoxes[idx] = { ...tile };
+    else this.storageBoxes.push({ ...tile });
+    this.upsertStorageBoxSprite(tile);
+  }
+
+  /** Remove one storage box sprite. */
+  removeStorageBox(x: number, y: number) {
+    this.storageBoxes = this.storageBoxes.filter((f) => f.x !== x || f.y !== y);
+    const key = `${x},${y}`;
+    this.storageBoxSprites.get(key)?.destroy();
+    this.storageBoxSprites.delete(key);
+  }
+
   /** Remove one fireplace sprite. */
   removeFireplace(x: number, y: number) {
     this.fireplaces = this.fireplaces.filter((f) => f.x !== x || f.y !== y);
@@ -977,6 +1045,7 @@ export class InteriorView {
     this.extraDoors = [];
     this.clearInternalDoorSprites();
     this.clearFireplaces();
+    this.clearStorageBoxes();
     this.clearFurnaceRuntime();
     this.clearFences();
     this.clearFenceCorners();
@@ -996,7 +1065,9 @@ export class InteriorView {
   }
 
   private clearWallSprites() {
-    for (const sprite of this.wallSprites) sprite.destroy();
+    for (const sprite of this.wallSprites) {
+      destroyPartitionDisplay(this.scene, sprite);
+    }
     this.wallSprites = [];
     this.wallEntries = [];
     this.partitionWallSet = new Set();
@@ -1060,8 +1131,13 @@ export class InteriorView {
     let maxDepth = Number.NEGATIVE_INFINITY;
     for (const entry of this.wallEntries) {
       if (fadeSet.has(`${entry.x},${entry.y}`)) {
-        entry.graphics.setVisible(false);
-        faded.push(entry);
+        if (entry.plywood) {
+          entry.graphics.setVisible(true);
+          entry.graphics.setAlpha(CUBICLE_WALL_FADE_ALPHA);
+        } else {
+          entry.graphics.setVisible(false);
+          faded.push(entry);
+        }
         maxDepth = Math.max(maxDepth, entry.depth);
       } else {
         entry.graphics.setVisible(true);
@@ -1082,7 +1158,7 @@ export class InteriorView {
         this.partitionWallSet,
         entry.axis,
         door,
-        this.partitionWallColors(),
+        entry.plywood ? PLAYER_WALL_STYLE : this.partitionWallColors(),
       );
     }
 
@@ -1118,6 +1194,44 @@ export class InteriorView {
   private clearFadeComposite() {
     this.fadeComposite?.destroy();
     this.fadeComposite = null;
+  }
+
+  /**
+   * Player walls and doors near a clicked floor tile. The click outline mask
+   * uses these so the diamond stays visible across the wall, same as a building.
+   */
+  playerWallOccludersNear(tileX: number, tileY: number): PlayerWallOccluder[] {
+    const reach = PLAYER_WALL_OCCLUSION_REACH;
+    const out: PlayerWallOccluder[] = [];
+    const doors = new Map(this.extraDoors.map((d) => [`${d.x},${d.y}`, d]));
+    for (const entry of this.wallEntries) {
+      if (Math.abs(entry.x - tileX) > reach || Math.abs(entry.y - tileY) > reach) {
+        continue;
+      }
+      if (!entry.graphics.visible) continue;
+      const door = doors.get(`${entry.x},${entry.y}`);
+      if (door) {
+        out.push({
+          kind: "door",
+          x: entry.x,
+          y: entry.y,
+          axis: entry.axis,
+          isOpen: door.isOpen,
+          depth: entry.depth,
+        });
+        continue;
+      }
+      if (!entry.plywood) continue;
+      out.push({
+        kind: "wall",
+        x: entry.x,
+        y: entry.y,
+        axis: entry.axis,
+        depth: entry.depth,
+        wallSet: this.partitionWallSet,
+      });
+    }
+    return out;
   }
 
   /** Draws a diamond outline on a tile. Pass null to clear. */
@@ -1159,8 +1273,9 @@ export class InteriorView {
 
     if (kind === "fence_corner") {
       this.highlightTile(tx, ty, valid ? 0x00ff88 : 0xff4444, valid ? 0.95 : 0.55);
-      this.buildGhostGraphics?.clear();
+      this.clearBuildGhostGraphics();
       this.buildGhostFireplace?.setVisible(false);
+      this.buildGhostStorageBox?.setVisible(false);
       this.buildGhostFence?.setVisible(false);
       return;
     }
@@ -1180,8 +1295,9 @@ export class InteriorView {
         valid ? 0x00ff88 : 0xff4444,
         valid ? 0.95 : 0.55,
       );
-      this.buildGhostGraphics?.clear();
+      this.clearBuildGhostGraphics();
       this.buildGhostFireplace?.setVisible(false);
+      this.buildGhostStorageBox?.setVisible(false);
       this.setFenceBuildGhost(tx, ty, facing, kind);
       return;
     }
@@ -1189,20 +1305,31 @@ export class InteriorView {
     this.highlightTile(tx, ty, valid ? 0x00ff88 : 0xff4444, valid ? 0.95 : 0.55);
 
     if (kind === "deconstruct") {
-      this.buildGhostGraphics?.clear();
+      this.clearBuildGhostGraphics();
       this.buildGhostFireplace?.setVisible(false);
+      this.buildGhostStorageBox?.setVisible(false);
       this.buildGhostFence?.setVisible(false);
       return;
     }
 
     if (kind === "fireplace") {
-      this.buildGhostGraphics?.clear();
+      this.clearBuildGhostGraphics();
       this.buildGhostFence?.setVisible(false);
+      this.buildGhostStorageBox?.setVisible(false);
       this.setFireplaceBuildGhost(tx, ty);
       return;
     }
 
+    if (isStorageBoxKind(kind)) {
+      this.clearBuildGhostGraphics();
+      this.buildGhostFireplace?.setVisible(false);
+      this.buildGhostFence?.setVisible(false);
+      this.setStorageBoxBuildGhost(tx, ty, kind);
+      return;
+    }
+
     this.buildGhostFireplace?.setVisible(false);
+    this.buildGhostStorageBox?.setVisible(false);
     this.buildGhostFence?.setVisible(false);
 
     if (!this.buildGhostGraphics) {
@@ -1222,13 +1349,39 @@ export class InteriorView {
     const runEW = hasW || hasE || (!hasN && !hasS);
 
     if (kind === "door") {
+      this.buildGhostWall?.setVisible(false);
       drawInteriorDoorTile(g, tx, ty, runNS ? "ns" : "ew", false, false);
       return;
     }
 
-    // Isolated tile falls back to a short EW spine so the ghost stays visible.
+    g.clear();
     const axis = runNS && runEW ? "both" : runNS ? "ns" : "ew";
-    drawInteriorPartitionTile(g, tx, ty, wallSet, axis, this.partitionWallColors());
+    const sig = `${tx},${ty}:${axis}`;
+    const depth = interiorPartitionDepth(tx, ty, 2);
+    if (this.buildGhostWallSig === sig && this.buildGhostWall?.active) {
+      this.buildGhostWall.setDepth(depth);
+      this.buildGhostWall.setAlpha(0.45);
+      this.buildGhostWall.setVisible(true);
+      return;
+    }
+    this.buildGhostWallSig = sig;
+    const display = createPlywoodPartition(
+      this.scene,
+      tx,
+      ty,
+      wallSet,
+      axis,
+      depth,
+      0.45,
+      "plywood-wall:ighost",
+      this.buildGhostWall,
+    );
+    this.buildGhostWall = display instanceof Phaser.GameObjects.Image ? display : null;
+  }
+
+  private clearBuildGhostGraphics() {
+    this.buildGhostGraphics?.clear();
+    this.buildGhostWall?.setVisible(false);
   }
 
   private setFireplaceBuildGhost(tx: number, ty: number) {
@@ -1250,6 +1403,26 @@ export class InteriorView {
     }
     this.fitInteriorSprite(sprite, FIREPLACE1_RENDER_HEIGHT);
     sprite.setDepth(this.placeableDepthAt(tx, ty));
+    sprite.setVisible(true);
+  }
+
+  private setStorageBoxBuildGhost(tx: number, ty: number, kind: string) {
+    const textureKey = storageBoxTextureKey(kind);
+    if (!textureKeyExists(this.scene, textureKey)) {
+      this.buildGhostStorageBox?.setVisible(false);
+      return;
+    }
+    const iso = cartesianToIso(tx + 0.5, ty + 0.5);
+    const groundY = iso.y + TILE_HEIGHT / 2 + this.storageBoxBottomPad(kind);
+    let sprite = this.buildGhostStorageBox;
+    if (!sprite) {
+      sprite = addSpriteForKey(this.scene, iso.x, groundY, textureKey);
+      sprite.setOrigin(0.5, 1);
+      sprite.setAlpha(0.45);
+      this.buildGhostStorageBox = sprite;
+    }
+    this.layoutStorageBoxGhost(sprite, tx, ty, kind);
+    sprite.setAlpha(0.45);
     sprite.setVisible(true);
   }
 
@@ -1279,8 +1452,13 @@ export class InteriorView {
   clearBuildGhost() {
     this.buildGhostGraphics?.destroy();
     this.buildGhostGraphics = null;
+    if (this.buildGhostWall) destroyPartitionDisplay(this.scene, this.buildGhostWall);
+    this.buildGhostWall = null;
+    this.buildGhostWallSig = "";
     this.buildGhostFireplace?.destroy();
     this.buildGhostFireplace = null;
+    this.buildGhostStorageBox?.destroy();
+    this.buildGhostStorageBox = null;
     this.buildGhostFence?.destroy();
     this.buildGhostFence = null;
   }
@@ -1300,15 +1478,21 @@ export class InteriorView {
   ) {
     const want = new Set(tiles.map((t) => `${t.x},${t.y}`));
     for (const key of [...this.prefabGhostGraphics.keys()]) {
-      if (!want.has(key)) {
-        this.prefabGhostGraphics.get(key)?.destroy();
-        this.prefabGhostGraphics.delete(key);
-      }
+      if (!want.has(key)) this.dropPrefabGeom(key);
+    }
+    for (const key of [...this.prefabGhostWalls.keys()]) {
+      if (!want.has(key)) this.dropPrefabWall(key);
     }
     for (const key of [...this.prefabGhostFireplaces.keys()]) {
       if (!want.has(key)) {
         this.prefabGhostFireplaces.get(key)?.destroy();
         this.prefabGhostFireplaces.delete(key);
+      }
+    }
+    for (const key of [...this.prefabGhostStorageBoxes.keys()]) {
+      if (!want.has(key)) {
+        this.prefabGhostStorageBoxes.get(key)?.destroy();
+        this.prefabGhostStorageBoxes.delete(key);
       }
     }
     for (const key of [...this.prefabGhostFences.keys()]) {
@@ -1349,10 +1533,11 @@ export class InteriorView {
     for (const t of tiles) {
       const key = `${t.x},${t.y}`;
       if (t.kind === "fireplace") {
-        this.prefabGhostGraphics.get(key)?.destroy();
-        this.prefabGhostGraphics.delete(key);
+        this.dropPrefabGeom(key);
         this.prefabGhostFences.get(key)?.destroy();
         this.prefabGhostFences.delete(key);
+        this.prefabGhostStorageBoxes.get(key)?.destroy();
+        this.prefabGhostStorageBoxes.delete(key);
         if (!textureKeyExists(this.scene, FIREPLACE1_INACTIVE_KEY)) continue;
         const iso = cartesianToIso(t.x + 0.5, t.y + 0.5);
         const groundY = iso.y + TILE_HEIGHT / 2 + FIREPLACE1_BOTTOM_PAD;
@@ -1377,11 +1562,35 @@ export class InteriorView {
         continue;
       }
 
-      if (isStructurePanelKind(t.kind)) {
-        this.prefabGhostGraphics.get(key)?.destroy();
-        this.prefabGhostGraphics.delete(key);
+      if (isStorageBoxKind(t.kind)) {
+        this.dropPrefabGeom(key);
+        this.prefabGhostFences.get(key)?.destroy();
+        this.prefabGhostFences.delete(key);
         this.prefabGhostFireplaces.get(key)?.destroy();
         this.prefabGhostFireplaces.delete(key);
+        const textureKey = storageBoxTextureKey(t.kind);
+        if (!textureKeyExists(this.scene, textureKey)) continue;
+        let sprite = this.prefabGhostStorageBoxes.get(key);
+        if (!sprite) {
+          const iso = cartesianToIso(t.x + 0.5, t.y + 0.5);
+          const groundY = iso.y + TILE_HEIGHT / 2 + this.storageBoxBottomPad(t.kind);
+          sprite = addSpriteForKey(this.scene, iso.x, groundY, textureKey);
+          sprite.setOrigin(0.5, 1);
+          sprite.setAlpha(0.45);
+          this.prefabGhostStorageBoxes.set(key, sprite);
+        }
+        this.layoutStorageBoxGhost(sprite, t.x, t.y, t.kind);
+        sprite.setAlpha(0.45);
+        sprite.setVisible(this.visible);
+        continue;
+      }
+
+      if (isStructurePanelKind(t.kind)) {
+        this.dropPrefabGeom(key);
+        this.prefabGhostFireplaces.get(key)?.destroy();
+        this.prefabGhostFireplaces.delete(key);
+        this.prefabGhostStorageBoxes.get(key)?.destroy();
+        this.prefabGhostStorageBoxes.delete(key);
         const facing = parseStructureFenceFacing(t.facing);
         const texKey = structurePanelTextureKey(t.kind, facing);
         if (!textureKeyExists(this.scene, texKey)) continue;
@@ -1399,10 +1608,11 @@ export class InteriorView {
       }
 
       if (t.kind === "fence_corner") {
-        this.prefabGhostGraphics.get(key)?.destroy();
-        this.prefabGhostGraphics.delete(key);
+        this.dropPrefabGeom(key);
         this.prefabGhostFireplaces.get(key)?.destroy();
         this.prefabGhostFireplaces.delete(key);
+        this.prefabGhostStorageBoxes.get(key)?.destroy();
+        this.prefabGhostStorageBoxes.delete(key);
         const texKey = chainLinkFenceCornerTextureKey(
           parseStructureFenceCorner(t.facing),
         );
@@ -1428,6 +1638,8 @@ export class InteriorView {
 
       this.prefabGhostFireplaces.get(key)?.destroy();
       this.prefabGhostFireplaces.delete(key);
+      this.prefabGhostStorageBoxes.get(key)?.destroy();
+      this.prefabGhostStorageBoxes.delete(key);
       this.prefabGhostFences.get(key)?.destroy();
       this.prefabGhostFences.delete(key);
       let g = this.prefabGhostGraphics.get(key);
@@ -1446,26 +1658,70 @@ export class InteriorView {
       const runNS = hasN || hasS;
       const runEW = hasW || hasE || (!hasN && !hasS);
       if (t.kind === "door") {
+        this.dropPrefabWall(key);
         drawInteriorDoorTile(g, t.x, t.y, runNS ? "ns" : "ew", false, false);
       } else {
+        g.clear();
         const axis = runNS && runEW ? "both" : runNS ? "ns" : "ew";
-        drawInteriorPartitionTile(
-          g,
+        const sig = `${hasN ? 1 : 0}${hasS ? 1 : 0}${hasE ? 1 : 0}${hasW ? 1 : 0}`;
+        const depth = interiorPartitionDepth(t.x, t.y, 2);
+        const prev = this.prefabGhostWalls.get(key);
+        if (this.prefabGhostWallSig.get(key) === sig && prev?.active) {
+          prev.setDepth(depth);
+          prev.setAlpha(0.45);
+          prev.setVisible(this.visible);
+          continue;
+        }
+        this.prefabGhostWallSig.set(key, sig);
+        const display = createPlywoodPartition(
+          this.scene,
           t.x,
           t.y,
           wallSet,
           axis,
-          this.partitionWallColors(),
+          depth,
+          0.45,
+          `plywood-wall:iprefab:${t.x},${t.y}`,
+          prev ?? null,
         );
+        if (display instanceof Phaser.GameObjects.Image) {
+          this.prefabGhostWalls.set(key, display);
+        } else {
+          this.prefabGhostWalls.delete(key);
+        }
       }
     }
+  }
+
+  private dropPrefabWall(key: string) {
+    const wall = this.prefabGhostWalls.get(key);
+    if (!wall) return;
+    destroyPartitionDisplay(this.scene, wall);
+    this.prefabGhostWalls.delete(key);
+    this.prefabGhostWallSig.delete(key);
+  }
+
+  private dropPrefabGeom(key: string) {
+    const g = this.prefabGhostGraphics.get(key);
+    if (g) {
+      g.destroy();
+      this.prefabGhostGraphics.delete(key);
+    }
+    this.dropPrefabWall(key);
   }
 
   clearPrefabGhosts() {
     for (const g of this.prefabGhostGraphics.values()) g.destroy();
     this.prefabGhostGraphics.clear();
+    for (const wall of this.prefabGhostWalls.values()) {
+      destroyPartitionDisplay(this.scene, wall);
+    }
+    this.prefabGhostWalls.clear();
+    this.prefabGhostWallSig.clear();
     for (const s of this.prefabGhostFireplaces.values()) s.destroy();
     this.prefabGhostFireplaces.clear();
+    for (const s of this.prefabGhostStorageBoxes.values()) s.destroy();
+    this.prefabGhostStorageBoxes.clear();
     for (const s of this.prefabGhostFences.values()) s.destroy();
     this.prefabGhostFences.clear();
     this.prefabPartitionKeys.clear();
@@ -1616,6 +1872,21 @@ export class InteriorView {
     this.floorSprites.push(g);
   }
 
+  private addPartitionGraphics(
+    x: number,
+    y: number,
+    wallSet: Set<string>,
+    axis: "ns" | "ew" | "both",
+    door: InteriorDoorTile | undefined,
+    colors: PartitionWallColors,
+    depth: number,
+  ): Phaser.GameObjects.Graphics {
+    const g = this.scene.add.graphics();
+    g.setDepth(depth);
+    drawWallTile(g, x, y, wallSet, axis, door, colors);
+    return g;
+  }
+
   /**
    * Procedural iso partitions. Straight-run tiles get one graphic per axis
    * segment. Join tiles draw both arms into a single Graphics object so they
@@ -1641,8 +1912,20 @@ export class InteriorView {
     for (const key of this.prefabPartitionKeys) wallSet.add(key);
     this.partitionWallSet = wallSet;
     const doorMap = new Map(this.extraDoors.map((d) => [`${d.x},${d.y}`, d]));
+    const proceduralKeys = new Set(
+      interiorWallsForBuilding(this.buildingX, this.buildingY).map(
+        (w) => `${w.x},${w.y}`,
+      ),
+    );
+    const plywoodTiles = new Set(
+      this.structureWalls
+        .map((w) => `${w.x},${w.y}`)
+        .filter((key) => !proceduralKeys.has(key)),
+    );
     for (const wall of walls) {
       const door = doorMap.get(`${wall.x},${wall.y}`);
+      const plywood = plywoodTiles.has(`${wall.x},${wall.y}`);
+      const wallColors = plywood ? PLAYER_WALL_STYLE : this.partitionWallColors();
       // House room doors are baked Images (geom + InternalDoor1 on the face).
       // Keep the tile in the wall set for adjacency, skip the Graphics leaf.
       if (door && this.houseDoorFacingAt(wall.x, wall.y)) continue;
@@ -1671,54 +1954,76 @@ export class InteriorView {
       segments.sort((a, b) => a.bias - b.bias);
 
       if (segments.length > 1) {
-        // Corner join — one shared Graphics object/draw call for both arms.
+        // Corner join: one shared object so both arms sort as a single tile.
         const depth = interiorPartitionDepth(
           wall.x,
           wall.y,
           segments[segments.length - 1]!.bias,
         );
-        const g = this.scene.add.graphics();
-        g.setDepth(depth);
-        drawWallTile(
-          g,
-          wall.x,
-          wall.y,
-          wallSet,
-          "both",
-          door,
-          this.partitionWallColors(),
-        );
-        this.wallSprites.push(g);
+        const showPlywood = plywood && !door;
+        const display = showPlywood
+          ? createPlywoodPartition(
+              this.scene,
+              wall.x,
+              wall.y,
+              wallSet,
+              "both",
+              depth,
+              1,
+              `plywood-wall:in:${this.buildingX},${this.buildingY}:${wall.x},${wall.y}`,
+            )
+          : this.addPartitionGraphics(
+              wall.x,
+              wall.y,
+              wallSet,
+              "both",
+              door,
+              wallColors,
+              depth,
+            );
+        this.wallSprites.push(display);
         this.wallEntries.push({
           x: wall.x,
           y: wall.y,
           axis: "both",
           depth,
-          graphics: g,
+          graphics: display,
+          plywood: showPlywood && display instanceof Phaser.GameObjects.Image,
         });
         continue;
       }
 
       for (const seg of segments) {
         const depth = interiorPartitionDepth(wall.x, wall.y, seg.bias);
-        const g = this.scene.add.graphics();
-        g.setDepth(depth);
-        drawWallTile(
-          g,
-          wall.x,
-          wall.y,
-          wallSet,
-          seg.axis,
-          door,
-          this.partitionWallColors(),
-        );
-        this.wallSprites.push(g);
+        const showPlywood = plywood && !door;
+        const display = showPlywood
+          ? createPlywoodPartition(
+              this.scene,
+              wall.x,
+              wall.y,
+              wallSet,
+              seg.axis,
+              depth,
+              1,
+              `plywood-wall:in:${this.buildingX},${this.buildingY}:${wall.x},${wall.y}:${seg.axis}`,
+            )
+          : this.addPartitionGraphics(
+              wall.x,
+              wall.y,
+              wallSet,
+              seg.axis,
+              door,
+              wallColors,
+              depth,
+            );
+        this.wallSprites.push(display);
         this.wallEntries.push({
           x: wall.x,
           y: wall.y,
           axis: seg.axis,
           depth,
-          graphics: g,
+          graphics: display,
+          plywood: showPlywood && display instanceof Phaser.GameObjects.Image,
         });
       }
     }
@@ -2142,6 +2447,64 @@ export class InteriorView {
     this.fireplaces = [];
   }
 
+  private clearStorageBoxes() {
+    for (const sprite of this.storageBoxSprites.values()) sprite.destroy();
+    this.storageBoxSprites.clear();
+    this.storageBoxes = [];
+  }
+
+  private syncStorageBoxSprites() {
+    if (!this.visible) return;
+    const live = new Set(this.storageBoxes.map((f) => `${f.x},${f.y}`));
+    for (const [key, sprite] of this.storageBoxSprites) {
+      if (live.has(key)) continue;
+      sprite.destroy();
+      this.storageBoxSprites.delete(key);
+    }
+    for (const tile of this.storageBoxes) this.upsertStorageBoxSprite(tile);
+  }
+
+  private storageBoxBottomPad(kind: string): number {
+    return storageBoxGroundOffset(kind, STORAGE_BOX_RENDER_HEIGHT);
+  }
+
+  private upsertStorageBoxSprite(tile: { x: number; y: number; kind: string }) {
+    if (!this.visible) return;
+    const textureKey = storageBoxTextureKey(tile.kind);
+    if (!textureKeyExists(this.scene, textureKey)) return;
+    const key = `${tile.x},${tile.y}`;
+    const iso = cartesianToIso(tile.x + 0.5, tile.y + 0.5);
+    const groundY = iso.y + TILE_HEIGHT / 2 + this.storageBoxBottomPad(tile.kind);
+    let sprite = this.storageBoxSprites.get(key);
+    if (!sprite) {
+      sprite = addSpriteForKey(this.scene, iso.x, groundY, textureKey);
+      sprite.setOrigin(0.5, 1);
+      this.storageBoxSprites.set(key, sprite);
+    } else {
+      applyTextureKey(sprite, textureKey);
+      sprite.setPosition(iso.x, groundY);
+    }
+    this.fitInteriorSprite(sprite, STORAGE_BOX_RENDER_HEIGHT);
+    sprite.setDepth(this.placeableDepthAt(tile.x, tile.y));
+    sprite.setVisible(true);
+  }
+
+  private layoutStorageBoxGhost(
+    sprite: Phaser.GameObjects.Sprite,
+    tx: number,
+    ty: number,
+    kind: string,
+  ) {
+    const iso = cartesianToIso(tx + 0.5, ty + 0.5);
+    const groundY = iso.y + TILE_HEIGHT / 2 + this.storageBoxBottomPad(kind);
+    applyTextureKey(sprite, storageBoxTextureKey(kind));
+    sprite.setPosition(iso.x, groundY);
+    sprite.setOrigin(0.5, 1);
+    this.fitInteriorSprite(sprite, STORAGE_BOX_RENDER_HEIGHT);
+    sprite.setDepth(this.placeableDepthAt(tx, ty));
+    sprite.setVisible(true);
+  }
+
   private clearFences() {
     for (const sprite of this.fenceSprites.values()) sprite.destroy();
     this.fenceSprites.clear();
@@ -2345,9 +2708,17 @@ export class InteriorView {
   }
 }
 
+type PlywoodFace = {
+  axis: "south" | "east";
+  /** Constant world axis: y for a south face, x for an east face. */
+  fixed: number;
+  start: number;
+  end: number;
+};
+
 /**
  * One wall tile: a door leaf when `door` is set, otherwise a partition spine.
- * `axis` "both" is a join tile carrying two runs — a door there gets a leaf
+ * `axis` "both" is a join tile carrying two runs. A door there gets a leaf
  * per run, matching how the partition draws both arms.
  */
 export function drawWallTile(
@@ -2390,8 +2761,7 @@ export function drawWallTile(
  * no whole-arm ordering can be right. Raised tops go last — at any shared
  * screen point a top face is always the nearest surface.
  */
-export function drawInteriorPartitionTile(
-  g: Phaser.GameObjects.Graphics,
+function collectPartitionFaces(
   ox: number,
   oy: number,
   wallSet: Set<string>,
@@ -2432,8 +2802,18 @@ export function drawInteriorPartitionTile(
   const nsY1 = isCorner && !hasS ? cy + halfT : oy + 1;
 
   /** Collected quads: side faces sorted by `key`, then tops, painted at the end. */
-  const sides: { pts: { x: number; y: number }[]; color: number; key: number }[] = [];
-  const tops: { pts: { x: number; y: number }[]; color: number }[] = [];
+  const sides: {
+    pts: { x: number; y: number }[];
+    color: number;
+    key: number;
+    plywood?: PlywoodFace;
+  }[] = [];
+  const tops: {
+    pts: { x: number; y: number }[];
+    color: number;
+    rect: { x0: number; y0: number; x1: number; y1: number };
+  }[] = [];
+  const usePlywood = palette.plywood === true;
 
   /** South-facing wall at `y`, spanning `x0`..`x1`. */
   const southFace = (y: number, x0: number, x1: number) => {
@@ -2444,6 +2824,9 @@ export function drawInteriorPartitionTile(
       pts: [a, b, { x: b.x, y: b.y - d }, { x: a.x, y: a.y - d }],
       color: front,
       key: (x0 + x1) / 2 + y,
+      plywood: usePlywood
+        ? { axis: "south", fixed: y, start: x0, end: x1 }
+        : undefined,
     });
   };
 
@@ -2456,6 +2839,9 @@ export function drawInteriorPartitionTile(
       pts: [a, b, { x: b.x, y: b.y - d }, { x: a.x, y: a.y - d }],
       color: side,
       key: x + (y0 + y1) / 2,
+      plywood: usePlywood
+        ? { axis: "east", fixed: x, start: y0, end: y1 }
+        : undefined,
     });
   };
 
@@ -2472,6 +2858,7 @@ export function drawInteriorPartitionTile(
         { x: sw.x, y: sw.y - d },
       ],
       color: top,
+      rect: { x0, y0, x1, y1 },
     });
   };
 
@@ -2500,11 +2887,437 @@ export function drawInteriorPartitionTile(
   }
 
   sides.sort((a, b) => a.key - b.key);
+  return { sides, tops };
+}
+
+export function drawInteriorPartitionTile(
+  g: Phaser.GameObjects.Graphics,
+  ox: number,
+  oy: number,
+  wallSet: Set<string>,
+  axis: "ns" | "ew" | "both" = "both",
+  colors?: PartitionWallColors,
+) {
+  const { sides, tops } = collectPartitionFaces(ox, oy, wallSet, axis, colors);
   for (const face of sides) fillPartitionPoly(g, face.pts, face.color);
   for (const face of tops) fillPartitionPoly(g, face.pts, face.color);
 }
 
-/** World-space footprint of a door leaf (closed or open). */
+/** Same supersample idea as exterior cuboids: paint sharp, display at world size. */
+const PLYWOOD_BAKE_SCALE = 2;
+
+type PlywoodComponent = {
+  sig: string;
+  key: string;
+  originX: number;
+  originY: number;
+  scale: number;
+  canvasW: number;
+  canvasH: number;
+  users: number;
+};
+
+const plywoodComponents = new Map<string, PlywoodComponent>();
+let plywoodCompSeq = 0;
+
+export function destroyPartitionDisplay(
+  scene: Phaser.Scene,
+  obj: Phaser.GameObjects.GameObject,
+) {
+  if (obj instanceof Phaser.GameObjects.Image) {
+    const key = obj.texture.key;
+    obj.destroy();
+    releasePlywoodComponent(scene, key);
+    return;
+  }
+  obj.destroy();
+}
+
+function releasePlywoodComponent(scene: Phaser.Scene, key: string) {
+  if (!key.startsWith("plywood-comp:")) return;
+  for (const comp of plywoodComponents.values()) {
+    if (comp.key !== key) continue;
+    comp.users -= 1;
+    if (comp.users > 0) return;
+    plywoodComponents.delete(comp.sig);
+    if (scene.textures.exists(key)) scene.textures.remove(key);
+    return;
+  }
+}
+
+/**
+ * One connected run is painted the same way as a brick building face, then
+ * each tile shows its crop. The crop edge samples the next tile's wood, so
+ * the join is not a separate image border.
+ */
+export function createPlywoodPartition(
+  scene: Phaser.Scene,
+  ox: number,
+  oy: number,
+  wallSet: Set<string>,
+  axis: "ns" | "ew" | "both",
+  depth: number,
+  alpha: number,
+  _dynKey: string,
+  existing: Phaser.GameObjects.Image | null = null,
+): Phaser.GameObjects.Graphics | Phaser.GameObjects.Image {
+  const comp = ensurePlywoodComponent(scene, ox, oy, wallSet);
+  const crop = comp ? plywoodTileCrop(ox, oy, wallSet, axis, comp) : null;
+  if (!comp || !crop) {
+    if (comp && comp.users === 0) {
+      plywoodComponents.delete(comp.sig);
+      if (scene.textures.exists(comp.key)) scene.textures.remove(comp.key);
+    }
+    if (existing) destroyPartitionDisplay(scene, existing);
+    const g = scene.add.graphics();
+    g.setDepth(depth);
+    g.setAlpha(alpha);
+    drawInteriorPartitionTile(g, ox, oy, wallSet, axis, PLAYER_WALL_STYLE);
+    return g;
+  }
+
+  const reuse =
+    existing && existing.active && existing.texture.key === comp.key
+      ? existing
+      : null;
+  if (existing && !reuse) destroyPartitionDisplay(scene, existing);
+  if (!reuse) comp.users += 1;
+
+  const sprite =
+    reuse ?? scene.add.image(comp.originX, comp.originY, comp.key);
+  if (!reuse) sprite.setOrigin(0, 0);
+  sprite.setPosition(comp.originX, comp.originY);
+  sprite.setCrop(crop.x, crop.y, crop.w, crop.h);
+  sprite.setScale(1 / comp.scale);
+  sprite.setDepth(depth);
+  sprite.setAlpha(alpha);
+  sprite.setVisible(true);
+  return sprite;
+}
+
+function plywoodComponentTiles(
+  ox: number,
+  oy: number,
+  wallSet: Set<string>,
+): string[] {
+  const start = `${Math.floor(ox)},${Math.floor(oy)}`;
+  if (!wallSet.has(start)) return [start];
+  const seen = new Set<string>();
+  const stack = [start];
+  while (stack.length > 0) {
+    const key = stack.pop();
+    if (!key || seen.has(key) || !wallSet.has(key)) continue;
+    seen.add(key);
+    const [xs, ys] = key.split(",");
+    const x = Number(xs);
+    const y = Number(ys);
+    stack.push(`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`);
+  }
+  return [...seen].sort();
+}
+
+function mergePlywoodFaces(faces: PlywoodFace[]): PlywoodFace[] {
+  const groups = new Map<string, PlywoodFace[]>();
+  for (const face of faces) {
+    const key = `${face.axis}:${face.fixed.toFixed(4)}`;
+    const list = groups.get(key);
+    if (list) list.push(face);
+    else groups.set(key, [face]);
+  }
+  const out: PlywoodFace[] = [];
+  for (const list of groups.values()) {
+    list.sort((a, b) => a.start - b.start);
+    let cur: PlywoodFace = { ...list[0]! };
+    for (let i = 1; i < list.length; i++) {
+      const next = list[i]!;
+      if (next.start <= cur.end + 1e-3) cur.end = Math.max(cur.end, next.end);
+      else {
+        out.push(cur);
+        cur = { ...next };
+      }
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+function plywoodFacePoint(face: PlywoodFace, t: number): { x: number; y: number } {
+  return face.axis === "south"
+    ? cartesianToIso(t, face.fixed)
+    : cartesianToIso(face.fixed, t);
+}
+
+function ensurePlywoodComponent(
+  scene: Phaser.Scene,
+  ox: number,
+  oy: number,
+  wallSet: Set<string>,
+): PlywoodComponent | null {
+  const tiles = plywoodComponentTiles(ox, oy, wallSet);
+  const sig = tiles.join("|");
+  const cached = plywoodComponents.get(sig);
+  if (cached && scene.textures.exists(cached.key)) return cached;
+  if (cached) plywoodComponents.delete(sig);
+
+  const baked = bakePlywoodComponent(scene, tiles, wallSet);
+  if (!baked) return null;
+  const key = `plywood-comp:${++plywoodCompSeq}`;
+  scene.textures.addCanvas(key, baked.canvas);
+  scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+  const comp: PlywoodComponent = {
+    sig,
+    key,
+    originX: baked.originX,
+    originY: baked.originY,
+    scale: baked.scale,
+    canvasW: baked.canvas.width,
+    canvasH: baked.canvas.height,
+    users: 0,
+  };
+  plywoodComponents.set(sig, comp);
+  return comp;
+}
+
+function plywoodTileCrop(
+  ox: number,
+  oy: number,
+  wallSet: Set<string>,
+  axis: "ns" | "ew" | "both",
+  comp: PlywoodComponent,
+): { x: number; y: number; w: number; h: number } | null {
+  const { sides, tops } = collectPartitionFaces(
+    ox,
+    oy,
+    wallSet,
+    axis,
+    PLAYER_WALL_STYLE,
+  );
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const consider = (p: { x: number; y: number }) => {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  };
+  for (const face of sides) {
+    for (const p of face.pts) consider(p);
+  }
+  for (const face of tops) {
+    for (const p of face.pts) consider(p);
+  }
+  if (!Number.isFinite(minX)) return null;
+  // A pixel of overlap samples the next tile's wood in this same texture,
+  // so the cut is not a transparent image edge.
+  const x = Math.max(0, Math.floor((minX - comp.originX) * comp.scale) - 2);
+  const y = Math.max(0, Math.floor((minY - comp.originY) * comp.scale) - 2);
+  const r = Math.min(
+    comp.canvasW,
+    Math.ceil((maxX - comp.originX) * comp.scale) + 2,
+  );
+  const b = Math.min(
+    comp.canvasH,
+    Math.ceil((maxY - comp.originY) * comp.scale) + 2,
+  );
+  return { x, y, w: Math.max(1, r - x), h: Math.max(1, b - y) };
+}
+
+type PlywoodTopRect = { x0: number; y0: number; x1: number; y1: number };
+
+/** Butt-joints inside a straight run. The next tile already covers them. */
+function dropInternalPlywoodCaps(faces: PlywoodFace[]): PlywoodFace[] {
+  const merged = mergePlywoodFaces(faces);
+  return merged.filter((face) => {
+    const len = face.end - face.start;
+    if (len > PARTITION_THICKNESS + 0.05) return true;
+    for (const other of merged) {
+      if (other.axis === face.axis) continue;
+      const crosses =
+        other.start < face.fixed - 1e-3 && other.end > face.fixed + 1e-3;
+      const onLine =
+        face.start - 1e-3 <= other.fixed && other.fixed <= face.end + 1e-3;
+      if (crosses && onLine) return false;
+    }
+    return true;
+  });
+}
+
+function mergePlywoodTops(rects: PlywoodTopRect[]): PlywoodTopRect[] {
+  const list = rects.map((r) => ({ ...r }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < list.length && !changed; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i]!;
+        const b = list[j]!;
+        const sameY =
+          Math.abs(a.y0 - b.y0) < 1e-3 && Math.abs(a.y1 - b.y1) < 1e-3;
+        const sameX =
+          Math.abs(a.x0 - b.x0) < 1e-3 && Math.abs(a.x1 - b.x1) < 1e-3;
+        const touchX =
+          Math.abs(a.x1 - b.x0) < 1e-3 || Math.abs(b.x1 - a.x0) < 1e-3;
+        const touchY =
+          Math.abs(a.y1 - b.y0) < 1e-3 || Math.abs(b.y1 - a.y0) < 1e-3;
+        if ((sameY && touchX) || (sameX && touchY)) {
+          a.x0 = Math.min(a.x0, b.x0);
+          a.x1 = Math.max(a.x1, b.x1);
+          a.y0 = Math.min(a.y0, b.y0);
+          a.y1 = Math.max(a.y1, b.y1);
+          list.splice(j, 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return list;
+}
+
+function plywoodFaceKey(face: PlywoodFace): number {
+  return face.axis === "south"
+    ? (face.start + face.end) / 2 + face.fixed
+    : face.fixed + (face.start + face.end) / 2;
+}
+
+function bakePlywoodComponent(
+  scene: Phaser.Scene,
+  tiles: string[],
+  wallSet: Set<string>,
+): {
+  canvas: HTMLCanvasElement;
+  originX: number;
+  originY: number;
+  scale: number;
+} | null {
+  const source = resolveImageSource(scene, BUILDING_WALL_PLYWOOD_KEY);
+  if (!source) return null;
+  const plywoodFaces: PlywoodFace[] = [];
+  const topRects: PlywoodTopRect[] = [];
+  for (const key of tiles) {
+    const [xs, ys] = key.split(",");
+    const tx = Number(xs);
+    const ty = Number(ys);
+    const built = collectPartitionFaces(tx, ty, wallSet, "both", PLAYER_WALL_STYLE);
+    for (const face of built.sides) {
+      if (face.plywood) plywoodFaces.push(face.plywood);
+    }
+    for (const top of built.tops) topRects.push(top.rect);
+  }
+  const faces = dropInternalPlywoodCaps(plywoodFaces).sort(
+    (a, b) => plywoodFaceKey(a) - plywoodFaceKey(b),
+  );
+  const tops = mergePlywoodTops(topRects);
+  if (faces.length === 0 && tops.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const consider = (p: { x: number; y: number }) => {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  };
+  for (const face of faces) {
+    const bl = plywoodFacePoint(face, face.start);
+    const br = plywoodFacePoint(face, face.end);
+    consider(bl);
+    consider(br);
+    consider({ x: bl.x, y: bl.y - PARTITION_HEIGHT });
+    consider({ x: br.x, y: br.y - PARTITION_HEIGHT });
+  }
+  for (const top of tops) {
+    const nw = cartesianToIso(top.x0, top.y0);
+    const ne = cartesianToIso(top.x1, top.y0);
+    const se = cartesianToIso(top.x1, top.y1);
+    const sw = cartesianToIso(top.x0, top.y1);
+    consider(nw);
+    consider(ne);
+    consider(se);
+    consider(sw);
+    consider({ x: nw.x, y: nw.y - PARTITION_HEIGHT });
+    consider({ x: ne.x, y: ne.y - PARTITION_HEIGHT });
+    consider({ x: se.x, y: se.y - PARTITION_HEIGHT });
+    consider({ x: sw.x, y: sw.y - PARTITION_HEIGHT });
+  }
+  if (!Number.isFinite(minX)) return null;
+
+  const pad = 2;
+  minX = Math.floor(minX) - pad;
+  minY = Math.floor(minY) - pad;
+  maxX = Math.ceil(maxX) + pad;
+  maxY = Math.ceil(maxY) + pad;
+  let scale = PLYWOOD_BAKE_SCALE;
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+  if (spanX * scale > 8192 || spanY * scale > 8192) scale = 1;
+  if (spanX > 16384 || spanY > 16384) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(spanX * scale));
+  canvas.height = Math.max(1, Math.ceil(spanY * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
+
+  for (const face of faces) {
+    drawTexturedWallFace(
+      ctx,
+      source.src,
+      plywoodFacePoint(face, face.start),
+      plywoodFacePoint(face, face.end),
+      PARTITION_HEIGHT,
+      source.width,
+      source.height,
+    );
+  }
+  for (const top of tops) {
+    paintMergedPlywoodTop(ctx, source.src, source.width, source.height, top);
+  }
+  return { canvas, originX: minX, originY: minY, scale };
+}
+
+function paintMergedPlywoodTop(
+  ctx: CanvasRenderingContext2D,
+  src: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+  top: PlywoodTopRect,
+) {
+  if (srcW < 1 || srcH < 1) return;
+  const lift = (x: number, y: number) => {
+    const p = cartesianToIso(x, y);
+    return { x: p.x, y: p.y - PARTITION_HEIGHT };
+  };
+  const nw = lift(top.x0, top.y0);
+  const ne = lift(top.x1, top.y0);
+  const se = lift(top.x1, top.y1);
+  const sw = lift(top.x0, top.y1);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(nw.x, nw.y);
+  ctx.lineTo(ne.x, ne.y);
+  ctx.lineTo(se.x, se.y);
+  ctx.lineTo(sw.x, sw.y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(
+    (se.x - sw.x) / srcW,
+    (se.y - sw.y) / srcW,
+    (nw.x - sw.x) / srcH,
+    (nw.y - sw.y) / srcH,
+    sw.x,
+    sw.y,
+  );
+  ctx.drawImage(src, 0, 0, srcW, srcH);
+  ctx.restore();
+}
+
 function interiorDoorLeafBounds(
   ox: number,
   oy: number,
@@ -2738,6 +3551,9 @@ function bakeTexturedInteriorDoor(
     { x: ne.x, y: ne.y - d },
     { x: nw.x, y: nw.y - d },
   ];
+  if (isLocked) {
+    pts.push(...doorCodeLockLayout(x0, y0, x1, y1, axis, isOpen).body);
+  }
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -2802,11 +3618,7 @@ function bakeTexturedInteriorDoor(
   );
 
   if (isLocked) {
-    const mid = cartesianToIso((x0 + x1) / 2, (y0 + y1) / 2);
-    ctx.fillStyle = "#ff3333";
-    ctx.beginPath();
-    ctx.arc(mid.x, mid.y - d, 3, 0, Math.PI * 2);
-    ctx.fill();
+    paintDoorCodeLockCanvas(ctx, doorCodeLockLayout(x0, y0, x1, y1, axis, isOpen));
   }
 
   return { canvas, originX: minX, originY: minY, scale };
@@ -2862,19 +3674,123 @@ export function drawInteriorDoorTile(
   );
 
   if (isLocked) {
-    const mid = cartesianToIso((x0 + x1) / 2, (y0 + y1) / 2);
-    g.fillStyle(0xff3333, 1);
-    g.fillCircle(mid.x, mid.y - d, 3);
+    paintDoorCodeLockGraphics(g, doorCodeLockLayout(x0, y0, x1, y1, axis, isOpen));
   }
+}
+
+type DoorFacePt = { x: number; y: number };
+
+/**
+ * Door-face axes at the latch. `along` runs latch to hinge (the isometric
+ * bottom edge). Up the leaf is screen-up, same as the wall extrusion.
+ */
+function doorFaceAxes(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  axis: "ns" | "ew",
+  isOpen: boolean,
+): { latch: DoorFacePt; ux: number; uy: number; faceLen: number } {
+  const face = interiorDoorMainFaceBottom(x0, y0, x1, y1, axis, isOpen);
+  const useEastFace = (!isOpen && axis === "ns") || (isOpen && axis === "ew");
+  const latch = useEastFace ? face.bl : face.br;
+  const hinge = useEastFace ? face.br : face.bl;
+  const dx = hinge.x - latch.x;
+  const dy = hinge.y - latch.y;
+  const faceLen = Math.hypot(dx, dy) || 1;
+  return { latch, ux: dx / faceLen, uy: dy / faceLen, faceLen };
+}
+
+function doorFacePoint(
+  axes: { latch: DoorFacePt; ux: number; uy: number },
+  along: number,
+  up: number,
+): DoorFacePt {
+  return {
+    x: axes.latch.x + axes.ux * along,
+    y: axes.latch.y + axes.uy * along - up,
+  };
+}
+
+/** Parallelogram on the door face. `up0` is the lower edge. */
+function doorFaceQuad(
+  axes: { latch: DoorFacePt; ux: number; uy: number },
+  along0: number,
+  along1: number,
+  up0: number,
+  up1: number,
+): DoorFacePt[] {
+  return [
+    doorFacePoint(axes, along0, up0),
+    doorFacePoint(axes, along1, up0),
+    doorFacePoint(axes, along1, up1),
+    doorFacePoint(axes, along0, up1),
+  ];
+}
+
+/**
+ * Small keypad on the latch side, halfway up the leaf. Quads share the door
+ * face so the lock skews with the leaf instead of sitting flat on the screen.
+ */
+function doorCodeLockLayout(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  axis: "ns" | "ew",
+  isOpen: boolean,
+): { body: DoorFacePt[]; keys: DoorFacePt[][]; led: DoorFacePt[] } {
+  const axes = doorFaceAxes(x0, y0, x1, y1, axis, isOpen);
+  const cu = axes.faceLen * 0.18;
+  const cv = PARTITION_HEIGHT * 0.46;
+  const hw = 6;
+  const hh = 4.5;
+  const body = doorFaceQuad(axes, cu - hw, cu + hw, cv - hh, cv + hh);
+  const key = 1.7;
+  const gap = 0.7;
+  const baseU = cu - hw + 1.6;
+  const baseV = cv - hh + 1.5;
+  const keys: DoorFacePt[][] = [];
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 2; col++) {
+      const u = baseU + col * (key + gap);
+      const v = baseV + row * (key + gap);
+      keys.push(doorFaceQuad(axes, u, u + key, v, v + key));
+    }
+  }
+  const ledU = cu + hw - 2.8;
+  const ledV = cv + hh - 2.6;
+  const led = doorFaceQuad(axes, ledU, ledU + 1.4, ledV - 1.4, ledV);
+  return { body, keys, led };
+}
+
+function paintDoorCodeLockCanvas(
+  ctx: CanvasRenderingContext2D,
+  lock: { body: DoorFacePt[]; keys: DoorFacePt[][]; led: DoorFacePt[] },
+) {
+  fillDoorPolyCanvas(ctx, lock.body, "#1a1a1a");
+  for (const key of lock.keys) fillDoorPolyCanvas(ctx, key, "#5a5a5a");
+  fillDoorPolyCanvas(ctx, lock.led, "#d7a24a");
+}
+
+function paintDoorCodeLockGraphics(
+  g: Phaser.GameObjects.Graphics,
+  lock: { body: DoorFacePt[]; keys: DoorFacePt[][]; led: DoorFacePt[] },
+) {
+  fillPartitionPoly(g, lock.body, 0x1a1a1a);
+  for (const key of lock.keys) fillPartitionPoly(g, key, 0x5a5a5a);
+  fillPartitionPoly(g, lock.led, 0xd7a24a);
 }
 
 function fillPartitionPoly(
   g: Phaser.GameObjects.Graphics,
   pts: { x: number; y: number }[],
   color: number,
+  alpha = 1,
 ) {
   if (pts.length < 3) return;
-  g.fillStyle(color, 1);
+  g.fillStyle(color, alpha);
   g.beginPath();
   g.moveTo(pts[0]!.x, pts[0]!.y);
   for (let i = 1; i < pts.length; i++) {
@@ -2882,6 +3798,141 @@ function fillPartitionPoly(
   }
   g.closePath();
   g.fillPath();
+}
+
+/**
+ * Tiles this far away can still put a wall face over a floor diamond or a
+ * standing sprite. The sprite is taller than the diamond, so the search is
+ * sized for the body, not just the feet.
+ */
+export const PLAYER_WALL_OCCLUSION_REACH = 6;
+
+export type PlayerWallOccluder =
+  | {
+      kind: "wall";
+      x: number;
+      y: number;
+      axis: "ns" | "ew" | "both";
+      depth: number;
+      wallSet: Set<string>;
+    }
+  | {
+      kind: "door";
+      x: number;
+      y: number;
+      axis: "ns" | "ew" | "both";
+      isOpen: boolean;
+      depth: number;
+    };
+
+function polysCoverTarget(
+  polys: { x: number; y: number }[][],
+  tileX: number,
+  tileY: number,
+  coverSprite: boolean,
+): boolean {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const poly of polys) {
+    for (const p of poly) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+  }
+  if (!Number.isFinite(minX)) return false;
+  const halfW = TILE_WIDTH / 2;
+  const halfH = TILE_HEIGHT / 2;
+  const tMinX = (tileX - tileY - 1) * halfW;
+  const tMaxX = (tileX - tileY + 1) * halfW;
+  const tMaxY = (tileX + tileY + 2) * halfH;
+  const tMinY = coverSprite
+    ? (tileX + tileY + 1) * halfH - ENTITY_RENDER_HEIGHT
+    : (tileX + tileY) * halfH;
+  return maxX >= tMinX && minX <= tMaxX && maxY >= tMinY && minY <= tMaxY;
+}
+
+function doorOcclusionPolys(
+  ox: number,
+  oy: number,
+  axis: "ns" | "ew" | "both",
+  isOpen: boolean,
+): { x: number; y: number }[][] {
+  const polys: { x: number; y: number }[][] = [];
+  const addLeaf = (leafAxis: "ns" | "ew") => {
+    const d = PARTITION_HEIGHT;
+    const { x0, y0, x1, y1 } = interiorDoorLeafBounds(ox, oy, leafAxis, isOpen);
+    const sw = cartesianToIso(x0, y1);
+    const se = cartesianToIso(x1, y1);
+    const ne = cartesianToIso(x1, y0);
+    const nw = cartesianToIso(x0, y0);
+    polys.push(
+      [sw, se, { x: se.x, y: se.y - d }, { x: sw.x, y: sw.y - d }],
+      [se, ne, { x: ne.x, y: ne.y - d }, { x: se.x, y: se.y - d }],
+      [
+        { x: nw.x, y: nw.y - d },
+        { x: ne.x, y: ne.y - d },
+        { x: se.x, y: se.y - d },
+        { x: sw.x, y: sw.y - d },
+      ],
+    );
+  };
+  if (axis === "ns" || axis === "both") addLeaf("ns");
+  if (axis === "ew" || axis === "both") addLeaf("ew");
+  return polys;
+}
+
+function wallOccluderPolys(
+  wall: PlayerWallOccluder,
+): { x: number; y: number }[][] {
+  if (wall.kind === "door") {
+    return doorOcclusionPolys(wall.x, wall.y, wall.axis, wall.isOpen);
+  }
+  const { sides, tops } = collectPartitionFaces(
+    wall.x,
+    wall.y,
+    wall.wallSet,
+    wall.axis,
+  );
+  return [...sides.map((face) => face.pts), ...tops.map((face) => face.pts)];
+}
+
+/** True when this wall paints over the floor diamond or the standing sprite. */
+export function playerWallOccluderHits(
+  wall: PlayerWallOccluder,
+  depthLimit: number,
+  tileX: number,
+  tileY: number,
+  coverSprite: boolean,
+): boolean {
+  if (wall.depth <= depthLimit) return false;
+  return polysCoverTarget(
+    wallOccluderPolys(wall),
+    tileX,
+    tileY,
+    coverSprite,
+  );
+}
+
+/** White wall or door silhouette. Same faces that are on screen. */
+export function stampPlayerWallOccluder(
+  g: Phaser.GameObjects.Graphics,
+  wall: PlayerWallOccluder,
+  depthLimit: number,
+  tileX: number,
+  tileY: number,
+  coverSprite: boolean,
+): boolean {
+  if (!playerWallOccluderHits(wall, depthLimit, tileX, tileY, coverSprite)) {
+    return false;
+  }
+  for (const poly of wallOccluderPolys(wall)) {
+    fillPartitionPoly(g, poly, 0xffffff, 1);
+  }
+  return true;
 }
 
 function hexToNum(hex: string): number {
