@@ -132,7 +132,7 @@ export function clearStoredSession() {
   }
 }
 
-async function fetchAuthNonce(
+export async function fetchAuthNonce(
   walletAddress?: string,
 ): Promise<{ nonce: string; message: string }> {
   const query = walletAddress
@@ -213,7 +213,7 @@ export async function completeWalletLogin(
   return completeSignedLogin(wallet, nonce, signature);
 }
 
-async function completeSignedLogin(
+export async function completeSignedLogin(
   wallet: string,
   nonce: string,
   signature: string,

@@ -62,6 +62,8 @@
       }
       #game canvas {
         display: block;
+        width: 100% !important;
+        height: 100% !important;
       }
       #damage-overlay {
         position: absolute;
@@ -3284,6 +3286,11 @@
         background: rgba(159, 232, 48, 0.1);
         color: #e8ffb8;
       }
+      .wallet-picker-option--pending {
+        opacity: 0.55;
+        pointer-events: none;
+        cursor: default;
+      }
       .wallet-picker-icon,
       .wallet-picker-mark {
         width: 32px;
@@ -3451,7 +3458,7 @@
         display: flex;
         flex-direction: column;
         align-items: stretch;
-        gap: 8px;
+        gap: var(--mobile-action-gap, 8px);
         position: fixed;
         right: max(12px, env(safe-area-inset-right, 0px));
         bottom: var(--hud-bottom);
@@ -3461,11 +3468,11 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 56px;
-        height: 56px;
+        width: var(--mobile-action-size, 56px);
+        height: var(--mobile-action-size, 56px);
         padding: 0;
         border: 1px solid rgba(100, 220, 100, 0.55);
-        border-radius: 10px;
+        border-radius: calc(var(--mobile-action-size, 56px) * 0.18);
         background: rgba(10, 14, 10, 0.88);
         color: #e8f8e8;
         font: 700 13px/1 system-ui, sans-serif;
@@ -3481,8 +3488,8 @@
         display: none !important;
       }
       body.game-ready:not(.main-menu-open) #mobile-hud-stack .mobile-hud-btn-icon {
-        width: 34px;
-        height: 34px;
+        width: calc(var(--mobile-action-size, 56px) * 0.62);
+        height: calc(var(--mobile-action-size, 56px) * 0.62);
         object-fit: contain;
         pointer-events: none;
         image-rendering: auto;
@@ -3507,7 +3514,64 @@
         pointer-events: none;
       }
 
-      /* Mobile in-game HUD layout: stats top-left, hotbar bottom-left, INV bottom-right */
+      /* Thumb stick: bottom-left on phones. Hidden until the world is in play. */
+      #move-stick {
+        display: none;
+        position: fixed;
+        left: max(12px, env(safe-area-inset-left, 0px));
+        bottom: var(--hud-bottom);
+        z-index: 70;
+        width: var(--move-stick-size, 120px);
+        height: var(--move-stick-size, 120px);
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      body.is-mobile {
+        --move-stick-size: clamp(96px, 30vw, 128px);
+        --move-stick-gap: 8px;
+      }
+      body.is-mobile.game-ready:not(.main-menu-open) #move-stick {
+        display: block;
+      }
+      body.chat-open #move-stick,
+      #move-stick.move-stick--blocked {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .move-stick-base {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        border: 2px solid rgba(100, 220, 100, 0.45);
+        background: rgba(10, 14, 10, 0.45);
+        box-shadow: inset 0 0 0 10px rgba(10, 14, 10, 0.28);
+      }
+      .move-stick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 42%;
+        height: 42%;
+        margin-left: -21%;
+        margin-top: -21%;
+        border-radius: 50%;
+        border: 2px solid rgba(160, 230, 160, 0.85);
+        background: rgba(94, 200, 94, 0.55);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+      }
+      #move-stick.move-stick--sprint .move-stick-knob {
+        border-color: rgba(255, 176, 64, 0.95);
+        background: rgba(255, 150, 40, 0.62);
+      }
+      #move-stick.move-stick--sprint .move-stick-base {
+        border-color: rgba(255, 176, 64, 0.7);
+      }
+
+      /* Mobile in-game HUD: stats top-left, stick bottom-left, hotbar between stick and actions */
       body.is-mobile.game-ready:not(.main-menu-open) #world-clock {
         top: max(10px, env(safe-area-inset-top, 0px));
         left: auto;
@@ -3533,14 +3597,32 @@
       }
       body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar {
         bottom: var(--hud-bottom);
-        left: max(12px, env(safe-area-inset-left, 0px));
-        right: auto;
+        left: calc(
+          max(12px, env(safe-area-inset-left, 0px)) + var(--move-stick-size, 120px) +
+            var(--move-stick-gap, 8px)
+        );
+        right: calc(
+          max(12px, env(safe-area-inset-right, 0px)) + var(--mobile-action-size, 56px) +
+            var(--move-stick-gap, 8px)
+        );
+        width: auto;
         transform: none;
-        max-width: min(280px, calc(100vw - 88px));
+        max-width: none;
+        display: flex;
+        justify-content: center;
+        align-items: flex-end;
+      }
+      body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-panel {
+        width: max-content;
+        max-width: 100%;
+        padding: 4px 6px;
       }
       body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-slot {
-        width: 56px;
-        min-height: 56px;
+        width: 52px;
+        max-width: 52px;
+        min-width: 0;
+        flex: 1 1 44px;
+        min-height: 52px;
         padding: 4px;
       }
       body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-icon {
@@ -3549,6 +3631,9 @@
       }
       body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-name {
         display: none;
+      }
+      body.is-mobile.game-ready:not(.main-menu-open) #loot-popup-container {
+        bottom: calc(var(--hud-bottom) + var(--move-stick-size, 120px) + 12px);
       }
 
       /* Center dialogs when they fit. Overflow uses .dialog-overflows (top + scroll). */
@@ -3984,10 +4069,54 @@
         .inventory-grid--weapons {
           max-width: 100%;
         }
+        body {
+          --mobile-action-size: 52px;
+        }
         body.game-ready:not(.main-menu-open) #mobile-hud-stack .mobile-hud-btn {
-          width: 52px;
-          height: 52px;
           font-size: 12px;
+        }
+      }
+
+      /*
+        Phone landscape is too short for a full-size action column.
+        Size the column for up to 6 buttons (aim, reload, map, journal, inventory, chat)
+        so the top button stays on screen. Tablets in landscape are tall enough to skip this.
+      */
+      @media (orientation: landscape) and (max-height: 540px) {
+        body.is-mobile {
+          --landscape-hud-height: 100vh;
+          --landscape-hud-height: 100lvh;
+          --mobile-action-gap: 4px;
+          --mobile-action-size: clamp(
+            32px,
+            calc(
+              (
+                var(--landscape-hud-height) - var(--hud-bottom) -
+                  max(4px, env(safe-area-inset-top, 0px)) - 4px -
+                  (5 * var(--mobile-action-gap))
+              ) / 6
+            ),
+            56px
+          );
+          --move-stick-size: clamp(80px, calc(var(--mobile-action-size) * 2.2), 112px);
+        }
+        body.is-mobile.game-ready:not(.main-menu-open) #world-clock {
+          left: 50%;
+          right: auto;
+          transform: translateX(-50%);
+        }
+        body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-slot {
+          width: var(--mobile-action-size);
+          max-width: var(--mobile-action-size);
+          min-height: var(--mobile-action-size);
+          flex-basis: var(--mobile-action-size);
+        }
+        body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-icon {
+          max-width: 70%;
+          max-height: 70%;
+        }
+        body.is-mobile.game-ready:not(.main-menu-open) #player-hud {
+          transform: scale(0.78);
         }
       }
 

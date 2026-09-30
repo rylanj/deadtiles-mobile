@@ -21,7 +21,8 @@
     "@zombie/shared": "*",
     "bs58": "^6.0.0",
     "colyseus.js": "^0.16.19",
-    "phaser": "^3.90.0"
+    "phaser": "^3.90.0",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.1",

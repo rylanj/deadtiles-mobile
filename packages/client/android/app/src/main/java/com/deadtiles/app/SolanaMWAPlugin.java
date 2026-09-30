@@ -1,4 +1,4 @@
-package com.deadtiles.game;
+package com.deadtiles.app;
 
 import android.app.ActivityOptions;
 import android.content.ActivityNotFoundException;

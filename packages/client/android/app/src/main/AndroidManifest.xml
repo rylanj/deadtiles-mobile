@@ -33,13 +33,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+                app.deadtiles.com opens the APK. play.deadtiles.com stays in
+                the browser, which is where Chrome wallet sign-in returns.
+                Phantom still checks play.deadtiles.com assetlinks for MWA.
+            -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="play.deadtiles.com" />
+                    android:host="app.deadtiles.com" />
             </intent-filter>
 
         </activity>

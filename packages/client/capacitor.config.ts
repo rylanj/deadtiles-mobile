@@ -5,7 +5,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * That would load a remote site and count as a website wrapper.
  */
 const config: CapacitorConfig = {
-  appId: "com.deadtiles.game",
+  appId: "com.deadtiles.app",
   appName: "Deadtiles",
   webDir: "dist",
   server: {

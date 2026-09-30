@@ -3,8 +3,8 @@ import { isMobileDevice } from "../device";
 import { listBrowserWallets } from "./solanaWallet";
 
 const PLAY_ORIGIN = "https://play.deadtiles.com";
-const PHANTOM_STORE =
-  "https://play.google.com/store/apps/details?id=app.phantom";
+/** Host the Android app claims. Browser wallet returns stay on PLAY_ORIGIN. */
+const APP_ORIGIN = "https://app.deadtiles.com";
 
 /** Optional Play / sideload URL. Leave unset until a public APK listing exists. */
 export function androidAppDownloadHref(): string | null {
@@ -18,10 +18,6 @@ function browseTarget(): string {
     return `${window.location.origin}${window.location.pathname}`;
   }
   return PLAY_ORIGIN;
-}
-
-function isAndroid(): boolean {
-  return /Android/i.test(navigator.userAgent || "");
 }
 
 /** True on a phone/tablet browser with no injected wallet (not the APK). */
@@ -40,20 +36,16 @@ export const PHANTOM_DOWNLOAD_HREF = "https://phantom.app/download";
 export const SOLFLARE_DOWNLOAD_HREF = "https://solflare.com/download";
 export const METAMASK_DOWNLOAD_HREF = "https://metamask.io/download";
 
-/** Opens play.deadtiles.com inside Phantom's in-app browser. Must run from a tap. */
-export function phantomBrowseHref(): string {
-  const target = encodeURIComponent(browseTarget());
-  const ref = encodeURIComponent(browseTarget());
-  const path = `ul/browse/${target}?ref=${ref}`;
-  if (isAndroid()) {
-    return `intent://${path}#Intent;scheme=https;host=phantom.app;package=app.phantom;S.browser_fallback_url=${encodeURIComponent(PHANTOM_STORE)};end`;
-  }
-  return `https://phantom.app/${path}`;
+/** https page the wallet should send the user back to. Phone sign-in only works there. */
+export function walletReturnUrl(): string {
+  return browseTarget();
 }
 
-/** Opens the site inside Solflare's in-app browser. Must run from a tap. */
-export function solflareBrowseHref(): string {
-  const target = encodeURIComponent(browseTarget());
-  const ref = encodeURIComponent(browseTarget());
-  return `https://solflare.com/ul/v1/browse/${target}?ref=${ref}`;
+/** https link that opens the installed Android app. */
+export function nativeWalletReturnUrl(): string {
+  return APP_ORIGIN;
+}
+
+export function walletReturnIsHttps(): boolean {
+  return typeof window !== "undefined" && window.location.protocol === "https:";
 }

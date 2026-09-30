@@ -30,11 +30,21 @@ import { isNativeApp } from "../native";
 import { isMobileDevice } from "../device";
 import { pickWallet } from "./WalletPicker";
 import { resetDialogScroll } from "./dialogScroll";
-import { showDesktopWalletHelp, showMobileWebWalletHelp } from "./MobileWebWalletHelp";
+import {
+  showDesktopWalletHelp,
+  showMobileWalletSignStep,
+  showMobileWebWalletHelp,
+} from "./MobileWebWalletHelp";
+import {
+  consumeWalletDeeplinkReturn,
+  hasWalletDeeplinkCallback,
+  onWalletDeeplinkHandoff,
+  shouldHandOffWalletReturn,
+  type DeeplinkResume,
+} from "../network/walletDeeplink";
 import {
   needsDesktopWalletHelp,
   needsMobileWebWalletHelp,
-  phantomBrowseHref,
   PHANTOM_DOWNLOAD_HREF,
 } from "../network/walletDeepLinks";
 import { WeaponHotbar } from "./WeaponHotbar";
@@ -136,6 +146,7 @@ export class MainMenu {
   private walletHint: HTMLElement;
   private busy = false;
   private session: AuthSession | null = null;
+  private stopWalletHandoff?: () => void;
 
   constructor(private handlers: MainMenuHandlers) {
     this.root = document.createElement("div");
@@ -287,12 +298,8 @@ export class MainMenu {
     this.walletHint.className = "main-menu-wallet-hint";
     this.walletHint.hidden = true;
     if (isMobileDevice()) {
-      this.walletHint.append("This browser cannot see your wallet. ");
-      const phantomLink = document.createElement("a");
-      phantomLink.href = phantomBrowseHref();
-      phantomLink.rel = "noopener";
-      phantomLink.textContent = "Open in Phantom";
-      this.walletHint.append(phantomLink, " or use the Deadtiles Android app.");
+      this.walletHint.textContent =
+        "No wallet in this browser. Tap Connect wallet to approve in Phantom or Solflare, then return here to play.";
     } else {
       this.walletHint.append("No wallet found in this browser. ");
       const installLink = document.createElement("a");
@@ -332,7 +339,13 @@ export class MainMenu {
       }
     });
 
-    void this.tryRestoreSession();
+    this.stopWalletHandoff = onWalletDeeplinkHandoff((resume) => {
+      void this.applyDeeplinkResume(resume);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") this.adoptCachedSession();
+    });
+    void this.boot();
     resetDialogScroll(this.root);
     window.setTimeout(() => this.refreshWalletHint(), 400);
     window.setTimeout(() => this.refreshWalletHint(), 1600);
@@ -448,6 +461,64 @@ export class MainMenu {
     this.applyPreview({ exists: false });
     this.setBusy(false);
     this.syncAuthButtons();
+  }
+
+  private dismissWalletDialogs() {
+    document.querySelectorAll(".wallet-picker").forEach((node) => node.remove());
+  }
+
+  /** Another tab finished Phantom sign-in while this one still showed the prompt. */
+  private adoptCachedSession() {
+    if (this.session) return;
+    const cached = loadCachedAuthSession();
+    if (!cached) return;
+    this.dismissWalletDialogs();
+    this.setSession(cached);
+  }
+
+  private async boot() {
+    const returning = hasWalletDeeplinkCallback();
+    if (returning && shouldHandOffWalletReturn()) {
+      this.setBusy(true, "Returning to your Deadtiles tab…");
+    } else if (returning) {
+      this.setBusy(true, "Finishing wallet sign-in…");
+    }
+    try {
+      const resume = await consumeWalletDeeplinkReturn();
+      if (resume) {
+        await this.applyDeeplinkResume(resume);
+        if (resume.type !== "error") return;
+      } else if (returning) {
+        this.setBusy(false);
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.showError(detail);
+    }
+    await this.tryRestoreSession();
+  }
+
+  private async applyDeeplinkResume(resume: DeeplinkResume) {
+    this.dismissWalletDialogs();
+    if (resume.type === "handed-off") {
+      this.setBusy(false);
+      this.statusEl.hidden = false;
+      this.statusEl.textContent = "Continue in your original Deadtiles tab.";
+      this.statusEl.classList.remove("main-menu-status--error");
+      return;
+    }
+    if (resume.type === "session") {
+      this.setBusy(false);
+      this.setSession(resume.session);
+      return;
+    }
+    if (resume.type === "needs-sign") {
+      this.setBusy(false);
+      await showMobileWalletSignStep(this.root, resume.kind);
+      await this.tryRestoreSession();
+      return;
+    }
+    this.showError(resume.message);
   }
 
   private async tryRestoreSession() {
@@ -582,6 +653,8 @@ export class MainMenu {
   }
 
   destroy() {
+    this.stopWalletHandoff?.();
+    this.stopWalletHandoff = undefined;
     this.previewHotbar?.destroy();
     this.previewHotbar = undefined;
     this.root.remove();

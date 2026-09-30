@@ -868,6 +868,17 @@ export class WorldScene extends Phaser.Scene {
   private inventoryUI?: InventoryUI;
   private journalUI?: JournalUI;
   private mobileHudEl?: HTMLElement;
+  private moveStickEl?: HTMLElement;
+  private moveStickKnob?: HTMLElement;
+  /** Pointer currently driving the thumb stick. Null when the stick is released. */
+  private moveStickPointerId: number | null = null;
+  /** Stick deflection, each axis in [-1, 1]. Positive Y is down (screen space). */
+  private moveStickX = 0;
+  private moveStickY = 0;
+  /** True while the stick is pushed into the outer sprint ring. */
+  private moveStickSprint = false;
+  private static readonly MOVE_STICK_DEADZONE = 0.22;
+  private static readonly MOVE_STICK_SPRINT = 0.88;
   private mobileInventoryBtn?: HTMLButtonElement;
   private mobileJournalBtn?: HTMLButtonElement;
   private mobileMapBtn?: HTMLButtonElement;
@@ -2886,6 +2897,10 @@ export class WorldScene extends Phaser.Scene {
     this.searchProgressEl?.remove();
     this.mobileHudEl?.remove();
     this.mobileHudEl = undefined;
+    this.releaseMoveStick();
+    this.moveStickEl?.remove();
+    this.moveStickEl = undefined;
+    this.moveStickKnob = undefined;
     this.mobileInventoryBtn = undefined;
     this.mobileMapBtn = undefined;
     this.mobileAimBtn = undefined;
@@ -3041,7 +3056,118 @@ export class WorldScene extends Phaser.Scene {
 
     document.body.appendChild(stack);
     this.mobileHudEl = stack;
+    this.setupMoveStick();
     this.refreshMobileActionButtons();
+  }
+
+  /** Bottom-left thumb stick. Feeds the same 8-way walk path as WASD. */
+  private setupMoveStick() {
+    if (!IS_MOBILE || this.moveStickEl) return;
+
+    const root = document.createElement("div");
+    root.id = "move-stick";
+    root.setAttribute("aria-label", "Move");
+
+    const base = document.createElement("div");
+    base.className = "move-stick-base";
+    const knob = document.createElement("div");
+    knob.className = "move-stick-knob";
+    base.appendChild(knob);
+    root.appendChild(base);
+    document.body.appendChild(root);
+    this.moveStickEl = root;
+    this.moveStickKnob = knob;
+
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (this.moveStickPointerId !== null) return;
+      if (this.isOverlayOpen() || this.chatOpen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveStickPointerId = event.pointerId;
+      root.setPointerCapture(event.pointerId);
+      this.releaseStolenTouchInput();
+      this.updateMoveStick(event);
+    };
+    const onMove = (event: PointerEvent) => {
+      if (event.pointerId !== this.moveStickPointerId) return;
+      event.preventDefault();
+      this.updateMoveStick(event);
+    };
+    const onUp = (event: PointerEvent) => {
+      if (event.pointerId !== this.moveStickPointerId) return;
+      this.releaseMoveStick();
+    };
+
+    root.addEventListener("pointerdown", onDown);
+    root.addEventListener("pointermove", onMove);
+    root.addEventListener("pointerup", onUp);
+    root.addEventListener("pointercancel", onUp);
+    root.addEventListener("lostpointercapture", onUp);
+    root.addEventListener("contextmenu", (event) => event.preventDefault());
+  }
+
+  private updateMoveStick(event: PointerEvent) {
+    const base = this.moveStickEl?.querySelector(".move-stick-base");
+    const knob = this.moveStickKnob;
+    if (!(base instanceof HTMLElement) || !knob) return;
+
+    const rect = base.getBoundingClientRect();
+    const dx = event.clientX - (rect.left + rect.width / 2);
+    const dy = event.clientY - (rect.top + rect.height / 2);
+    const radius = Math.max(1, (rect.width - knob.offsetWidth) / 2);
+    const dist = Math.hypot(dx, dy);
+    const clamped = Math.min(dist, radius);
+    const angle = Math.atan2(dy, dx);
+    const kx = Math.cos(angle) * clamped;
+    const ky = Math.sin(angle) * clamped;
+    knob.style.transform = `translate(${kx}px, ${ky}px)`;
+
+    const nx = kx / radius;
+    const ny = ky / radius;
+    const mag = Math.hypot(nx, ny);
+    this.moveStickX = nx;
+    this.moveStickY = ny;
+    const sprint = mag >= WorldScene.MOVE_STICK_SPRINT;
+    this.moveStickSprint = sprint;
+    this.moveStickEl?.classList.toggle("move-stick--sprint", sprint);
+  }
+
+  private releaseMoveStick() {
+    const pointerId = this.moveStickPointerId;
+    this.moveStickPointerId = null;
+    this.moveStickX = 0;
+    this.moveStickY = 0;
+    this.moveStickSprint = false;
+    if (this.moveStickKnob) this.moveStickKnob.style.transform = "";
+    this.moveStickEl?.classList.remove("move-stick--sprint");
+    if (pointerId !== null && this.moveStickEl?.hasPointerCapture(pointerId)) {
+      this.moveStickEl.releasePointerCapture(pointerId);
+    }
+  }
+
+  /** 8-way screen vector from the thumb stick. Zero inside the dead zone. */
+  private readMoveStickVector(): { screenDx: number; screenDy: number } {
+    if (this.moveStickPointerId === null) {
+      return { screenDx: 0, screenDy: 0 };
+    }
+    const mag = Math.hypot(this.moveStickX, this.moveStickY);
+    if (mag < WorldScene.MOVE_STICK_DEADZONE) {
+      return { screenDx: 0, screenDy: 0 };
+    }
+    const sector = Math.round(Math.atan2(this.moveStickY, this.moveStickX) / (Math.PI / 4));
+    const steps: ReadonlyArray<readonly [number, number]> = [
+      [1, 0],
+      [1, 1],
+      [0, 1],
+      [-1, 1],
+      [-1, 0],
+      [-1, -1],
+      [0, -1],
+      [1, -1],
+    ];
+    const step = steps[((sector % 8) + 8) % 8] ?? [0, 0];
+    return { screenDx: step[0], screenDy: step[1] };
   }
 
   /** Mobile stand-in for holding CTRL: shown for firearms, lit while aiming. */
@@ -10362,7 +10488,9 @@ export class WorldScene extends Phaser.Scene {
     };
 
     const blocked = this.isOverlayOpen() || this.chatOpen;
+    this.moveStickEl?.classList.toggle("move-stick--blocked", blocked);
     if (blocked) {
+      if (this.moveStickPointerId !== null) this.releaseMoveStick();
       // UI steals keyup — clear stuck WASD/Shift so we don't keep walking.
       this.keys.W.reset();
       this.keys.A.reset();
@@ -10559,7 +10687,7 @@ export class WorldScene extends Phaser.Scene {
     this.sendMoveToCoords(goal.x, goal.y, sprint, false);
   }
 
-  /** Screen-space move vector from WASD + arrows currently held. */
+  /** Screen-space move vector from WASD, arrows, or the mobile thumb stick. */
   private readKeyboardMoveVector(): { screenDx: number; screenDy: number } {
     let screenDx = 0;
     let screenDy = 0;
@@ -10567,11 +10695,16 @@ export class WorldScene extends Phaser.Scene {
     if (this.keys.D.isDown || this.cursors.right.isDown) screenDx += 1;
     if (this.keys.W.isDown || this.cursors.up.isDown) screenDy -= 1;
     if (this.keys.S.isDown || this.cursors.down.isDown) screenDy += 1;
-    return { screenDx, screenDy };
+    if (screenDx !== 0 || screenDy !== 0) return { screenDx, screenDy };
+    return this.readMoveStickVector();
   }
 
   private isSprintKeyDown(): boolean {
-    return !!(this.shiftKey?.isDown || this.cursors?.shift?.isDown);
+    return !!(
+      this.moveStickSprint ||
+      this.shiftKey?.isDown ||
+      this.cursors?.shift?.isDown
+    );
   }
 
   private handleCombatInput(_delta: number) {
@@ -11752,9 +11885,19 @@ export class WorldScene extends Phaser.Scene {
     let n = 0;
     for (const p of this.input.manager.pointers) {
       if (except && p === except) continue;
-      if (p.active && p.isDown) n++;
+      if (!p.active || !p.isDown) continue;
+      // A held thumb stick must not count as a second finger (that starts pinch zoom).
+      if (this.isMoveStickPointer(p)) continue;
+      n++;
     }
     return n;
+  }
+
+  private isMoveStickPointer(pointer: Phaser.Input.Pointer): boolean {
+    const stick = this.moveStickEl;
+    if (!stick) return false;
+    const target = pointer.event?.target;
+    return target instanceof Node && stick.contains(target);
   }
 
   /** True when the DOM event for this Phaser pointer landed on the game canvas. */
