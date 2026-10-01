@@ -193,7 +193,27 @@ export function canCraftRecipe(inventory: Inventory, recipe: CraftRecipe): boole
 }
 
 /**
+ * Pockets pay the cost before the weapon hotbar or worn slots.
+ * `deferSlots` (the gun in hand) is last, and only if nothing else can pay.
+ */
+function consumeCraftInput(
+  inventory: Inventory,
+  itemId: string,
+  quantity: number,
+  deferSlots: readonly number[],
+): Inventory {
+  return removeItemFromInventory(
+    inventory,
+    itemId,
+    quantity,
+    "pockets-first",
+    deferSlots,
+  );
+}
+
+/**
  * Consume inputs and add output. Returns null if the craft is not possible.
+ * Pockets are used before the hotbar or worn slots.
  */
 export function applyCraftRecipe(
   inventory: Inventory,
@@ -205,11 +225,10 @@ export function applyCraftRecipe(
   for (const ing of recipe.inputs) {
     const resolved = resolveCraftIngredient(next, ing);
     if (!resolved) return null;
-    next = removeItemFromInventory(
+    next = consumeCraftInput(
       next,
       resolved.itemId,
       resolved.quantity,
-      "pockets-first",
       deferSlots,
     );
   }
@@ -345,9 +364,10 @@ function emptySlotsFor(inventory: Inventory, itemId: string): number {
 export function canDisassemble(
   inventory: Inventory,
   recipe: DisassemblyRecipe,
+  deferSlots: readonly number[] = [],
 ): boolean {
   if (countItemInInventory(inventory, recipe.weaponId) < 1) return false;
-  const next = removeItemFromInventory(inventory, recipe.weaponId, 1);
+  const next = consumeCraftInput(inventory, recipe.weaponId, 1, deferSlots);
   const needsSlot = recipe.parts.filter((id) => stackedRoom(next, id) < 1);
   const slotsNeeded = Math.min(recipe.returnCount, needsSlot.length);
   if (slotsNeeded === 0) return true;
@@ -377,16 +397,18 @@ export type DisassemblyResult = {
 
 /**
  * Destroy one gun and add a random subset of its parts.
+ * A gun in the pockets is taken before one on the hotbar.
  * Returns null when the gun is missing or the parts will not fit.
  */
 export function applyDisassembly(
   inventory: Inventory,
   recipe: DisassemblyRecipe,
   rng: () => number = Math.random,
+  deferSlots: readonly number[] = [],
 ): DisassemblyResult | null {
-  if (!canDisassemble(inventory, recipe)) return null;
+  if (!canDisassemble(inventory, recipe, deferSlots)) return null;
   const picked = pickDistinctParts(recipe.parts, recipe.returnCount, rng);
-  let next = removeItemFromInventory(inventory, recipe.weaponId, 1);
+  let next = consumeCraftInput(inventory, recipe.weaponId, 1, deferSlots);
   const salvaged: { id: string; quantity: number }[] = [];
   for (const id of picked) {
     if (!canAddToInventory(next, id, 1)) return null;

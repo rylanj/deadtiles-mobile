@@ -1,6 +1,10 @@
 import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceSpan, getPlayerSpawnFootprint, houseChimneyInteriorTiles, seededRandom, type BuildingInfo } from "./worldgen.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
-import { isBirchportHospital, isBuildingInBirchport } from "./birchport.js";
+import {
+  isAshenTraderWarehouse,
+  isBirchportHospital,
+  isBuildingInBirchport,
+} from "./birchport.js";
 
 /** Fallback fixed interior size (legacy 2×2 building → 4×4 interior). */
 export const INTERIOR_WIDTH = 4;
@@ -131,6 +135,12 @@ export function interiorExitTile(iW: number) {
 }
 
 export const SEARCH_RANGE = 1.5;
+/**
+ * Talk and trade distance across the Ashen market counter.
+ * The player stands one lobby tile in front of a 1-tile counter, and the
+ * trader stands one tile behind it, so the centers are 2 tiles apart.
+ */
+export const ASHEN_MARKET_TALK_RANGE = 2.75;
 export const SEARCH_DURATION_MS = 5000;
 
 /** Facing W, NW, N — enter from the east (SE face). */
@@ -198,6 +208,8 @@ export const FURNITURE_TYPES = [
   "canteentable1",
   "canteentable2",
   "canteentable3",
+  /** Empty canteen table used as the Ashen market counter. Not loot. */
+  "canteentable4",
   "canteenchair",
   /** Barracks tent floor lantern. Not loot. */
   "lantern1",
@@ -264,6 +276,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   canteentable1: "Canteen Table",
   canteentable2: "Canteen Table",
   canteentable3: "Canteen Table",
+  canteentable4: "Canteen Table",
   canteenchair: "Canteen Chair",
   lantern1: "Lantern",
   furnace: "Furnace",
@@ -417,13 +430,14 @@ export function furnitureFootprint(
         : furnitureFacing("militarybed");
     return f === "SE" ? { w: 2, h: 1 } : { w: 1, h: 2 };
   }
-  // CampTable1 / CanteenTable1–3 / HotDisplay1 / DrinkDisplay1 —
-  // long axis along the wall they face (SE 1×2, SW 2×1). Range1 is 1×1.
+  // CampTable1 / CanteenTable1-4 / HotDisplay1 / DrinkDisplay1.
+  // Long axis along the wall they face (SE 1x2, SW 2x1). Range1 is 1x1.
   if (
     objectType === "camptable" ||
     objectType === "canteentable1" ||
     objectType === "canteentable2" ||
     objectType === "canteentable3" ||
+    objectType === "canteentable4" ||
     objectType === "hotdisplay" ||
     objectType === "drinkdisplay"
   ) {
@@ -517,6 +531,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   canteentable1: "SE",
   canteentable2: "SE",
   canteentable3: "SE",
+  canteentable4: "SE",
   canteenchair: "SE",
   lantern1: "SE",
   furnace: "SE",
@@ -902,6 +917,8 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   canteentable1: 1,
   canteentable2: 1,
   canteentable3: 1,
+  /** Ashen market counter. Placed by layout, never rolled. */
+  canteentable4: 0,
   canteenchair: 1,
   /** Barracks tents only — placed by layout, never rolled. */
   lantern1: 0,
@@ -6297,6 +6314,423 @@ function placeMessHall(
   return furnitures;
 }
 
+type AshenMarketFrame = {
+  doorOnEast: boolean;
+  iW: number;
+  iH: number;
+  span: number;
+  depthMax: number;
+  counterDepth: number;
+  faceDoor: "SE" | "SW";
+  facingNum: number;
+};
+
+function ashenMarketFrame(bx: number, by: number): AshenMarketFrame | null {
+  if (!isAshenTraderWarehouse(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  const exit = interiorExitForBuildingAt(bx, by);
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const depthMax = (doorOnEast ? iW : iH) - 1;
+  if (span < 4 || depthMax < 4) return null;
+  return {
+    doorOnEast,
+    iW,
+    iH,
+    span,
+    depthMax,
+    counterDepth: depthMax - 3,
+    faceDoor: doorOnEast ? "SE" : "SW",
+    facingNum: doorOnEast ? 3 : 5,
+  };
+}
+
+function marketWorldTile(
+  frame: AshenMarketFrame,
+  depth: number,
+  along: number,
+): { x: number; y: number } {
+  return frame.doorOnEast ? { x: depth, y: along } : { x: along, y: depth };
+}
+
+function marketDepthOf(frame: AshenMarketFrame, x: number, y: number): number {
+  return frame.doorOnEast ? x : y;
+}
+
+export type AshenMarketNpcPost = {
+  idSuffix: string;
+  kind: "trader" | "exit" | "patrol" | "shelf";
+  /** Tile coordinates. */
+  x: number;
+  y: number;
+  patrolX: number;
+  patrolY: number;
+  facing: number;
+  /**
+   * Patrol polyline in tile coords. The shelf guard ignores this and
+   * wanders the big shelves instead.
+   */
+  waypoints?: { x: number; y: number }[];
+};
+
+/**
+ * Axis-aligned depth/along polyline on the trader side of the counter.
+ * Returns null when a corner would leave the staff floor.
+ */
+function marketAxisRoute(
+  frame: AshenMarketFrame,
+  points: readonly (readonly [number, number])[],
+): { x: number; y: number }[] | null {
+  if (points.length < 2) return null;
+  const alongFar = frame.span - 2;
+  if (alongFar < 4) return null;
+  const out: { x: number; y: number }[] = [];
+  for (const [depth, along] of points) {
+    if (along < 1 || along > alongFar) return null;
+    if (depth < 1 || depth >= frame.counterDepth) return null;
+    out.push(marketWorldTile(frame, depth, along));
+  }
+  for (let i = 1; i < out.length; i++) {
+    const a = out[i - 1]!;
+    const b = out[i]!;
+    if ((a.x !== b.x && a.y !== b.y) || (a.x === b.x && a.y === b.y)) {
+      return null;
+    }
+  }
+  return out;
+}
+
+/**
+ * Two floor patrols that run most of the warehouse length and turn,
+ * plus a start tile in the shelf aisles for the clipboard guard.
+ */
+function marketGuardRoutes(frame: AshenMarketFrame): {
+  shelf: { x: number; y: number } | null;
+  patrols: { x: number; y: number }[][];
+} {
+  const far = frame.span - 2;
+  const mid = Math.min(13, far - 2);
+  const south = Math.min(18, far);
+  const patrolSpecs: readonly (readonly [number, number])[][] = [
+    [
+      [7, 2],
+      [7, 7],
+      [10, 7],
+      [10, 2],
+      [13, 2],
+      [13, 7],
+      [13, mid],
+      [10, mid],
+      [10, south],
+      [7, south],
+      [7, mid],
+      [7, 7],
+    ],
+    [
+      [15, 1],
+      [15, 6],
+      [12, 6],
+      [12, 11],
+      [15, 11],
+      [15, Math.min(16, far)],
+      [12, Math.min(16, far)],
+      [12, 11],
+      [14, 11],
+      [14, 6],
+      [14, 1],
+    ],
+  ];
+  const patrols: { x: number; y: number }[][] = [];
+  for (const spec of patrolSpecs) {
+    const route = marketAxisRoute(frame, spec);
+    if (route) patrols.push(route);
+  }
+  const shelf =
+    4 >= 1 && 4 <= far && 3 < frame.counterDepth
+      ? marketWorldTile(frame, 3, 4)
+      : null;
+  return { shelf, patrols };
+}
+
+/** Trader, exit flanks, and trader-side patrols for the Ashen market. */
+export function ashenMarketNpcPosts(bx: number, by: number): AshenMarketNpcPost[] {
+  const frame = ashenMarketFrame(bx, by);
+  if (!frame) return [];
+  const posts: AshenMarketNpcPost[] = [];
+  const mid = Math.floor(frame.span / 2);
+  const trader = marketWorldTile(frame, frame.counterDepth - 1, mid);
+  posts.push({
+    idSuffix: "man",
+    kind: "trader",
+    x: trader.x,
+    y: trader.y,
+    patrolX: trader.x,
+    patrolY: trader.y,
+    facing: frame.facingNum,
+  });
+  // Lobby ends, one tile in from the east wall. 1 = NE, 5 = SW.
+  const exitPosts: { x: number; y: number; facing: number }[] = [
+    { x: 20, y: 19, facing: 1 },
+    { x: 20, y: 0, facing: 5 },
+  ];
+  exitPosts.forEach((tile, i) => {
+    posts.push({
+      idSuffix: `exit${i}`,
+      kind: "exit",
+      x: tile.x,
+      y: tile.y,
+      patrolX: tile.x,
+      patrolY: tile.y,
+      facing: tile.facing,
+    });
+  });
+  const routes = marketGuardRoutes(frame);
+  if (routes.shelf) {
+    posts.push({
+      idSuffix: "patrol0",
+      kind: "shelf",
+      x: routes.shelf.x,
+      y: routes.shelf.y,
+      patrolX: routes.shelf.x,
+      patrolY: routes.shelf.y,
+      facing: frame.facingNum,
+    });
+  }
+  routes.patrols.forEach((route, i) => {
+    const a = route[0]!;
+    const b = route[route.length - 1]!;
+    posts.push({
+      idSuffix: `patrol${i + 1}`,
+      kind: "patrol",
+      x: a.x,
+      y: a.y,
+      patrolX: b.x,
+      patrolY: b.y,
+      facing: frame.facingNum,
+      waypoints: route,
+    });
+  });
+  return posts;
+}
+
+/** Trader side of the Ashen market counter. The player lobby is excluded. */
+export function isAshenMarketStaffFloor(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const frame = ashenMarketFrame(bx, by);
+  if (!frame) return false;
+  if (tx < 0 || ty < 0 || tx >= frame.iW || ty >= frame.iH) return false;
+  const depth = marketDepthOf(frame, tx, ty);
+  return depth > 0 && depth < frame.counterDepth;
+}
+
+/**
+ * Stand tile on the player side of the counter, lined up with an NPC
+ * who is behind it. NPCs already in the lobby are walked to directly.
+ */
+export function ashenMarketApproachPoint(
+  bx: number,
+  by: number,
+  npcX: number,
+  npcY: number,
+): { x: number; y: number } | null {
+  const frame = ashenMarketFrame(bx, by);
+  if (!frame) return null;
+  const tileX = Math.floor(npcX);
+  const tileY = Math.floor(npcY);
+  const depth = frame.doorOnEast ? tileX : tileY;
+  const along = frame.doorOnEast ? tileY : tileX;
+  if (depth > frame.counterDepth) return { x: npcX, y: npcY };
+  const standAlong = Math.max(0, Math.min(frame.span - 1, along));
+  const stand = marketWorldTile(frame, frame.counterDepth + 1, standAlong);
+  return { x: stand.x + 0.5, y: stand.y + 0.5 };
+}
+
+/**
+ * Birchport Ashen trader warehouse.
+ * A full row of empty canteen tables seals the player lobby (door side)
+ * from the trader floor. Props and patrols stay behind that counter.
+ */
+function placeAshenTraderMarket(
+  bx: number,
+  by: number,
+  occupied: Set<string>,
+): SearchableObject[] {
+  const frame = ashenMarketFrame(bx, by);
+  if (!frame) return [];
+  const furnitures: SearchableObject[] = [];
+  let index = 0;
+
+  const markFootprint = (
+    objectType: string,
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+  ) => {
+    const { w, h } = furnitureFootprint(objectType, facing);
+    for (let ty = y; ty < y + h; ty++) {
+      for (let tx = x; tx < x + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+  };
+
+  const canPlace = (
+    objectType: string,
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+  ): boolean => {
+    const { w, h } = furnitureFootprint(objectType, facing);
+    if (x < 0 || y < 0 || x + w > frame.iW || y + h > frame.iH) return false;
+    for (let ty = y; ty < y + h; ty++) {
+      for (let tx = x; tx < x + w; tx++) {
+        if (occupied.has(`${tx},${ty}`)) return false;
+      }
+    }
+    return true;
+  };
+
+  const put = (
+    objectType: FurnitureType,
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+  ): boolean => {
+    if (!canPlace(objectType, x, y, facing)) return false;
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", index++),
+      kind: "furniture",
+      objectType,
+      x,
+      y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    });
+    markFootprint(objectType, x, y, facing);
+    return true;
+  };
+
+  const tile = (depth: number, along: number) =>
+    marketWorldTile(frame, depth, along);
+
+  const tableStep = frame.doorOnEast
+    ? furnitureFootprint("canteentable4", "SE").h
+    : furnitureFootprint("canteentable4", "SW").w;
+  for (let along = 0; along < frame.span; ) {
+    const origin = tile(frame.counterDepth, along);
+    if (
+      along + tableStep <= frame.span &&
+      put("canteentable4", origin.x, origin.y, frame.faceDoor)
+    ) {
+      along += tableStep;
+      continue;
+    }
+    if (!put("bigbox", origin.x, origin.y, "SW")) {
+      occupied.add(`${origin.x},${origin.y}`);
+    }
+    along += 1;
+  }
+
+  const markSegment = (
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+  ) => {
+    const x0 = Math.min(a.x, b.x);
+    const x1 = Math.max(a.x, b.x);
+    const y0 = Math.min(a.y, b.y);
+    const y1 = Math.max(a.y, b.y);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) occupied.add(`${x},${y}`);
+    }
+  };
+  for (const post of ashenMarketNpcPosts(bx, by)) {
+    if (post.kind === "shelf") {
+      occupied.add(`${post.x},${post.y}`);
+      continue;
+    }
+    const pts =
+      post.waypoints && post.waypoints.length >= 2
+        ? post.waypoints
+        : [
+            { x: post.x, y: post.y },
+            { x: post.patrolX, y: post.patrolY },
+          ];
+    occupied.add(`${pts[0]!.x},${pts[0]!.y}`);
+    for (let i = 1; i < pts.length; i++) markSegment(pts[i - 1]!, pts[i]!);
+  }
+
+  if (frame.doorOnEast) {
+    put("lockers", tile(0, 2).x, tile(0, 2).y, "SE");
+    put("lockers", tile(0, 6).x, tile(0, 6).y, "SE");
+    for (const depth of [2, 5]) {
+      for (const along of [2, 6, 10]) {
+        const p = tile(depth, along);
+        put("bigshelf", p.x, p.y, "SE");
+      }
+    }
+    put("desk", tile(8, 0).x, tile(8, 0).y, "SW");
+    put("cabinet", tile(10, 0).x, tile(10, 0).y, "SW");
+    const furnaceAlong = frame.span - 3;
+    put("furnace", tile(0, furnaceAlong).x, tile(0, furnaceAlong).y, "SE");
+    put("bigbox", tile(1, furnaceAlong).x, tile(1, furnaceAlong).y, "SW");
+    const bench = tile(8, frame.span - 6);
+    put("workbench", bench.x, bench.y, "SE");
+  } else {
+    put("lockers", tile(0, 2).x, tile(0, 2).y, "SW");
+    put("lockers", tile(0, 6).x, tile(0, 6).y, "SW");
+    for (const depth of [2, 6]) {
+      for (const along of [2, 5, 8]) {
+        const p = tile(depth, along);
+        put("bigshelf", p.x, p.y, "SE");
+      }
+    }
+    put("desk", tile(0, 12).x, tile(0, 12).y, "SW");
+    put("cabinet", tile(0, 14).x, tile(0, 14).y, "SW");
+    const furnaceAlong = frame.span - 3;
+    put("furnace", tile(0, furnaceAlong).x, tile(0, furnaceAlong).y, "SW");
+    put("bigbox", tile(1, furnaceAlong).x, tile(1, furnaceAlong).y, "SW");
+    const bench = tile(10, 4);
+    put("workbench", bench.x, bench.y, "SE");
+  }
+
+  const back = frame.counterDepth - 2;
+  const backLine: { along: number; type: FurnitureType; facing: FurnitureFacing }[] = [
+    { along: 1, type: "bigbox", facing: "SW" },
+    { along: 3, type: "watercontainer", facing: "SW" },
+    { along: 5, type: "footlocker", facing: frame.faceDoor },
+    { along: 7, type: "kitbag", facing: frame.faceDoor },
+    { along: 9, type: "militarybasket", facing: frame.faceDoor },
+    { along: 14, type: "footlocker", facing: frame.faceDoor },
+    { along: 16, type: "kitbag", facing: frame.faceDoor },
+    { along: 18, type: "bigbox", facing: "SW" },
+  ];
+  for (const item of backLine) {
+    const p = tile(back, item.along);
+    put(item.type, p.x, p.y, item.facing);
+  }
+
+  const staff = frame.counterDepth - 1;
+  const mid = Math.floor(frame.span / 2);
+  const staffProps: { along: number; type: FurnitureType; facing: FurnitureFacing }[] = [
+    { along: 0, type: "lantern1", facing: frame.faceDoor },
+    { along: frame.span - 1, type: "lantern1", facing: frame.faceDoor },
+    { along: mid + 2, type: "campchair", facing: frame.faceDoor },
+    { along: mid - 3, type: "footlocker", facing: frame.faceDoor },
+    { along: mid + 4, type: "kitbag", facing: frame.faceDoor },
+  ];
+  for (const item of staffProps) {
+    if (item.along < 0 || item.along >= frame.span) continue;
+    const p = tile(staff, item.along);
+    put(item.type, p.x, p.y, item.facing);
+  }
+
+  return furnitures;
+}
+
 export function generateInteriorContent(bx: number, by: number): {
   furnitures: SearchableObject[];
   zombieSpawns: { x: number; y: number }[];
@@ -6325,7 +6759,9 @@ export function generateInteriorContent(bx: number, by: number): {
   let furnitures: SearchableObject[];
   let walls: InteriorWallTile[] = [];
   let doors: { x: number; y: number }[] = [];
-  if (warehouse) {
+  if (warehouse && isAshenTraderWarehouse(bx, by)) {
+    furnitures = placeAshenTraderMarket(bx, by, occupied);
+  } else if (warehouse) {
     const office = placeWarehouseOffice(
       bx,
       by,
@@ -6603,10 +7039,11 @@ export function generateInteriorContent(bx: number, by: number): {
 
   const maxZombies = freeTiles.length;
 
-  // Birchport hospital / Red Order markets — faction holds the building; no walkers.
+  // Faction buildings stay clear: hospital, Red Order markets, the Ashen trader warehouse.
   const suppressZombies =
     (hospital && isBirchportHospital(bx, by)) ||
     (supermarket && isRedOrderOwnedSupermarket(bx, by)) ||
+    (warehouse && isAshenTraderWarehouse(bx, by)) ||
     tent ||
     messHall;
 

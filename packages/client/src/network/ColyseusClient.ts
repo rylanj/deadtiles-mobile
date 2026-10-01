@@ -3,6 +3,7 @@ import {
   WORLD_FULL_MESSAGE,
   WORLD_ROOM_NAME,
   type FreeAimSurface,
+  type MarketStatePayload,
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
@@ -608,6 +609,7 @@ export type TradeOpenEvent = {
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
   };
 };
@@ -619,6 +621,7 @@ export type TradeSyncEvent = {
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
   };
 };
@@ -893,7 +896,12 @@ export type SkillLevelUpEvent = {
 
 export type PlayerNoteEvent = {
   type: "playerNote";
-  payload: { text: string; iconId?: string; durationMs?: number };
+  payload: {
+    text: string;
+    iconId?: string;
+    durationMs?: number;
+    items?: { id?: string; name: string; quantity: number }[];
+  };
 };
 
 export type InventorySyncEvent = {
@@ -903,12 +911,18 @@ export type InventorySyncEvent = {
   magazineRounds: number;
 };
 
+export type MarketBoardEvent = {
+  type: "marketOpen" | "marketSync";
+  payload: MarketStatePayload;
+};
+
 export type ServerEvent =
   | LootEvent
   | ContainerOpenEvent
   | ContainerSyncEvent
   | TradeOpenEvent
   | TradeSyncEvent
+  | MarketBoardEvent
   | DialogOpenEvent
   | DialogTaskDeniedEvent
   | DialogTaskCompleteEvent

@@ -60,6 +60,7 @@ export type AnimatedFurnitureType =
   | "canteentable1"
   | "canteentable2"
   | "canteentable3"
+  | "canteentable4"
   | "canteenchair"
   | "lantern1";
 
@@ -936,6 +937,24 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     animKey: "furniture-canteentable3-sw-searched",
     folder: "Furniture/CanteenTable3",
     filePrefix: "CanteenTable3",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "canteentable4",
+    idleKey: "furniture-canteentable4-se",
+    animKey: "furniture-canteentable4-se-searched",
+    folder: "Furniture/CanteenTable4",
+    filePrefix: "CanteenTable4",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "canteentable4",
+    idleKey: "furniture-canteentable4-sw",
+    animKey: "furniture-canteentable4-sw-searched",
+    folder: "Furniture/CanteenTable4",
+    filePrefix: "CanteenTable4",
     facing: "SW",
     frameCount: 0,
   },

@@ -20,6 +20,8 @@ import {
   isWatchSlot,
   isMapSlot,
   itemFitsInSlot,
+  canSplitInventoryStackHalf,
+  shiftSplitQuantity,
   parseInventory,
   parseWeaponMagazines,
   getStoredMagazineRounds,
@@ -45,7 +47,7 @@ export type InventoryUIHandlers = {
   onWearClothing: (slotIndex: number) => void;
   onRemoveClothing: () => void;
   onDrop: (slotIndex: number, quantity?: number) => void;
-  onMoveSlot: (fromSlot: number, toSlot: number) => void;
+  onMoveSlot: (fromSlot: number, toSlot: number, splitHalf?: boolean) => void;
   onUse: (slotIndex: number) => void;
   onUnload: (slotIndex: number) => void;
 };
@@ -134,7 +136,7 @@ export class InventoryUI {
     hint.className = "inventory-hint";
     hint.textContent = isMobileDevice()
       ? "Drag to move · double-tap weapon to equip"
-      : "Drag to move · double-click weapon to equip · Tab to close";
+      : "Drag to move · shift-drag moves half · double-click weapon to equip · Tab to close";
     header.append(headerTop, hint);
 
     this.gridEl = document.createElement("div");
@@ -484,22 +486,30 @@ export class InventoryUI {
           const hit = el?.closest?.(".inventory-cell") as HTMLElement | null;
           return hit && this.overlay.contains(hit) ? hit : null;
         },
-        canDropOn: (target) => {
+        canDropOn: (target, shift) => {
           const toSlot = Number(target.dataset.slotIndex);
           if (!Number.isFinite(toSlot) || toSlot === index) return false;
           const fromItem = this.currentInventory[index];
           if (!fromItem) return false;
+          if (shift) {
+            return canSplitInventoryStackHalf(this.currentInventory, index, toSlot);
+          }
           const toItem = this.currentInventory[toSlot];
           return (
             itemFitsInSlot(fromItem.id, toSlot) &&
             (!toItem || itemFitsInSlot(toItem.id, index))
           );
         },
-        onDropOn: (target) => {
+        onDropOn: (target, shift) => {
           const toSlot = Number(target.dataset.slotIndex);
           if (!Number.isFinite(toSlot) || toSlot === index) return;
-          this.handlers.onMoveSlot(index, toSlot);
+          this.handlers.onMoveSlot(index, toSlot, shift);
           this.selectedSlot = toSlot;
+        },
+        shiftGhostQuantity: (shift) => {
+          if (!shift) return null;
+          const qty = shiftSplitQuantity(this.currentInventory[index]?.quantity ?? 0);
+          return qty >= 1 ? qty : null;
         },
         onDragBegan: () => {
           this.dragFromSlot = index;

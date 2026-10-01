@@ -156,6 +156,20 @@ export function ensurePlayerClothingPack(scene: Phaser.Scene, skin: number) {
   startNextLoad(scene);
 }
 
+/**
+ * Packs whose newest frames may be missing from the last atlas build.
+ * Those PNGs load loose before the pack is marked ready.
+ */
+function packLoadsLooseExtras(id: EntityPackId): boolean {
+  return (
+    id === "zombie-6" ||
+    id === "zombie-10" ||
+    id === "coywolf" ||
+    id === "bear" ||
+    id === "traderguard"
+  );
+}
+
 function startNextLoad(scene: Phaser.Scene) {
   if (loadInFlight) return;
   if (!scene.sys?.isActive()) {
@@ -197,12 +211,12 @@ function startNextLoad(scene: Phaser.Scene) {
       startNextLoad(scene);
     };
     // Frames added after the last atlas build still need to land before the
-    // pack is ready. Otherwise crawlers stay on the standing walk, and
-    // coyotes keep a walk frame while they bolt.
-    const extras =
-      id === "zombie-6" || id === "zombie-10" || id === "coywolf" || id === "bear"
-        ? queueMissingPackImages(scene, id)
-        : 0;
+    // pack is ready. Otherwise crawlers stay on the standing walk, coyotes
+    // keep a walk frame while they bolt, and the market guard never shows
+    // the clipboard idle.
+    const extras = packLoadsLooseExtras(id)
+      ? queueMissingPackImages(scene, id)
+      : 0;
     if (extras > 0) {
       const epoch = loadEpoch;
       scene.load.once(Phaser.Loader.Events.COMPLETE, () => {
@@ -499,10 +513,9 @@ export function preloadNearbyEntityPacks(
           continue;
         }
         onPackLoaded(scene, id);
-        const extras =
-          id === "zombie-6" || id === "zombie-10" || id === "coywolf" || id === "bear"
-            ? queueMissingPackImages(scene, id)
-            : 0;
+        const extras = packLoadsLooseExtras(id)
+          ? queueMissingPackImages(scene, id)
+          : 0;
         if (extras > 0) {
           pendingExtras.push(id);
           continue;

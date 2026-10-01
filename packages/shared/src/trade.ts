@@ -26,9 +26,12 @@ import {
   type FactionStanding,
 } from "./factionRep.js";
 
-/** Trader starts with this many banknotes (inclusive range). Rolled fresh each restart. */
+/** Arterial trader float (inclusive). Rolled fresh each restart. */
 export const TRADER_BANKNOTES_MIN = 1000;
 export const TRADER_BANKNOTES_MAX = 3000;
+/** Birchport warehouse trader float (inclusive). */
+export const ASHEN_MARKET_BANKNOTES_MIN = 5000;
+export const ASHEN_MARKET_BANKNOTES_MAX = 20000;
 
 /**
  * Base banknote value per item.
@@ -137,8 +140,8 @@ export type AshenDialogLine = {
   npcMan: readonly string[];
   /** Reply variants from TraderGuard when different from the man. */
   npcGuard?: readonly string[];
-  /** Opens the trade UI (TraderMan only). */
-  action?: "trade";
+  /** Opens the trader shop, or the Birchport player board. */
+  action?: "trade" | "board";
 };
 
 /** Talk options for TraderMan / TraderGuard caravans. */
@@ -159,7 +162,7 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
   },
   {
     id: "trade",
-    player: "Do you want to trade?",
+    player: "Let's see what you have to trade",
     npcMan: [
       "Yeah. Show me what you've got.",
       "Sure. Let's see your pack.",
@@ -171,6 +174,19 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
       "Guards don't price goods. Find the trader in the middle of the group.",
     ],
     action: "trade",
+  },
+  {
+    id: "board",
+    player: "Show me what survivors are selling",
+    npcMan: [
+      "The board is here. Banknotes only. I hold the payout until you collect it.",
+      "Player listings are on the board. Pay with banknotes from your pack. When something of yours sells, the notes wait here until you pick them up.",
+      "That's the player board. Price it in banknotes. I keep the proceeds at this desk until you come back for them.",
+    ],
+    npcGuard: [
+      "That's his board. Talk to the man with the ledger.",
+    ],
+    action: "board",
   },
   {
     id: "join",
@@ -272,7 +288,7 @@ export function ashenDialogLineById(id: string): AshenDialogLine | undefined {
  * Exiled: < −100 · Hostile: [−100, 0) · Wary: [0, 500) · Neutral: [500, 1000)
  * Warm: [1000, 2500) · Friendly: [2500, 5000) · Allied: ≥ 5000
  *
- * +1 per $ given to the trader (player buys); +0.1 per $ taken (player sells).
+ * +0.1 per $ given to the trader (player buys); +0.1 per $ taken (player sells).
  * When the trader cannot cover a sell in cash, each unpaid $ also grants +0.1.
  * Everyone starts at 0 (Wary).
  */
@@ -289,7 +305,7 @@ export const ASHEN_REP_FRIENDLY = FACTION_REP_FRIENDLY;
 export const ASHEN_REP_ALLIED = FACTION_REP_ALLIED;
 
 /** Reputation gained per banknote paid to the trader. */
-export const ASHEN_REP_PER_DOLLAR_GIVEN = 1;
+export const ASHEN_REP_PER_DOLLAR_GIVEN = 0.1;
 /** Reputation gained per banknote received from the trader. */
 export const ASHEN_REP_PER_DOLLAR_TAKEN = 0.1;
 
@@ -413,6 +429,16 @@ export function traderSellPrice(
   return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
 }
 
+/**
+ * Trader sell price span for standings that can still buy.
+ * Low is Allied. High is Wary.
+ */
+export function traderSellPriceRange(itemId: string): { low: number; high: number } {
+  const low = traderSellPrice(itemId, ASHEN_REP_ALLIED, 0);
+  const high = traderSellPrice(itemId, ASHEN_REP_WARY, 0);
+  return low <= high ? { low, high } : { low: high, high: low };
+}
+
 /** What the trader pays the player (player sells to trader). */
 export function traderBuyPrice(
   itemId: string,
@@ -430,6 +456,8 @@ export type TraderShopState = {
   banknotes: number;
   /** Compact stock list (not fixed inventory slots). */
   stock: InventoryEntry[];
+  /** Max stock lines this shop will hold. */
+  capacity: number;
 };
 
 /** Remove `quantity` of `itemId` across inventory slots; null if not enough. */
@@ -485,6 +513,7 @@ export function canAddToTraderStock(
   stock: readonly InventoryEntry[],
   itemId: string,
   quantity: number,
+  capacity = TRADER_SHOP_CAPACITY,
 ): boolean {
   if (quantity <= 0 || itemId === "banknote" || !getItemDefinition(itemId)) {
     return false;
@@ -493,15 +522,15 @@ export function canAddToTraderStock(
   const max = maxStackForItem(itemId);
   if (max <= 0) return false;
   if (!def.stackable) {
-    return stock.length + quantity <= TRADER_SHOP_CAPACITY;
+    return stock.length + quantity <= capacity;
   }
   const existing = stock.find((entry) => entry.id === itemId);
   if (existing) return existing.quantity + quantity <= max;
-  return stock.length < TRADER_SHOP_CAPACITY && quantity <= max;
+  return stock.length < capacity && quantity <= max;
 }
 
 /**
- * Whether the offer leaves the caravan at or under {@link TRADER_SHOP_CAPACITY}.
+ * Whether the offer leaves the shop at or under `capacity` stock lines.
  * Buys are removed first, so a full shelf can still take goods when the same
  * offer frees a line.
  */
@@ -509,6 +538,7 @@ export function tradeOfferFitsTraderStock(
   stock: readonly InventoryEntry[],
   sells: readonly { itemId: string; quantity: number }[],
   buys: readonly { stockIndex: number; itemId: string; quantity: number }[],
+  capacity = TRADER_SHOP_CAPACITY,
 ): boolean {
   let next = stock.map((entry) => ({ ...entry }));
   const buyByIndexDesc = [...buys].sort((a, b) => b.stockIndex - a.stockIndex);
@@ -522,10 +552,10 @@ export function tradeOfferFitsTraderStock(
   }
   for (const line of sells) {
     if (line.quantity <= 0) continue;
-    if (!canAddToTraderStock(next, line.itemId, line.quantity)) return false;
+    if (!canAddToTraderStock(next, line.itemId, line.quantity, capacity)) return false;
     next = addToTraderStock(next, line.itemId, line.quantity);
   }
-  return next.length <= TRADER_SHOP_CAPACITY;
+  return next.length <= capacity;
 }
 
 export function removeFromTraderStock(
@@ -545,15 +575,24 @@ export function removeFromTraderStock(
   return next;
 }
 
-/** How many distinct stock lines a trader rolls on spawn. */
+/** How many distinct stock lines an arterial trader rolls on spawn. */
 export const TRADER_SHOP_ITEM_COUNT = 12;
 /**
- * Max stock lines a caravan will hold. Spawn fills the first
+ * Max stock lines an arterial caravan will hold. Spawn fills the first
  * {@link TRADER_SHOP_ITEM_COUNT}. Further player sales stop at this count.
  * Each line also stops at {@link maxStackForItem}, so one stack cannot grow
  * past a normal inventory stack.
  */
 export const TRADER_SHOP_CAPACITY = 36;
+/** Birchport warehouse trader: stock lines present when the shop first opens. */
+export const ASHEN_MARKET_SHOP_ITEM_COUNT = 36;
+/** Birchport warehouse trader: max stock lines. */
+export const ASHEN_MARKET_SHOP_CAPACITY = 108;
+
+/** True for the stationary trader inside the Birchport Ashen market. */
+export function isAshenMarketTraderId(traderId: string): boolean {
+  return traderId.startsWith("ashen-market:") && traderId.endsWith(":man");
+}
 
 /** Categories eligible for shop stock, with per-category quantity ranges. */
 const TRADER_SHOP_CATEGORIES: {
@@ -586,25 +625,80 @@ function traderShopItemPool(): ShopPoolEntry[] {
   return pool;
 }
 
+/**
+ * Market quantities sit near the top of the category range.
+ * A flat roll would leave most shelves half empty.
+ */
+function marketStockQuantity(minQty: number, maxQty: number): number {
+  if (maxQty <= minQty) return minQty;
+  const span = maxQty - minQty;
+  const towardMax = 1 - (1 - Math.random()) ** 3;
+  return minQty + Math.min(span, Math.floor(towardMax * (span + 1)));
+}
+
+function traderShopLimits(traderId?: string): {
+  banknotesMin: number;
+  banknotesMax: number;
+  itemCount: number;
+  capacity: number;
+} {
+  if (traderId && isAshenMarketTraderId(traderId)) {
+    return {
+      banknotesMin: ASHEN_MARKET_BANKNOTES_MIN,
+      banknotesMax: ASHEN_MARKET_BANKNOTES_MAX,
+      itemCount: ASHEN_MARKET_SHOP_ITEM_COUNT,
+      capacity: ASHEN_MARKET_SHOP_CAPACITY,
+    };
+  }
+  return {
+    banknotesMin: TRADER_BANKNOTES_MIN,
+    banknotesMax: TRADER_BANKNOTES_MAX,
+    itemCount: TRADER_SHOP_ITEM_COUNT,
+    capacity: TRADER_SHOP_CAPACITY,
+  };
+}
+
 /** Non-deterministic shop stock + banknote float (fresh roll each call). */
-export function generateTraderShop(_traderId?: string): TraderShopState {
+export function generateTraderShop(traderId?: string): TraderShopState {
+  const limits = traderShopLimits(traderId);
   const banknotes =
-    TRADER_BANKNOTES_MIN +
-    Math.floor(Math.random() * (TRADER_BANKNOTES_MAX - TRADER_BANKNOTES_MIN + 1));
+    limits.banknotesMin +
+    Math.floor(
+      Math.random() * (limits.banknotesMax - limits.banknotesMin + 1),
+    );
 
   const available = traderShopItemPool();
   let stock: InventoryEntry[] = [];
-  const picks = Math.min(TRADER_SHOP_ITEM_COUNT, available.length);
-  for (let i = 0; i < picks; i++) {
-    const idx = Math.floor(Math.random() * available.length);
-    const [picked] = available.splice(idx, 1);
-    if (!picked) continue;
-    const qty =
-      picked.minQty +
-      Math.floor(Math.random() * (picked.maxQty - picked.minQty + 1));
-    stock = addToTraderStock(stock, picked.id, qty);
+  const market = traderId != null && isAshenMarketTraderId(traderId);
+  if (market) {
+    // Fill stock lines, not picks. A non-stackable roll of 3 would otherwise
+    // open three shelves and push the shop past the starting count.
+    while (stock.length < limits.itemCount && available.length > 0) {
+      const idx = Math.floor(Math.random() * available.length);
+      const [picked] = available.splice(idx, 1);
+      if (!picked) break;
+      const def = getItemDefinition(picked.id);
+      let qty = marketStockQuantity(picked.minQty, picked.maxQty);
+      if (def?.stackable) qty = Math.min(qty, maxStackForItem(picked.id));
+      if (def && !def.stackable) {
+        qty = Math.min(qty, limits.itemCount - stock.length);
+      }
+      if (qty <= 0) break;
+      stock = addToTraderStock(stock, picked.id, qty);
+    }
+  } else {
+    const picks = Math.min(limits.itemCount, available.length);
+    for (let i = 0; i < picks; i++) {
+      const idx = Math.floor(Math.random() * available.length);
+      const [picked] = available.splice(idx, 1);
+      if (!picked) continue;
+      const qty =
+        picked.minQty +
+        Math.floor(Math.random() * (picked.maxQty - picked.minQty + 1));
+      stock = addToTraderStock(stock, picked.id, qty);
+    }
   }
-  return { banknotes, stock };
+  return { banknotes, stock, capacity: limits.capacity };
 }
 
 /** Player-side sellable stacks (excludes banknotes / empty). */
@@ -818,7 +912,10 @@ export function applyTradeOffer(
     countItemInInventory(playerInv, "banknote"),
   );
   if (!cash.playerCanAfford) return null;
-  if (!tradeOfferFitsTraderStock(shop.stock, sellLines, buyLines)) return null;
+  const capacity = shop.capacity ?? TRADER_SHOP_CAPACITY;
+  if (!tradeOfferFitsTraderStock(shop.stock, sellLines, buyLines, capacity)) {
+    return null;
+  }
   const { playerPays, playerReceives, shortfall } = cash;
 
   let nextInv = playerInv.map((s) => (s ? { ...s } : null));
@@ -866,6 +963,7 @@ export function applyTradeOffer(
     shop: {
       banknotes: shop.banknotes - playerReceives + playerPays,
       stock: nextStock,
+      capacity,
     },
     sellTotal,
     buyTotal,

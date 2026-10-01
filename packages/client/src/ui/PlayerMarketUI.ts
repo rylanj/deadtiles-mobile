@@ -1,0 +1,924 @@
+import {
+  ASHEN_REP_START,
+  countItemInInventory,
+  marketSalePayout,
+  parseInventory,
+  traderSellPriceRange,
+  getItemDefinition,
+  isMarketListableSlot,
+  type MarketDeskWire,
+  type MarketListingWire,
+  type MarketStatePayload,
+} from "@zombie/shared";
+import { createDialogCloseButton } from "./dialogCloseBtn";
+import { appendItemIcon } from "./itemIcons";
+
+export type PlayerMarketUIHandlers = {
+  onClose: () => void;
+  onList: (listing: {
+    slotIndex: number;
+    itemId: string;
+    quantity: number;
+    price: number;
+  }) => void;
+  onBuy: (listingId: number) => void;
+  onCancel: (listingId: number) => void;
+  onCollect: () => void;
+  onCollectPayout: (listingId: number) => void;
+  onBrowse: (browse: { page: number; sort: "new" | "cheap"; query: string }) => void;
+};
+
+function readListings(json: string): MarketListingWire[] {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((row) => row && typeof row === "object") as MarketListingWire[];
+  } catch {
+    return [];
+  }
+}
+
+function readDesk(json: string): MarketDeskWire {
+  const empty: MarketDeskWire = {
+    banknotes: 0,
+    returns: [],
+    listingCap: 0,
+    activeCount: 0,
+    feePercent: 10,
+  };
+  try {
+    const parsed = JSON.parse(json) as Partial<MarketDeskWire> | null;
+    if (!parsed || typeof parsed !== "object") return empty;
+    return {
+      banknotes: typeof parsed.banknotes === "number" ? parsed.banknotes : 0,
+      returns: Array.isArray(parsed.returns) ? parsed.returns : [],
+      listingCap: typeof parsed.listingCap === "number" ? parsed.listingCap : 0,
+      activeCount: typeof parsed.activeCount === "number" ? parsed.activeCount : 0,
+      feePercent: typeof parsed.feePercent === "number" ? parsed.feePercent : 10,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function listingTitle(itemId: string, condition: number, durability?: number): string {
+  const name = getItemDefinition(itemId)?.name ?? itemId;
+  const parts = [name];
+  if (condition < 100) parts.push(`${condition}%`);
+  if (durability != null) parts.push(`${durability} uses`);
+  return parts.join(", ");
+}
+
+function itemLabel(itemId: string, quantity: number, condition: number, durability?: number): string {
+  const name = getItemDefinition(itemId)?.name ?? itemId;
+  const parts = [quantity > 1 ? `${name} x${quantity}` : name];
+  if (condition < 100) parts.push(`${condition}%`);
+  if (durability != null) parts.push(`${durability} uses`);
+  return parts.join(", ");
+}
+
+function listingFee(price: number, payout: number): number {
+  if (!Number.isInteger(price) || !Number.isInteger(payout)) return 0;
+  return Math.max(0, price - payout);
+}
+
+function bindPositiveInteger(input: HTMLInputElement, onChange: () => void) {
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "-" || event.key === "+" || event.key === "e" || event.key === "E") {
+      event.preventDefault();
+    }
+  });
+  input.addEventListener("beforeinput", (event) => {
+    if (event.data?.includes("-") || event.data?.includes("+")) event.preventDefault();
+  });
+  input.addEventListener("input", () => {
+    const cleaned = input.value.replace(/-/g, "");
+    if (cleaned !== input.value) input.value = cleaned;
+    const n = Number(input.value);
+    if (input.value !== "" && Number.isFinite(n) && n < 1) input.value = "1";
+    onChange();
+  });
+}
+
+function timeLeft(expiresAt: number, now: number): string {
+  const ms = expiresAt - now;
+  if (ms <= 0) return "Expired, waiting for desk space";
+  const mins = Math.max(1, Math.ceil(ms / 60000));
+  if (mins < 60) return `${mins}m left`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hours}h ${rem}m left` : `${hours}h left`;
+}
+
+export class PlayerMarketUI {
+  private visible = false;
+  private traderId = "";
+  private busy = false;
+  private ashenReputation = ASHEN_REP_START;
+  private inventoryJson = "[]";
+  private equippedInventorySlot = -1;
+  private listings: MarketListingWire[] = [];
+  private lastPayload: MarketStatePayload | null = null;
+  private busyTimer = 0;
+  private desk: MarketDeskWire = {
+    banknotes: 0,
+    returns: [],
+    listingCap: 1,
+    activeCount: 0,
+    feePercent: 10,
+  };
+
+  private overlay: HTMLElement;
+  private boardNotesEl: HTMLElement;
+  private boardEl: HTMLElement;
+  private deskEl: HTMLElement;
+  private formEl: HTMLElement;
+  private mineEl: HTMLElement;
+  private selectedIndex = -1;
+  private expandedBoardId: number | null = null;
+  private expandedMineId: number | null = null;
+  private boardQuery = "";
+  private appliedQuery = "";
+  private boardPage = 0;
+  private boardPages = 0;
+  private boardSort: "new" | "cheap" = "new";
+  private boardViewKey = "";
+  private formKey = "";
+  private mineKey = "";
+  private browseTimer = 0;
+  private boardSearch: HTMLInputElement;
+  private sortNewBtn: HTMLButtonElement;
+  private sortCheapBtn: HTMLButtonElement;
+  private pagerEl: HTMLElement;
+  private pagePrev: HTMLButtonElement;
+  private pageNext: HTMLButtonElement;
+  private pageLabel: HTMLElement;
+  private pickAbort = new AbortController();
+  private qtyInput: HTMLInputElement;
+  private priceInput: HTMLInputElement;
+  private hintEl: HTMLElement;
+
+  constructor(private handlers: PlayerMarketUIHandlers) {
+    this.overlay = document.createElement("div");
+    this.overlay.id = "market-overlay";
+    this.overlay.hidden = true;
+
+    const layout = document.createElement("div");
+    layout.className = "trader-layout market-layout";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "red-dialog-toolbar";
+    toolbar.append(createDialogCloseButton(() => this.handlers.onClose()));
+
+    const columns = document.createElement("div");
+    columns.className = "market-columns";
+
+    const boardPanel = document.createElement("div");
+    boardPanel.className = "inventory-panel trader-panel market-panel";
+    const boardHeader = document.createElement("div");
+    boardHeader.className = "inventory-header trader-panel-header";
+    const boardTitleWrap = document.createElement("div");
+    boardTitleWrap.className = "trader-panel-header-text";
+    const boardTitle = document.createElement("h2");
+    boardTitle.className = "inventory-title";
+    boardTitle.textContent = "Survivor ads";
+    const boardHint = document.createElement("span");
+    boardHint.className = "inventory-hint";
+    boardHint.textContent = "Items for sale by other survivors";
+    boardTitleWrap.append(boardTitle, boardHint);
+    this.boardNotesEl = document.createElement("div");
+    this.boardNotesEl.className = "trader-notes-pill";
+    this.boardNotesEl.textContent = "$0";
+    this.boardNotesEl.setAttribute("aria-label", "0 banknotes");
+    boardHeader.append(boardTitleWrap, this.boardNotesEl);
+    this.boardSearch = document.createElement("input");
+    this.boardSearch.type = "search";
+    this.boardSearch.className = "market-board-search";
+    this.boardSearch.placeholder = "Search items";
+    this.boardSearch.autocomplete = "off";
+    this.boardSearch.spellcheck = false;
+    this.boardSearch.setAttribute("aria-label", "Search survivor ads");
+    this.boardSearch.addEventListener("input", () => {
+      this.boardQuery = this.boardSearch.value;
+      window.clearTimeout(this.browseTimer);
+      this.browseTimer = window.setTimeout(() => this.requestBoard(0), 200);
+    });
+    const sortRow = document.createElement("div");
+    sortRow.className = "market-board-sort";
+    this.sortNewBtn = document.createElement("button");
+    this.sortNewBtn.type = "button";
+    this.sortNewBtn.className = "market-sort";
+    this.sortNewBtn.textContent = "Newest";
+    this.sortNewBtn.title = "Most recently listed";
+    this.sortCheapBtn = document.createElement("button");
+    this.sortCheapBtn.type = "button";
+    this.sortCheapBtn.className = "market-sort";
+    this.sortCheapBtn.textContent = "Cheapest each";
+    this.sortCheapBtn.title = "Lowest price for one item";
+    this.sortNewBtn.addEventListener("click", () => this.setBoardSort("new"));
+    this.sortCheapBtn.addEventListener("click", () => this.setBoardSort("cheap"));
+    sortRow.append(this.sortNewBtn, this.sortCheapBtn);
+    this.pagerEl = document.createElement("div");
+    this.pagerEl.className = "market-pager";
+    this.pagePrev = document.createElement("button");
+    this.pagePrev.type = "button";
+    this.pagePrev.className = "market-action";
+    this.pagePrev.textContent = "Prev";
+    this.pageLabel = document.createElement("span");
+    this.pageLabel.className = "market-page-label";
+    this.pageNext = document.createElement("button");
+    this.pageNext.type = "button";
+    this.pageNext.className = "market-action";
+    this.pageNext.textContent = "Next";
+    this.pagePrev.addEventListener("click", () => {
+      if (this.boardPage <= 0) return;
+      this.requestBoard(this.boardPage - 1);
+    });
+    this.pageNext.addEventListener("click", () => {
+      if (this.boardPage + 1 >= this.boardPages) return;
+      this.requestBoard(this.boardPage + 1);
+    });
+    this.pagerEl.append(this.pagePrev, this.pageLabel, this.pageNext);
+    this.boardEl = document.createElement("div");
+    this.boardEl.className = "market-scroll";
+    boardPanel.append(boardHeader, this.boardSearch, sortRow, this.boardEl, this.pagerEl);
+
+    const yoursPanel = document.createElement("div");
+    yoursPanel.className = "inventory-panel trader-panel market-panel";
+    const yoursHeader = document.createElement("div");
+    yoursHeader.className = "inventory-header";
+    const yoursTitle = document.createElement("h2");
+    yoursTitle.className = "inventory-title";
+    yoursTitle.textContent = "Your ads";
+    const yoursHint = document.createElement("span");
+    yoursHint.className = "inventory-hint";
+    yoursHint.textContent = "Your items for sale and payouts";
+    yoursHeader.append(yoursTitle, yoursHint);
+    this.deskEl = document.createElement("div");
+    this.deskEl.className = "market-desk";
+    this.formEl = document.createElement("div");
+    this.formEl.className = "market-form";
+    this.mineEl = document.createElement("div");
+    this.mineEl.className = "market-scroll market-scroll--mine";
+
+    this.qtyInput = document.createElement("input");
+    this.qtyInput.type = "number";
+    this.qtyInput.min = "1";
+    this.qtyInput.step = "1";
+    this.priceInput = document.createElement("input");
+    this.priceInput.type = "number";
+    this.priceInput.min = "1";
+    this.priceInput.step = "1";
+    this.priceInput.placeholder = "Banknotes";
+    this.hintEl = document.createElement("div");
+    this.hintEl.className = "market-hint";
+
+    const body = document.createElement("div");
+    body.className = "market-yours-body";
+    body.append(this.deskEl, this.formEl, this.mineEl);
+    yoursPanel.append(yoursHeader, body);
+
+    columns.append(boardPanel, yoursPanel);
+    layout.append(toolbar, columns);
+    this.overlay.appendChild(layout);
+    this.overlay.addEventListener("click", (event) => {
+      if (event.target === this.overlay) this.handlers.onClose();
+    });
+    document.body.appendChild(this.overlay);
+  }
+
+  isOpen() {
+    return this.visible;
+  }
+
+  getTraderId() {
+    return this.traderId;
+  }
+
+  open(payload: MarketStatePayload) {
+    this.traderId = payload.traderId;
+    this.visible = true;
+    this.busy = false;
+    this.boardQuery = "";
+    this.appliedQuery = "";
+    this.boardPage = 0;
+    this.boardPages = 0;
+    this.boardSort = "new";
+    this.boardViewKey = "";
+    this.formKey = "";
+    this.mineKey = "";
+    this.boardSearch.value = "";
+    this.overlay.hidden = false;
+    document.body.classList.add("market-open");
+    this.apply(payload);
+  }
+
+  sync(payload: MarketStatePayload) {
+    if (!this.visible || payload.traderId !== this.traderId) return;
+    this.busy = false;
+    this.apply(payload);
+  }
+
+  close() {
+    this.visible = false;
+    this.busy = false;
+    this.pickAbort.abort();
+    this.pickAbort = new AbortController();
+    this.expandedBoardId = null;
+    this.expandedMineId = null;
+    this.boardQuery = "";
+    this.appliedQuery = "";
+    this.boardSearch.value = "";
+    this.formKey = "";
+    this.mineKey = "";
+    window.clearTimeout(this.browseTimer);
+    window.clearTimeout(this.busyTimer);
+    this.overlay.hidden = true;
+    document.body.classList.remove("market-open");
+    this.traderId = "";
+  }
+
+  destroy() {
+    this.close();
+    this.overlay.remove();
+  }
+
+  private markBusy() {
+    this.busy = true;
+    window.clearTimeout(this.busyTimer);
+    this.busyTimer = window.setTimeout(() => {
+      if (!this.busy || !this.visible || !this.lastPayload) return;
+      this.busy = false;
+      this.apply(this.lastPayload);
+    }, 2000);
+  }
+
+  private apply(payload: MarketStatePayload) {
+    window.clearTimeout(this.busyTimer);
+    this.lastPayload = payload;
+    this.ashenReputation = payload.ashenReputation ?? ASHEN_REP_START;
+    this.inventoryJson = payload.inventoryJson;
+    this.equippedInventorySlot = payload.equippedInventorySlot;
+    this.listings = readListings(payload.listingsJson);
+    this.desk = readDesk(payload.deskJson);
+    const carried = countItemInInventory(parseInventory(this.inventoryJson), "banknote");
+    this.boardNotesEl.textContent = `$${carried}`;
+    this.boardNotesEl.setAttribute("aria-label", `${carried} banknotes`);
+    this.boardPage = payload.boardPage ?? 0;
+    this.boardPages = payload.boardPages ?? 0;
+    this.boardSort = payload.boardSort === "cheap" ? "cheap" : "new";
+    this.appliedQuery = payload.boardQuery ?? "";
+    const formKey = `${payload.inventoryJson}|${payload.equippedInventorySlot}|${payload.deskJson}|${payload.ashenReputation}`;
+    const mineKey = this.listings
+      .filter((listing) => listing.yours)
+      .map((listing) => `${listing.id}:${listing.awaitingPayout ? 1 : 0}:${listing.price}:${listing.expiresAt}`)
+      .join("|");
+    if (this.formKey !== formKey) {
+      this.formKey = formKey;
+      this.renderDesk();
+      this.renderForm();
+    }
+    if (this.mineKey !== mineKey) {
+      this.mineKey = mineKey;
+      this.renderMine();
+    }
+    this.renderBoard();
+    this.updateBoardChrome();
+  }
+
+  private setBoardSort(sort: "new" | "cheap") {
+    if (this.boardSort === sort) return;
+    this.boardSort = sort;
+    window.clearTimeout(this.browseTimer);
+    this.requestBoard(0);
+  }
+
+  private requestBoard(page: number) {
+    this.boardPage = Math.max(0, page);
+    this.updateBoardChrome();
+    this.handlers.onBrowse({
+      page: this.boardPage,
+      sort: this.boardSort,
+      query: this.boardQuery.trim().slice(0, 40),
+    });
+  }
+
+  private updateBoardChrome() {
+    this.sortNewBtn.classList.toggle("market-sort--on", this.boardSort === "new");
+    this.sortCheapBtn.classList.toggle("market-sort--on", this.boardSort === "cheap");
+    this.sortNewBtn.setAttribute("aria-pressed", this.boardSort === "new" ? "true" : "false");
+    this.sortCheapBtn.setAttribute("aria-pressed", this.boardSort === "cheap" ? "true" : "false");
+    const showPages = this.boardPages > 1;
+    this.pagerEl.hidden = !showPages;
+    this.pagePrev.disabled = this.boardPage <= 0;
+    this.pageNext.disabled = this.boardPage + 1 >= this.boardPages;
+    this.pageLabel.textContent = showPages ? `Page ${this.boardPage + 1} of ${this.boardPages}` : "";
+  }
+
+  private listableSlots(): {
+    index: number;
+    itemId: string;
+    quantity: number;
+    condition: number;
+    durability?: number;
+  }[] {
+    const inventory = parseInventory(this.inventoryJson);
+    const rows: {
+      index: number;
+      itemId: string;
+      quantity: number;
+      condition: number;
+      durability?: number;
+    }[] = [];
+    for (let i = 0; i < inventory.length; i++) {
+      if (!isMarketListableSlot(inventory, i, this.equippedInventorySlot)) continue;
+      const slot = inventory[i];
+      if (!slot) continue;
+      rows.push({
+        index: i,
+        itemId: slot.id,
+        quantity: slot.quantity,
+        condition: slot.condition ?? 100,
+        durability: slot.durability,
+      });
+    }
+    return rows;
+  }
+
+  private ensureSelection() {
+    const rows = this.listableSlots();
+    if (!rows.some((row) => row.index === this.selectedIndex)) {
+      this.selectedIndex = rows[0]?.index ?? -1;
+    }
+  }
+
+  private selectedSlot(): { index: number; itemId: string; quantity: number } | null {
+    const row = this.listableSlots().find((entry) => entry.index === this.selectedIndex);
+    if (!row) return null;
+    return { index: row.index, itemId: row.itemId, quantity: row.quantity };
+  }
+
+  private fillPickFace(
+    el: HTMLElement,
+    row: {
+      itemId: string;
+      quantity: number;
+      condition: number;
+      durability?: number;
+    } | null,
+    caret: boolean,
+  ) {
+    el.replaceChildren();
+    if (!row) {
+      const text = document.createElement("span");
+      text.className = "market-pick-label";
+      text.textContent = "Nothing you can list";
+      el.append(text);
+      return;
+    }
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "market-pick-icon-wrap";
+    appendItemIcon(iconWrap, row.itemId, "market-pick-icon");
+    const text = document.createElement("span");
+    text.className = "market-pick-label";
+    text.textContent = itemLabel(row.itemId, row.quantity, row.condition, row.durability);
+    el.append(iconWrap, text);
+    if (caret) {
+      const mark = document.createElement("span");
+      mark.className = "market-pick-caret";
+      mark.textContent = "▾";
+      el.append(mark);
+    }
+  }
+
+  private renderDesk() {
+    this.deskEl.replaceChildren();
+    const hasNotes = this.desk.banknotes > 0;
+    const hasReturns = this.desk.returns.length > 0;
+    if (!hasNotes && !hasReturns) return;
+
+    if (hasNotes) {
+      const notes = document.createElement("p");
+      notes.className = "market-desk-notes";
+      notes.textContent = `${this.desk.banknotes} banknotes waiting`;
+      this.deskEl.append(notes);
+    }
+    const collect = document.createElement("button");
+    collect.type = "button";
+    collect.className = "market-action";
+    collect.textContent = "Collect";
+    collect.disabled = this.busy;
+    collect.addEventListener("click", () => {
+      if (this.busy) return;
+      this.markBusy();
+      this.handlers.onCollect();
+    });
+    this.deskEl.append(collect);
+    if (!hasReturns) return;
+    const heading = document.createElement("p");
+    heading.className = "market-desk-returns";
+    heading.textContent = "Returns waiting";
+    this.deskEl.append(heading);
+    for (const row of this.desk.returns) {
+      const line = document.createElement("p");
+      line.className = "market-desk-return";
+      line.textContent = itemLabel(row.itemId, row.quantity, row.condition, row.durability);
+      this.deskEl.append(line);
+    }
+  }
+
+  private renderForm() {
+    this.pickAbort.abort();
+    this.pickAbort = new AbortController();
+    const signal = this.pickAbort.signal;
+    this.ensureSelection();
+    const rows = this.listableSlots();
+    const selected = rows.find((row) => row.index === this.selectedIndex) ?? null;
+
+    this.formEl.replaceChildren();
+    const cap = document.createElement("p");
+    cap.className = "market-cap";
+    cap.textContent = `You have posted ${this.desk.activeCount}/${this.desk.listingCap} ads`;
+
+    const slotField = document.createElement("div");
+    slotField.className = "market-field";
+    const slotName = document.createElement("span");
+    slotName.textContent = "Item";
+    const picker = document.createElement("div");
+    picker.className = "market-pick";
+    const current = document.createElement("button");
+    current.type = "button";
+    current.className = "market-pick-current";
+    current.setAttribute("aria-expanded", "false");
+    this.fillPickFace(current, selected, rows.length > 0);
+    const list = document.createElement("div");
+    list.className = "market-pick-list";
+    list.hidden = true;
+
+    const placeList = () => {
+      const rect = current.getBoundingClientRect();
+      const gap = 4;
+      const below = window.innerHeight - rect.bottom - gap - 12;
+      const above = rect.top - gap - 12;
+      const openUp = below < 160 && above > below;
+      list.style.left = `${rect.left}px`;
+      list.style.width = `${rect.width}px`;
+      list.style.maxHeight = `${Math.max(96, Math.min(240, openUp ? above : below))}px`;
+      if (openUp) {
+        list.style.top = "auto";
+        list.style.bottom = `${window.innerHeight - rect.top + gap}px`;
+      } else {
+        list.style.bottom = "auto";
+        list.style.top = `${rect.bottom + gap}px`;
+      }
+    };
+
+    const setOpen = (open: boolean) => {
+      list.hidden = !open;
+      current.classList.toggle("market-pick-current--open", open);
+      current.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) placeList();
+    };
+
+    if (rows.length === 0) {
+      current.disabled = true;
+    } else {
+      current.addEventListener("click", () => setOpen(list.hidden));
+      for (const row of rows) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "market-pick-option";
+        if (row.index === this.selectedIndex) {
+          option.classList.add("market-pick-option--active");
+        }
+        this.fillPickFace(option, row, false);
+        option.addEventListener("click", () => {
+          this.selectedIndex = row.index;
+          for (const child of list.children) {
+            child.classList.toggle(
+              "market-pick-option--active",
+              child === option,
+            );
+          }
+          this.fillPickFace(current, row, true);
+          this.qtyInput.max = String(row.quantity);
+          this.qtyInput.value = String(row.quantity);
+          setOpen(false);
+          this.refreshHint();
+        });
+        list.append(option);
+      }
+      document.addEventListener(
+        "pointerdown",
+        (event) => {
+          if (list.hidden) return;
+          const target = event.target;
+          if (
+            target instanceof Node &&
+            (picker.contains(target) || list.contains(target))
+          ) {
+            return;
+          }
+          setOpen(false);
+        },
+        { signal, capture: true },
+      );
+      document.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key !== "Escape" || list.hidden) return;
+          setOpen(false);
+          event.preventDefault();
+          event.stopPropagation();
+        },
+        { signal, capture: true },
+      );
+      const scrollParent = this.formEl.closest(".market-yours-body");
+      scrollParent?.addEventListener("scroll", () => {
+        if (!list.hidden) placeList();
+      }, { signal });
+      window.addEventListener("resize", () => {
+        if (!list.hidden) placeList();
+      }, { signal });
+    }
+    document.body.append(list);
+    signal.addEventListener("abort", () => list.remove());
+    picker.append(current);
+    slotField.append(slotName, picker);
+
+    const qtyLabel = document.createElement("label");
+    qtyLabel.textContent = "Quantity";
+    this.qtyInput = document.createElement("input");
+    this.qtyInput.type = "number";
+    this.qtyInput.min = "1";
+    this.qtyInput.step = "1";
+    qtyLabel.append(this.qtyInput);
+
+    const priceLabel = document.createElement("label");
+    priceLabel.textContent = "Price for this listing";
+    this.priceInput = document.createElement("input");
+    this.priceInput.type = "number";
+    this.priceInput.min = "1";
+    this.priceInput.step = "1";
+    this.priceInput.placeholder = "Banknotes";
+    priceLabel.append(this.priceInput);
+
+    this.hintEl = document.createElement("div");
+    this.hintEl.className = "market-hint";
+
+    const listBtn = document.createElement("button");
+    listBtn.type = "button";
+    listBtn.className = "market-action";
+    listBtn.textContent = "List it";
+    const full = this.desk.activeCount >= this.desk.listingCap;
+    listBtn.disabled = this.busy || full || !selected;
+    listBtn.addEventListener("click", () => this.submitList());
+
+    const refreshHint = () => this.refreshHint();
+    bindPositiveInteger(this.qtyInput, () => {
+      const row = this.selectedSlot();
+      const raw = Number(this.qtyInput.value);
+      if (row && Number.isInteger(raw) && raw > row.quantity) {
+        this.qtyInput.value = String(row.quantity);
+      }
+      refreshHint();
+    });
+    bindPositiveInteger(this.priceInput, refreshHint);
+
+    if (selected) {
+      this.qtyInput.max = String(selected.quantity);
+      this.qtyInput.value = String(selected.quantity);
+    }
+    this.formEl.append(cap, slotField, qtyLabel, priceLabel, this.hintEl, listBtn);
+    this.refreshHint();
+  }
+
+  private refreshHint() {
+    const selected = this.selectedSlot();
+    if (!selected) {
+      this.hintEl.textContent = this.desk.activeCount >= this.desk.listingCap
+        ? "Cancel or wait for a listing to expire before posting another."
+        : "Banknotes, worn clothes, and the weapon in your hands stay off the board.";
+      return;
+    }
+    const range = traderSellPriceRange(selected.itemId);
+    const charges =
+      range.low === range.high ? `$${range.low}` : `$${range.low}-${range.high}`;
+    const traderLine = document.createElement("div");
+    traderLine.textContent = `Trader sells for ${charges}`;
+    this.hintEl.replaceChildren(traderLine);
+    const price = Number(this.priceInput.value);
+    if (Number.isInteger(price) && price >= 1) {
+      const fee = document.createElement("div");
+      fee.className = "market-fee";
+      const cut = price - marketSalePayout(price, this.ashenReputation);
+      fee.textContent = `Fee on sale is $${Math.max(0, cut)} (${this.desk.feePercent}%)`;
+      this.hintEl.append(fee);
+    }
+  }
+
+  private submitList() {
+    if (this.busy) return;
+    const selected = this.selectedSlot();
+    if (!selected) return;
+    let quantity = Number(this.qtyInput.value);
+    const price = Number(this.priceInput.value);
+    if (!Number.isInteger(quantity) || quantity < 1) return;
+    if (quantity > selected.quantity) {
+      quantity = selected.quantity;
+      this.qtyInput.value = String(quantity);
+    }
+    if (!Number.isInteger(price) || price < 1) return;
+    this.markBusy();
+    this.handlers.onList({
+      slotIndex: selected.index,
+      itemId: selected.itemId,
+      quantity,
+      price,
+    });
+  }
+
+  private renderMine() {
+    const now = Date.now();
+    const scrollTop = this.mineEl.scrollTop;
+    this.mineEl.replaceChildren();
+    const mine = this.listings.filter(
+      (listing) => listing.yours && (listing.awaitingPayout || listing.expiresAt > now),
+    );
+    mine.sort((a, b) => Number(b.awaitingPayout) - Number(a.awaitingPayout));
+    if (mine.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "market-empty";
+      empty.textContent = "You have nothing listed.";
+      this.mineEl.append(empty);
+      return;
+    }
+    for (const listing of mine) {
+      this.mineEl.append(this.listingCard(listing, now, "mine"));
+    }
+    this.mineEl.scrollTop = scrollTop;
+    const scroller = this.mineEl.parentElement;
+    if (scroller instanceof HTMLElement) this.revealExpanded(scroller);
+  }
+
+  /** Keep an open ad, including its action button, inside the scrolling list. */
+  private revealExpanded(container: HTMLElement) {
+    const row = container.querySelector(".market-row--expanded");
+    if (!(row instanceof HTMLElement) || container.clientHeight <= 0) return;
+    const rowBox = row.getBoundingClientRect();
+    const view = container.getBoundingClientRect();
+    if (rowBox.height >= view.height) {
+      container.scrollTop += rowBox.bottom - view.bottom;
+      return;
+    }
+    if (rowBox.bottom > view.bottom) {
+      container.scrollTop += rowBox.bottom - view.bottom;
+    } else if (rowBox.top < view.top) {
+      container.scrollTop -= view.top - rowBox.top;
+    }
+  }
+
+  private renderBoard() {
+    const viewKey = `${this.boardPage}|${this.boardSort}|${this.appliedQuery}`;
+    const reset = viewKey !== this.boardViewKey;
+    this.boardViewKey = viewKey;
+    const scrollTop = reset ? 0 : this.boardEl.scrollTop;
+    this.boardEl.replaceChildren();
+    const now = Date.now();
+    const visible = this.listings.filter(
+      (listing) => listing.onBoard && !listing.awaitingPayout && listing.expiresAt > now,
+    );
+    if (visible.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "market-empty";
+      empty.textContent = this.appliedQuery.trim()
+        ? "No ads match."
+        : "Nothing is listed right now.";
+      this.boardEl.append(empty);
+      this.boardEl.scrollTop = 0;
+      return;
+    }
+    for (const listing of visible) {
+      this.boardEl.append(this.listingCard(listing, now, "board"));
+    }
+    this.boardEl.scrollTop = scrollTop;
+  }
+
+  private listingCard(
+    listing: MarketListingWire,
+    now: number,
+    which: "board" | "mine",
+  ): HTMLElement {
+    const expandedId = which === "board" ? this.expandedBoardId : this.expandedMineId;
+    const expanded = expandedId === listing.id;
+    const onBoard = which === "board";
+    const dimmed = onBoard && listing.yours;
+    const name = listingTitle(listing.itemId, listing.condition, listing.durability);
+
+    const row = document.createElement("div");
+    row.className = dimmed ? "market-row market-row--yours" : "market-row";
+    if (expanded) row.classList.add("market-row--expanded");
+
+    const summary = document.createElement("button");
+    summary.type = "button";
+    summary.className = "market-row-summary";
+    summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    summary.setAttribute(
+      "aria-label",
+      `${expanded ? "Collapse" : "Expand"} ${name}, ×${listing.quantity}, $${listing.price}`,
+    );
+
+    const icon = document.createElement("div");
+    icon.className = "market-row-icon";
+    appendItemIcon(icon, listing.itemId, "market-icon");
+
+    const title = document.createElement("div");
+    title.className = "market-row-name";
+    title.textContent = name;
+
+    const qty = document.createElement("span");
+    qty.className = "market-row-qty";
+    qty.textContent = `×${listing.quantity}`;
+
+    const price = document.createElement("span");
+    price.className = "market-row-price";
+    price.textContent = `$${listing.price}`;
+
+    const sold = document.createElement("span");
+    sold.className = "market-row-sold";
+    sold.textContent = "Sold";
+
+    const chevron = document.createElement("span");
+    chevron.className = "market-row-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.textContent = expanded ? "▾" : "▸";
+
+    if (!onBoard && listing.awaitingPayout) summary.append(icon, title, qty, sold, price, chevron);
+    else summary.append(icon, title, qty, price, chevron);
+    summary.addEventListener("click", () => {
+      if (which === "board") {
+        this.expandedBoardId = expanded ? null : listing.id;
+        this.renderBoard();
+      } else {
+        this.expandedMineId = expanded ? null : listing.id;
+        this.renderMine();
+      }
+    });
+    row.append(summary);
+    if (!expanded) return row;
+
+    const details = document.createElement("div");
+    details.className = "market-row-details";
+    if (onBoard) {
+      const meta = document.createElement("div");
+      meta.className = "market-row-meta";
+      meta.textContent = timeLeft(listing.expiresAt, now);
+      details.append(meta);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "market-action";
+      button.textContent = dimmed ? "Yours" : "Buy";
+      button.disabled = dimmed || this.busy;
+      if (!dimmed) {
+        button.addEventListener("click", () => {
+          if (this.busy) return;
+          this.markBusy();
+          this.handlers.onBuy(listing.id);
+        });
+      }
+      details.append(button);
+    } else if (listing.awaitingPayout) {
+      const line = document.createElement("div");
+      line.className = "market-fee";
+      line.textContent = `Collect $${listing.payout} (Fee $${listingFee(listing.price, listing.payout)})`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "market-action";
+      button.textContent = "Collect";
+      button.disabled = this.busy;
+      button.addEventListener("click", () => {
+        if (this.busy) return;
+        this.markBusy();
+        this.handlers.onCollectPayout(listing.id);
+      });
+      details.append(line, button);
+    } else {
+      const fee = document.createElement("div");
+      fee.className = "market-fee";
+      fee.textContent = `Fee on sale is $${listingFee(listing.price, listing.payout)} (${this.desk.feePercent}%)`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "market-action";
+      button.textContent = "Cancel";
+      button.disabled = this.busy;
+      button.addEventListener("click", () => {
+        if (this.busy) return;
+        this.markBusy();
+        this.handlers.onCancel(listing.id);
+      });
+      details.append(fee, button);
+    }
+    row.append(details);
+    return row;
+  }
+}

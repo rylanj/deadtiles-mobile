@@ -8,10 +8,15 @@ import {
   isInBirchportBarracks,
 } from "./birchportBarracks.js";
 import {
+  buildingEntranceFace,
+  buildingEntranceSpan,
+  buildingEntranceTiles,
   cityStreetPatrolRoutes,
   getBuildingAt,
   getPlayerSpawnFootprint,
   getStreetTileType,
+  isWalkableTile,
+  isWallTile,
   type ArterialPatrolRouteInfo,
   type BuildingInfo,
 } from "./worldgen.js";
@@ -354,8 +359,8 @@ export function isBirchportLootSite(opts: {
 }
 
 /**
- * Streets and the barracks yard, plus the hospital, military tents, and mess hall.
- * Other Birchport interiors stay armed.
+ * Streets and the barracks yard, plus the hospital, military tents, mess hall,
+ * and the Birchport Ashen market. Other Birchport interiors stay armed.
  */
 export function isBirchportWeaponEquipRestricted(opts: {
   inInterior: boolean;
@@ -370,6 +375,7 @@ export function isBirchportWeaponEquipRestricted(opts: {
       isInBirchportBarracks(Math.floor(opts.x), Math.floor(opts.y))
     );
   }
+  if (isAshenTraderWarehouse(opts.buildingX, opts.buildingY)) return true;
   if (isBirchportHospital(opts.buildingX, opts.buildingY)) return true;
   const bld = getBuildingAt(opts.buildingX, opts.buildingY);
   if (!bld) return false;
@@ -416,4 +422,166 @@ export function findBirchportHospital(): BuildingInfo | null {
     }
   }
   return null;
+}
+
+let ashenTraderWarehouseOrigin: { ox: number; oy: number } | null | undefined;
+
+/** True when a guard can stand on an interior tile to either side of the door. */
+function warehouseEntranceHasBothFlanks(bld: BuildingInfo): boolean {
+  const span = buildingEntranceSpan(bld);
+  const iW = bld.w * 2;
+  const iH = bld.h * 2;
+  if (buildingEntranceFace(bld) === "SE") {
+    const alongMin = Math.max(0, (bld.entranceY - bld.oy) * 2);
+    const alongMax = Math.min(iH - 1, (bld.entranceY - bld.oy + span) * 2 - 1);
+    return alongMin > 0 && alongMax < iH - 1;
+  }
+  const alongMin = Math.max(0, (bld.entranceX - bld.ox) * 2);
+  const alongMax = Math.min(iW - 1, (bld.entranceX - bld.ox + span) * 2 - 1);
+  return alongMin > 0 && alongMax < iW - 1;
+}
+
+/**
+ * The Birchport warehouse converted into the Ashen trader market.
+ * Prefer a door with room for a guard on both sides, then the westernmost.
+ */
+export function findAshenTraderWarehouse(): { ox: number; oy: number } | null {
+  if (ashenTraderWarehouseOrigin !== undefined) return ashenTraderWarehouseOrigin;
+  const f = getPlayerSpawnFootprint();
+  const seen = new Set<string>();
+  const found: BuildingInfo[] = [];
+  for (let ty = f.minY; ty <= f.maxY; ty += 2) {
+    for (let tx = f.minX; tx <= f.maxX; tx += 2) {
+      const bld = getBuildingAt(tx, ty);
+      if (!bld || bld.buildingType !== "warehouse") continue;
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!isInBirchport(bld.ox + bld.w / 2, bld.oy + bld.h / 2)) continue;
+      found.push(bld);
+    }
+  }
+  const flanked = found.filter(warehouseEntranceHasBothFlanks);
+  const pool = flanked.length > 0 ? flanked : found;
+  let best: BuildingInfo | null = null;
+  for (const bld of pool) {
+    if (
+      !best ||
+      bld.ox < best.ox ||
+      (bld.ox === best.ox && bld.oy < best.oy)
+    ) {
+      best = bld;
+    }
+  }
+  ashenTraderWarehouseOrigin = best ? { ox: best.ox, oy: best.oy } : null;
+  return ashenTraderWarehouseOrigin;
+}
+
+/** True when this building is the single Birchport Ashen trader warehouse. */
+export function isAshenTraderWarehouse(bx: number, by: number): boolean {
+  const origin = findAshenTraderWarehouse();
+  if (!origin) return false;
+  const bld = getBuildingAt(bx, by);
+  if (!bld || bld.buildingType !== "warehouse") return false;
+  return bld.ox === origin.ox && bld.oy === origin.oy;
+}
+
+/** Id prefix for the two trader guards posted outside the market door. */
+export const ASHEN_MARKET_DOOR_GUARD_PREFIX = "ashen-market-ext:";
+
+export function isAshenMarketDoorGuardId(id: string): boolean {
+  return id.startsWith(ASHEN_MARKET_DOOR_GUARD_PREFIX);
+}
+
+export type AshenMarketExteriorPost = {
+  idSuffix: "enter0" | "enter1";
+  x: number;
+  y: number;
+  /** Facing out the door, toward people walking up. */
+  facing: number;
+};
+
+function marketDoorStandOk(tile: { x: number; y: number }): boolean {
+  return !isWallTile(tile.x, tile.y) && isWalkableTile(tile.x + 0.5, tile.y + 0.5);
+}
+
+/**
+ * Two street tiles flanking the market door, one step out from the façade
+ * and just past each end of the doorway. Neither post stands in the door.
+ */
+export function ashenMarketExteriorGuardPosts(
+  bld: BuildingInfo,
+): AshenMarketExteriorPost[] | null {
+  const doors = buildingEntranceTiles(bld);
+  if (doors.length === 0) return null;
+  const face = buildingEntranceFace(bld);
+  const first = doors[0]!;
+  const last = doors[doors.length - 1]!;
+  const facing = face === "SE" ? 3 : 5;
+  const preferred =
+    face === "SE"
+      ? [
+          { x: first.x + 1, y: first.y - 1 },
+          { x: last.x + 1, y: last.y + 1 },
+        ]
+      : [
+          { x: first.x - 1, y: first.y + 1 },
+          { x: last.x + 1, y: last.y + 1 },
+        ];
+  const nudge = (tile: { x: number; y: number }) =>
+    face === "SE" ? { x: tile.x + 1, y: tile.y } : { x: tile.x, y: tile.y + 1 };
+  const resolve = (tile: { x: number; y: number }) => {
+    if (marketDoorStandOk(tile)) return tile;
+    const alt = nudge(tile);
+    return marketDoorStandOk(alt) ? alt : null;
+  };
+  const a = resolve(preferred[0]!);
+  const b = resolve(preferred[1]!);
+  if (!a || !b) return null;
+  if (a.x === b.x && a.y === b.y) return null;
+  return [
+    { idSuffix: "enter0", x: a.x, y: a.y, facing },
+    { idSuffix: "enter1", x: b.x, y: b.y, facing },
+  ];
+}
+
+export type BirchportMapPoi = {
+  id: "hospital" | "barracks" | "market";
+  name: string;
+  x: number;
+  y: number;
+};
+
+/** Map pins for the Birchport hospital, barracks, and trader market. */
+export function birchportMapPois(): BirchportMapPoi[] {
+  const pois: BirchportMapPoi[] = [];
+  const hospital = findBirchportHospital();
+  if (hospital) {
+    pois.push({
+      id: "hospital",
+      name: "Hospital",
+      x: hospital.ox + hospital.w / 2,
+      y: hospital.oy + hospital.h / 2,
+    });
+  }
+  const yard = BIRCHPORT_BARRACKS_BOUNDS;
+  pois.push({
+    id: "barracks",
+    name: "Barracks",
+    x: (yard.minX + yard.maxX + 1) / 2,
+    y: (yard.minY + yard.maxY + 1) / 2,
+  });
+  const market = findAshenTraderWarehouse();
+  if (market) {
+    const bld = getBuildingAt(market.ox, market.oy);
+    if (bld) {
+      pois.push({
+        id: "market",
+        name: "Market",
+        x: bld.ox + bld.w / 2,
+        y: bld.oy + bld.h / 2,
+      });
+    }
+  }
+  return pois;
 }

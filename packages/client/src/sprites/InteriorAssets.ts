@@ -65,6 +65,7 @@ export const INTERIOR_TEXTURE_KEYS = {
     canteentable1: "furniture-canteentable1-se",
     canteentable2: "furniture-canteentable2-se",
     canteentable3: "furniture-canteentable3-se",
+    canteentable4: "furniture-canteentable4-se",
     canteenchair: "furniture-canteenchair-se",
   },
 } as const;

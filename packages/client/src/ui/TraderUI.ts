@@ -10,6 +10,7 @@ import {
   tradeOfferTotals,
   tradeOfferCashSettlement,
   tradeOfferFitsTraderStock,
+  TRADER_SHOP_CAPACITY,
   traderBuyPrice,
   traderSellPrice,
   type Inventory,
@@ -31,6 +32,8 @@ export type TraderUIHandlers = {
 };
 
 const TRADER_AVATAR = "/assets/UI/TraderMan1/TraderMan1_Avatar.png";
+/** Second click on the same stack within this window adds 1 to the offer. */
+const OFFER_DOUBLE_CLICK_MS = 500;
 
 function formatNotes(amount: number): string {
   return `$${amount}`;
@@ -71,7 +74,10 @@ export class TraderUI {
   private barterT = 0;
   private playerInventory: Inventory = [];
   private stock: InventoryEntry[] = [];
+  private stockCapacity = TRADER_SHOP_CAPACITY;
   private selection: Selection | null = null;
+  /** Last stack click, so a rebuilt cell can still count as a double-click. */
+  private lastOfferClick: { key: string; at: number } | null = null;
   /** Pending sell offers keyed by inventory slot. */
   private sellOffers = new Map<number, TradeOfferSellLine>();
   /** Pending buy offers keyed by stock index. */
@@ -131,7 +137,7 @@ export class TraderUI {
     this.playerTitleEl.textContent = "You";
     const playerHint = document.createElement("span");
     playerHint.className = "inventory-hint";
-    playerHint.textContent = "Select to offer";
+    playerHint.textContent = "Select to offer · double-click adds 1";
     playerTitleWrap.append(this.playerTitleEl, playerHint);
     const playerNotes = makeAmountPill(0);
     this.playerNotesEl = playerNotes;
@@ -166,7 +172,7 @@ export class TraderUI {
     traderTitleRow.append(this.traderTitleEl, this.standingPillEl);
     const traderHint = document.createElement("span");
     traderHint.className = "inventory-hint";
-    traderHint.textContent = "Select to offer";
+    traderHint.textContent = "Select to offer · double-click adds 1";
     traderTitleWrap.append(traderTitleRow, traderHint);
     const traderNotes = makeAmountPill(0);
     this.traderNotesEl = traderNotes;
@@ -260,6 +266,7 @@ export class TraderUI {
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
     ashenReputation?: number;
     clothingSkin?: number;
@@ -273,6 +280,7 @@ export class TraderUI {
     this.clearOffer();
     this.applySync(opts);
     this.selection = null;
+    this.lastOfferClick = null;
     this.confirmPending = false;
     this.visible = true;
     this.overlay.hidden = false;
@@ -286,6 +294,7 @@ export class TraderUI {
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
     ashenReputation?: number;
     barterT?: number;
@@ -336,12 +345,17 @@ export class TraderUI {
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
     ashenReputation?: number;
     barterT?: number;
   }) {
     this.traderBanknotes = opts.traderBanknotes;
     this.playerBanknotes = opts.playerBanknotes;
+    this.stockCapacity =
+      typeof opts.stockCapacity === "number" && opts.stockCapacity > 0
+        ? opts.stockCapacity
+        : TRADER_SHOP_CAPACITY;
     this.ashenReputation = opts.ashenReputation ?? ASHEN_REP_START;
     this.barterT = Number.isFinite(opts.barterT) ? Math.max(0, Math.min(1, opts.barterT!)) : this.barterT;
     this.playerInventory = parseInventory(opts.inventoryJson);
@@ -367,6 +381,7 @@ export class TraderUI {
     document.body.classList.remove("trader-open");
     this.traderId = "";
     this.selection = null;
+    this.lastOfferClick = null;
     this.clearOffer();
     this.footerEl.hidden = true;
   }
@@ -561,7 +576,17 @@ export class TraderUI {
           quantity: opts.quantity,
         };
       }
-      this.render();
+      const key =
+        opts.side === "player"
+          ? `p:${opts.slotIndex}:${opts.id}`
+          : `t:${opts.stockIndex}:${opts.id}`;
+      const now = performance.now();
+      const prev = this.lastOfferClick;
+      const doubled =
+        !!prev && prev.key === key && now - prev.at <= OFFER_DOUBLE_CLICK_MS;
+      this.lastOfferClick = doubled ? null : { key, at: now };
+      if (doubled) this.addToOffer(1);
+      else this.render();
     });
     return cell;
   }
@@ -610,7 +635,12 @@ export class TraderUI {
       this.traderBanknotes,
       this.playerBanknotes,
     );
-    const fits = tradeOfferFitsTraderStock(this.stock, sells, buys);
+    const fits = tradeOfferFitsTraderStock(
+      this.stock,
+      sells,
+      buys,
+      this.stockCapacity,
+    );
     const repGain =
       buyTotal * ASHEN_REP_PER_DOLLAR_GIVEN +
       sellTotal * ASHEN_REP_PER_DOLLAR_TAKEN +

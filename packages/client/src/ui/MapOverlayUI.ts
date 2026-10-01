@@ -8,9 +8,11 @@ import {
   MAP_CHART_ROAD,
   birchportMapChartKind,
   birchportMapChartRevision,
+  birchportMapPois,
   birchportSafezoneRects,
   getBirchportMapChart,
   type BirchportMapChart,
+  type BirchportMapPoi,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
 import { resetDialogScroll } from "./dialogScroll";
@@ -88,6 +90,7 @@ export class MapOverlayUI {
   private labelsLayer: HTMLElement;
   private questLayer: HTMLElement;
   private radioLayer: HTMLElement;
+  private poiLayer: HTMLElement;
   private lastKindsSize = -1;
   private lastPaintKey = "";
   private centerTX = Number.NaN;
@@ -104,6 +107,8 @@ export class MapOverlayUI {
   private lastLabelKey = "";
   private lastQuestKey = "";
   private lastRadioKey = "";
+  private lastPoiKey = "";
+  private pois: BirchportMapPoi[] | null = null;
   private mapChart: BirchportMapChart | null = null;
 
   constructor() {
@@ -148,10 +153,14 @@ export class MapOverlayUI {
     this.radioLayer = document.createElement("div");
     this.radioLayer.className = "map-quest-layer";
 
+    this.poiLayer = document.createElement("div");
+    this.poiLayer.className = "map-poi-layer";
+
     frame.append(
       this.canvas,
       this.markerCanvas,
       this.labelsLayer,
+      this.poiLayer,
       this.questLayer,
       this.radioLayer,
     );
@@ -337,7 +346,9 @@ export class MapOverlayUI {
     this.lastLabelKey = "";
     this.lastQuestKey = "";
     this.lastRadioKey = "";
+    this.lastPoiKey = "";
     this.labelsLayer.replaceChildren();
+    this.poiLayer.replaceChildren();
     this.questLayer.replaceChildren();
     this.radioLayer.replaceChildren();
     document.body.classList.remove("map-open");
@@ -378,6 +389,7 @@ export class MapOverlayUI {
 
     this.paintMarkers(markers);
     this.paintSettlementLabels(settlements);
+    this.paintPoiMarkers();
     this.paintQuestMarkers(questMarkers);
     this.paintRadioPings(radioPings);
   }
@@ -467,6 +479,7 @@ export class MapOverlayUI {
     const items: { label: string; swatch: string }[] = [
       { label: "Safezone", swatch: "safezone" },
       { label: "Building", swatch: "building" },
+      { label: "Place", swatch: "place" },
       { label: "Task", swatch: "task" },
       { label: "Road", swatch: "road" },
       { label: "Sidewalk", swatch: "sidewalk" },
@@ -508,6 +521,37 @@ export class MapOverlayUI {
       el.style.left = `${(px / MAP_PIXELS) * 100}%`;
       el.style.top = `${(py / MAP_PIXELS) * 100}%`;
       this.labelsLayer.appendChild(el);
+    }
+  }
+
+  private paintPoiMarkers() {
+    if (!this.pois) this.pois = birchportMapPois();
+    const key = `${this.viewX.toFixed(0)},${this.viewY.toFixed(0)},${Math.round(this.viewSpan)}|${this.pois
+      .map((poi) => poi.id)
+      .join(",")}`;
+    if (key === this.lastPoiKey) return;
+    this.lastPoiKey = key;
+    this.poiLayer.replaceChildren();
+
+    for (const poi of this.pois) {
+      const { px, py } = this.project(poi.x, poi.y);
+      if (px < 0 || py < 0 || px > MAP_PIXELS || py > MAP_PIXELS) continue;
+
+      const el = document.createElement("span");
+      el.className = "map-poi";
+      el.style.left = `${(px / MAP_PIXELS) * 100}%`;
+      el.style.top = `${(py / MAP_PIXELS) * 100}%`;
+
+      const name = document.createElement("span");
+      name.className = "map-poi-name";
+      name.textContent = poi.name;
+
+      const dot = document.createElement("span");
+      dot.className = "map-poi-dot";
+      dot.setAttribute("aria-hidden", "true");
+
+      el.append(name, dot);
+      this.poiLayer.appendChild(el);
     }
   }
 

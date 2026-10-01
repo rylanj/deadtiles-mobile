@@ -45,6 +45,9 @@ import {
   ACTION_SFX_HEAR_RADIUS,
   UNLOAD_DURATION_MS,
   playerNearEntity,
+  ASHEN_MARKET_TALK_RANGE,
+  isAshenTraderWarehouse,
+  ashenMarketApproachPoint,
   weaponIndexFromItemId,
   parseInventory,
   countItemInInventory,
@@ -282,7 +285,7 @@ import {
   type WorldRoom,
   type ZombieSchema,
 } from "../network/ColyseusClient";
-import { getStateCallbacks } from "colyseus.js";
+import { Client, getStateCallbacks } from "colyseus.js";
 import {
   applyIdleFrame,
   entityFeetY,
@@ -314,6 +317,7 @@ import {
   bargateActiveTextureKey,
 } from "../sprites/FenceAssets";
 import { TraderUI } from "../ui/TraderUI";
+import { PlayerMarketUI } from "../ui/PlayerMarketUI";
 import { RedOrderDialogUI } from "../ui/RedOrderDialogUI";
 import { AshenTraderDialogUI } from "../ui/AshenTraderDialogUI";
 import { AshenMilitiaDialogUI } from "../ui/AshenMilitiaDialogUI";
@@ -891,6 +895,7 @@ export class WorldScene extends Phaser.Scene {
   private containerLootUI?: ContainerLootUI;
   private craftUI?: CraftUI;
   private traderUI?: TraderUI;
+  private playerMarketUI?: PlayerMarketUI;
   private redOrderDialogUI?: RedOrderDialogUI;
   private ashenTraderDialogUI?: AshenTraderDialogUI;
   private ashenMilitiaDialogUI?: AshenMilitiaDialogUI;
@@ -1718,6 +1723,17 @@ export class WorldScene extends Phaser.Scene {
   private static readonly CHAT_BUBBLE_FADE_MS = 800;
   /** True while we are intentionally leaving (shutdown) — skip onLeave → menu bounce. */
   private intentionalLeave = false;
+  /** Colyseus client that opened this room, used to reconnect during combat. */
+  private colyseusClient?: Client;
+  /** Server epoch ms. Entity damage blocks leaving the world until this time. */
+  private combatLockUntil = 0;
+  private combatLockShownSec = -1;
+  private combatReconnectAttempts = 0;
+  private readonly onCombatBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (this.combatLockUntil <= Date.now()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  };
   /** Soft exterior purge: continue across frames until false. */
   private exteriorSoftPurgeActive = false;
   /** Tile where stillness tracking started. */
@@ -1749,13 +1765,18 @@ export class WorldScene extends Phaser.Scene {
     this.lastBoundsKey = "";
     this.zombieGroanNextAt.clear();
     this.furnitureArtRebuildArmed = false;
-    showWorldEntering("Entering world…");
+    const combatRejoin = this.registry.get("combatRejoin") === true;
+    this.registry.remove("combatRejoin");
+    this.colyseusClient = this.registry.get("colyseusClient") as Client | undefined;
+    this.registry.remove("colyseusClient");
+    showWorldEntering(combatRejoin ? "Still in combat…" : "Entering world…");
     document.body.classList.remove("game-ready");
     this.exteriorPurgeStillTile = { x: NaN, y: NaN };
     this.exteriorPurgeStillSince = 0;
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", this.onVisibilityForPurge);
     }
+    window.addEventListener("beforeunload", this.onCombatBeforeUnload);
     resetRenderStats();
     startVramTelemetry(this);
     AudioManager.get().bind(this);
@@ -1813,7 +1834,8 @@ export class WorldScene extends Phaser.Scene {
       onWearClothing: (slotIndex) => this.equipClothingBySlot(slotIndex),
       onRemoveClothing: () => this.unequipClothing(),
       onDrop: (slotIndex, quantity) => this.dropItem(slotIndex, quantity),
-      onMoveSlot: (fromSlot, toSlot) => this.moveInventorySlot(fromSlot, toSlot),
+      onMoveSlot: (fromSlot, toSlot, splitHalf) =>
+        this.moveInventorySlot(fromSlot, toSlot, splitHalf),
       onUse: (slotIndex) => this.sendConsumeStart(slotIndex),
       onUnload: (slotIndex) => this.sendUnloadStart(slotIndex),
     });
@@ -1828,8 +1850,8 @@ export class WorldScene extends Phaser.Scene {
         this.moveInContainer(containerId, fromSlot, toSlot),
       onStoreInContainer: (containerId, fromSlot, toSlot) =>
         this.storeInContainer(containerId, fromSlot, toSlot),
-      onMovePlayerSlot: (fromSlot, toSlot) =>
-        this.moveInventorySlot(fromSlot, toSlot),
+      onMovePlayerSlot: (fromSlot, toSlot, splitHalf) =>
+        this.moveInventorySlot(fromSlot, toSlot, splitHalf),
       onClose: () => {},
     });
     this.craftUI = new CraftUI({
@@ -1858,6 +1880,15 @@ export class WorldScene extends Phaser.Scene {
       onConfirm: (sells, buys) => this.sendTradeConfirm(sells, buys),
       onClose: () => this.closeTraderUI(),
     });
+    this.playerMarketUI = new PlayerMarketUI({
+      onClose: () => this.closePlayerMarketUI(),
+      onList: (listing) => this.sendMarketList(listing),
+      onBuy: (listingId) => this.sendMarketListing("marketBuy", listingId),
+      onCancel: (listingId) => this.sendMarketListing("marketCancel", listingId),
+      onCollect: () => this.sendMarketCollect(),
+      onCollectPayout: (listingId) => this.sendMarketListing("marketCollectPayout", listingId),
+      onBrowse: (browse) => this.sendMarketBrowse(browse),
+    });
     this.redOrderDialogUI = new RedOrderDialogUI({
       onClose: () => this.closeRedOrderDialog(),
       onAcceptQuest: (questId) =>
@@ -1867,6 +1898,7 @@ export class WorldScene extends Phaser.Scene {
     this.ashenTraderDialogUI = new AshenTraderDialogUI({
       onClose: () => this.closeAshenTraderDialog(),
       onRequestTrade: (traderId) => this.requestTradeOpen(traderId),
+      onRequestBoard: (traderId) => this.requestMarketOpen(traderId),
     });
     this.ashenMilitiaDialogUI = new AshenMilitiaDialogUI({
       onClose: () => this.closeAshenMilitiaDialog(),
@@ -2161,6 +2193,9 @@ export class WorldScene extends Phaser.Scene {
           this.sessionId = msg.playerId;
         }
       });
+      room.onMessage("combatLock", (msg: { until?: number }) => {
+        this.applyCombatLock(msg?.until);
+      });
       // Server pushes inventorySync from onJoin before WorldScene finishes
       // setup — register immediately or Colyseus drops it with
       // "onMessage() not registered for type 'inventorySync'".
@@ -2304,6 +2339,15 @@ export class WorldScene extends Phaser.Scene {
           }
           this.lastInventoryRenderKey = "";
           this.lastHotbarRenderKey = "";
+        } else if (msg.type === "marketOpen") {
+          this.openPlayerMarketUI(msg.payload);
+        } else if (msg.type === "marketSync") {
+          this.applyMarketInventory(msg.payload);
+          if (msg.payload.close) {
+            this.closePlayerMarketUI();
+          } else {
+            this.playerMarketUI?.sync(msg.payload);
+          }
         } else if (msg.type === "dialogOpen") {
           this.openNpcDialog(msg.payload);
         } else if (msg.type === "questSync") {
@@ -2339,9 +2383,20 @@ export class WorldScene extends Phaser.Scene {
           });
         } else if (msg.type === "playerNote") {
           const text = msg.payload.text.trim();
-          if (!text) return;
+          const noteItems = msg.payload.items?.filter((item) => item?.name);
+          if (!text && (!noteItems || noteItems.length === 0)) return;
           const durationMs = msg.payload.durationMs;
-          if (msg.payload.iconId) {
+          if (noteItems && noteItems.length > 0) {
+            this.lootPopup?.show(
+              noteItems.map((item) => ({
+                id: item.id,
+                name: item.name,
+                quantity: item.quantity,
+                hideQuantity: item.quantity <= 1,
+              })),
+              { header: text, durationMs },
+            );
+          } else if (msg.payload.iconId) {
             this.lootPopup?.show(
               [
                 {
@@ -2673,6 +2728,7 @@ export class WorldScene extends Phaser.Scene {
     this.updatePrefabPursuit();
     this.updateTreeChopPursuit();
     this.updateTraderProximity();
+    this.updateMarketProximity();
     this.updateRedOrderDialogProximity();
     this.updateAshenTraderDialogProximity();
     this.updateAshenMilitiaDialogProximity();
@@ -2706,6 +2762,7 @@ export class WorldScene extends Phaser.Scene {
     this.syncOutdoorAmbience(frameDelta);
     this.tickZombieGroans();
     this.tickFootsteps();
+    this.refreshCombatLockBanner();
   }
 
   private updateDamageOverlay(delta: number) {
@@ -2719,6 +2776,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   shutdown() {
+    document.removeEventListener("keydown", this.onFieldKeyDown);
+    document.removeEventListener("keyup", this.onFieldKeyUp);
     this.events.off(
       Phaser.Scenes.Events.RENDER,
       this.placeChatBubbleIcons,
@@ -2746,6 +2805,8 @@ export class WorldScene extends Phaser.Scene {
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.onVisibilityForPurge);
     }
+    window.removeEventListener("beforeunload", this.onCombatBeforeUnload);
+    this.combatLockBanner()?.remove();
     this.scale.off("resize", this.clampCameraZoomToViewport, this);
     const room = this.room;
     this.room = undefined;
@@ -2821,6 +2882,8 @@ export class WorldScene extends Phaser.Scene {
     this.craftUI?.close();
     this.craftUI = undefined;
     this.traderUI?.close();
+    this.playerMarketUI?.destroy();
+    this.playerMarketUI = undefined;
     this.redOrderDialogUI?.close();
     this.ashenTraderDialogUI?.close();
     this.ashenMilitiaDialogUI?.close();
@@ -3042,17 +3105,29 @@ export class WorldScene extends Phaser.Scene {
       { skipCloseChat: true },
     );
 
-    stack.append(
-      ...[
-        this.mobileAimBtn,
-        this.mobileReloadBtn,
-        this.mobileBuildBtn,
-        this.mobileMapBtn,
-        this.mobileJournalBtn,
-        this.mobileInventoryBtn,
-        this.mobileChatBtn,
-      ].filter((el): el is HTMLButtonElement => !!el),
-    );
+    const combatButtons = [
+      this.mobileAimBtn,
+      this.mobileReloadBtn,
+      this.mobileBuildBtn,
+    ].filter((el): el is HTMLButtonElement => !!el);
+    const utilityButtons = [
+      this.mobileMapBtn,
+      this.mobileJournalBtn,
+      this.mobileInventoryBtn,
+      this.mobileChatBtn,
+    ].filter((el): el is HTMLButtonElement => !!el);
+    for (const btn of combatButtons) btn.classList.add("mobile-hud-btn--combat");
+    for (const btn of utilityButtons) btn.classList.add("mobile-hud-btn--utility");
+
+    const combatGroup = document.createElement("div");
+    combatGroup.className = "mobile-hud-group mobile-hud-combat";
+    combatGroup.append(...combatButtons);
+    const utilityGroup = document.createElement("div");
+    utilityGroup.className = "mobile-hud-group mobile-hud-utility";
+    utilityGroup.append(...utilityButtons);
+    // Combat group first so desktop keeps aim/reload above the menus.
+    // Mobile CSS reverses the groups so the fight buttons sit under the thumb.
+    stack.append(combatGroup, utilityGroup);
 
     document.body.appendChild(stack);
     this.mobileHudEl = stack;
@@ -3085,6 +3160,7 @@ export class WorldScene extends Phaser.Scene {
       event.preventDefault();
       event.stopPropagation();
       this.moveStickPointerId = event.pointerId;
+      root.classList.add("move-stick--active");
       root.setPointerCapture(event.pointerId);
       this.releaseStolenTouchInput();
       this.updateMoveStick(event);
@@ -3140,7 +3216,7 @@ export class WorldScene extends Phaser.Scene {
     this.moveStickY = 0;
     this.moveStickSprint = false;
     if (this.moveStickKnob) this.moveStickKnob.style.transform = "";
-    this.moveStickEl?.classList.remove("move-stick--sprint");
+    this.moveStickEl?.classList.remove("move-stick--sprint", "move-stick--active");
     if (pointerId !== null && this.moveStickEl?.hasPointerCapture(pointerId)) {
       this.moveStickEl.releasePointerCapture(pointerId);
     }
@@ -3272,6 +3348,10 @@ export class WorldScene extends Phaser.Scene {
       this.closeTraderUI();
       return;
     }
+    if (this.playerMarketUI?.isOpen()) {
+      this.closePlayerMarketUI();
+      return;
+    }
     if (this.redOrderDialogUI?.isOpen()) {
       this.closeRedOrderDialog();
       return;
@@ -3330,6 +3410,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
@@ -3355,6 +3436,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
@@ -3374,6 +3456,10 @@ export class WorldScene extends Phaser.Scene {
 
     // Enter key on the canvas/document opens the chat bar
     document.addEventListener("keydown", this.onDocumentKeyDown);
+    // Phaser preventDefault on captured keys (hotbar 1 and 2, unequip 0) otherwise
+    // eats those digits before a number field can show them.
+    document.addEventListener("keydown", this.onFieldKeyDown);
+    document.addEventListener("keyup", this.onFieldKeyUp);
 
     const submitChat = () => {
       const text = this.chatInputEl?.value.trim() ?? "";
@@ -3405,11 +3491,38 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private isTextField(target: EventTarget | null): boolean {
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+  }
+
+  /** Keep typed keys in the field. Escape still closes the open dialog. */
+  private readonly onFieldKeyDown = (event: KeyboardEvent) => {
+    if (!this.isTextField(event.target) || event.key === "Escape") return;
+    event.stopPropagation();
+  };
+
+  private readonly onFieldKeyUp = (event: KeyboardEvent) => {
+    if (!this.isTextField(event.target)) return;
+    event.stopPropagation();
+  };
+
   private readonly onDocumentKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && !e.repeat) {
       // Progress-bar actions first — Esc aborts Wear/Reload/Search/etc.
       if (this.cancelProgressBarAction()) {
         e.preventDefault();
+        return;
+      }
+      // Death stays up until Respawn. Do not open the controls legend over it.
+      if (this.deathScreenUI?.isOpen()) {
+        e.preventDefault();
+        return;
+      }
+      if (this.mapOverlayUI?.isOpen()) {
+        e.preventDefault();
+        this.mapOverlayUI.close();
+        this.mapSettlementCache = null;
+        AudioManager.get().play("ui_close");
         return;
       }
       if (this.doorCodeUI?.isOpen()) {
@@ -3420,11 +3533,6 @@ export class WorldScene extends Phaser.Scene {
       if (this.onboardingUI?.isOpen()) {
         e.preventDefault();
         this.onboardingUI.closeLegend();
-        return;
-      }
-      if (this.structureBuildMode) {
-        e.preventDefault();
-        this.toggleStructureBuildMode();
         return;
       }
       if (this.redOrderDialogUI?.isOpen()) {
@@ -3445,6 +3553,11 @@ export class WorldScene extends Phaser.Scene {
       if (this.traderUI?.isOpen()) {
         e.preventDefault();
         this.closeTraderUI();
+        return;
+      }
+      if (this.playerMarketUI?.isOpen()) {
+        e.preventDefault();
+        this.closePlayerMarketUI();
         return;
       }
       if (this.containerLootUI?.isOpen()) {
@@ -3482,7 +3595,22 @@ export class WorldScene extends Phaser.Scene {
         this.inventoryUI.close();
         return;
       }
-      // No overlay consumed Esc — controls legend + halt path / combat.
+      if (this.factionAttackWarningUI?.isOpen()) {
+        e.preventDefault();
+        this.factionAttackWarningUI.close();
+        return;
+      }
+      if (this.chatOpen) {
+        e.preventDefault();
+        this.closeChatBar();
+        return;
+      }
+      if (this.structureBuildMode) {
+        e.preventDefault();
+        this.toggleStructureBuildMode();
+        return;
+      }
+      // Nothing open: controls legend, and stop the current path or fight.
       e.preventDefault();
       this.onboardingUI?.openLegend();
       this.clearCombatTarget();
@@ -4141,6 +4269,7 @@ export class WorldScene extends Phaser.Scene {
       (this.containerLootUI?.isOpen() ?? false) ||
       (this.craftUI?.isOpen() ?? false) ||
       (this.traderUI?.isOpen() ?? false) ||
+      (this.playerMarketUI?.isOpen() ?? false) ||
       (this.redOrderDialogUI?.isOpen() ?? false) ||
       (this.ashenTraderDialogUI?.isOpen() ?? false) ||
       (this.ashenMilitiaDialogUI?.isOpen() ?? false) ||
@@ -9175,10 +9304,67 @@ export class WorldScene extends Phaser.Scene {
     return null;
   }
 
+  private playerInAshenMarket(me: {
+    inInterior?: boolean;
+    buildingX?: number;
+    buildingY?: number;
+  }): boolean {
+    return (
+      !!me.inInterior &&
+      typeof me.buildingX === "number" &&
+      typeof me.buildingY === "number" &&
+      isAshenTraderWarehouse(me.buildingX, me.buildingY)
+    );
+  }
+
+  /** Wider range only while standing in the Ashen trader warehouse. */
+  private npcTalkRange(me: {
+    inInterior?: boolean;
+    buildingX?: number;
+    buildingY?: number;
+  }): number | undefined {
+    return this.playerInAshenMarket(me) ? ASHEN_MARKET_TALK_RANGE : undefined;
+  }
+
+  /**
+   * Chase point for talk. Behind the market counter, path to the lobby tile
+   * in front of the NPC instead of their unreachable tile.
+   */
+  private interactChasePoint(
+    me: {
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    },
+    npcX: number,
+    npcY: number,
+  ): { x: number; y: number } {
+    if (
+      this.playerInAshenMarket(me) &&
+      typeof me.buildingX === "number" &&
+      typeof me.buildingY === "number"
+    ) {
+      return (
+        ashenMarketApproachPoint(me.buildingX, me.buildingY, npcX, npcY) ?? {
+          x: npcX,
+          y: npcY,
+        }
+      );
+    }
+    return { x: npcX, y: npcY };
+  }
+
   /** Closest talkable NPC in interact range (unarmed E / click). */
-  private nearestTalkableNpc(me: { x: number; y: number }): string | null {
+  private nearestTalkableNpc(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX?: number;
+    buildingY?: number;
+  }): string | null {
     let bestId: string | null = null;
     let bestDist = Infinity;
+    const talkRange = this.npcTalkRange(me);
     for (const [id, sprite] of this.guardSprites) {
       if (!this.talkActionForGuard(id)) continue;
       const data = sprite.getData("server") as
@@ -9186,7 +9372,7 @@ export class WorldScene extends Phaser.Scene {
         | undefined;
       if (!data || data.alive === false || data.isDead) continue;
       if (typeof data.x !== "number" || typeof data.y !== "number") continue;
-      if (!playerNearEntity(me.x, me.y, data.x, data.y)) continue;
+      if (!playerNearEntity(me.x, me.y, data.x, data.y, talkRange)) continue;
       const d = Math.hypot(data.x - me.x, data.y - me.y);
       if (d < bestDist) {
         bestDist = d;
@@ -9230,7 +9416,8 @@ export class WorldScene extends Phaser.Scene {
     this.interactAction = action;
     this.interactSprint = isDoubleClick && (me.stamina ?? 0) > 0;
 
-    if (playerNearEntity(me.x, me.y, targetData.x, targetData.y)) {
+    const talkRange = this.npcTalkRange(me);
+    if (playerNearEntity(me.x, me.y, targetData.x, targetData.y, talkRange)) {
       const npcId = this.interactTargetId;
       this.stopPlayerMovement();
       this.clearInteractTarget();
@@ -9238,7 +9425,12 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    this.sendMoveToCoords(targetData.x, targetData.y, this.interactSprint);
+    const chase = this.interactChasePoint(me, targetData.x, targetData.y);
+    if (Math.hypot(me.x - chase.x, me.y - chase.y) <= 0.45) {
+      this.clearInteractTarget();
+      return;
+    }
+    this.sendMoveToCoords(chase.x, chase.y, this.interactSprint);
     this.lastPursuitMoveSentAt = now;
   }
 
@@ -9271,7 +9463,8 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    if (playerNearEntity(me.x, me.y, targetData.x, targetData.y)) {
+    const talkRange = this.npcTalkRange(me);
+    if (playerNearEntity(me.x, me.y, targetData.x, targetData.y, talkRange)) {
       const npcId = this.interactTargetId;
       const action = this.interactAction;
       this.stopPlayerMovement();
@@ -9280,12 +9473,18 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
+    const chase = this.interactChasePoint(me, targetData.x, targetData.y);
+    if (Math.hypot(me.x - chase.x, me.y - chase.y) <= 0.45) {
+      this.clearInteractTarget();
+      return;
+    }
+
     if (this.isBusyWithTimedAction(me)) return;
 
     const now = Date.now();
     if (now - this.lastPursuitMoveSentAt > 300) {
       const sprint = this.interactSprint && me.stamina > 0;
-      this.sendMoveToCoords(targetData.x, targetData.y, sprint);
+      this.sendMoveToCoords(chase.x, chase.y, sprint);
       this.lastPursuitMoveSentAt = now;
     }
   }
@@ -9918,6 +10117,7 @@ export class WorldScene extends Phaser.Scene {
     this.inventoryUI?.close();
     this.containerLootUI?.close();
     this.traderUI?.close();
+    this.closePlayerMarketUI();
     this.redOrderDialogUI?.close();
     this.ashenTraderDialogUI?.close();
     this.ashenMilitiaDialogUI?.close();
@@ -12559,31 +12759,112 @@ export class WorldScene extends Phaser.Scene {
     room.onLeave((code, reason) => {
       this.setStatus("Disconnected");
       if (this.intentionalLeave) return;
-      // Mark intentional before scene swap so shutdown() does not send a second leave.
-      this.intentionalLeave = true;
-      // Invalidate any in-flight create() before leaving the scene.
-      this.worldJoinGeneration++;
-      this.worldRevealReady = false;
-      resetEntityAssetLoader(this);
-      this.clearEntitySpriteMaps();
-      // Keep auth session — return to Enter world (not Connect wallet).
-      const kickReason = typeof reason === "string" ? reason.trim() : "";
-      const detail =
-        code === 4001
-          ? "Signed in from another session"
-          : code === 4002
-            ? kickReason
-              ? `You have been kicked from the server: ${kickReason}`
-              : "You have been kicked from the server"
-            : code === 4003
-              ? "You are banned from the server"
-              : "Lost connection with the server";
-      this.registry.set("menuError", detail);
-      document.body.classList.remove("game-ready");
-      hideWorldEntering();
-      this.room = undefined;
-      this.scene.start("MainMenuScene");
+      if (this.tryStayInCombat(room, code, reason)) return;
+      this.leaveWorldToMenu(code, reason);
     });
+  }
+
+  /**
+   * Connection dropped during the combat lock. Stay on this scene and rejoin
+   * the same body instead of returning to the menu.
+   */
+  private tryStayInCombat(room: WorldRoom, code: number, reason?: string): boolean {
+    if (code === 4001 || code === 4002 || code === 4003) return false;
+    if (this.combatLockUntil <= Date.now()) return false;
+    const client = this.colyseusClient;
+    const token = room.reconnectionToken;
+    if (!client || !token || this.combatReconnectAttempts >= 2) return false;
+    this.combatReconnectAttempts += 1;
+    const playerId = this.sessionId;
+    showWorldEntering("Still in combat…");
+    void this.rejoinCombat(client, token, playerId, code, reason);
+    return true;
+  }
+
+  private async rejoinCombat(
+    client: Client,
+    token: string,
+    playerId: string,
+    code: number,
+    reason?: string,
+  ) {
+    try {
+      const newRoom = (await client.reconnect(token)) as WorldRoom;
+      if (!this.sys.isActive()) {
+        try {
+          newRoom.leave();
+        } catch {
+          /* page already gone */
+        }
+        return;
+      }
+      this.registry.set("worldRoom", newRoom);
+      this.registry.set("colyseusClient", client);
+      if (playerId.startsWith("player-")) this.registry.set("playerId", playerId);
+      this.registry.set("combatRejoin", true);
+      this.intentionalLeave = true;
+      this.room = undefined;
+      this.scene.restart();
+    } catch {
+      this.leaveWorldToMenu(code, reason);
+    }
+  }
+
+  /** Back to Enter world. Auth session stays so this is not a wallet logout. */
+  private leaveWorldToMenu(code: number, reason?: string) {
+    if (this.intentionalLeave) return;
+    this.intentionalLeave = true;
+    this.worldJoinGeneration++;
+    this.worldRevealReady = false;
+    resetEntityAssetLoader(this);
+    this.clearEntitySpriteMaps();
+    const kickReason = typeof reason === "string" ? reason.trim() : "";
+    const detail =
+      code === 4001
+        ? "Signed in from another session"
+        : code === 4002
+          ? kickReason
+            ? `You have been kicked from the server: ${kickReason}`
+            : "You have been kicked from the server"
+          : code === 4003
+            ? "You are banned from the server"
+            : "Lost connection with the server";
+    this.registry.set("menuError", detail);
+    document.body.classList.remove("game-ready");
+    hideWorldEntering();
+    this.room = undefined;
+    this.scene.start("MainMenuScene");
+  }
+
+  private applyCombatLock(until: unknown) {
+    const next = typeof until === "number" && Number.isFinite(until) ? until : 0;
+    this.combatLockUntil = next > Date.now() ? next : 0;
+    if (this.combatLockUntil > 0) this.combatReconnectAttempts = 0;
+    this.combatLockShownSec = -1;
+    this.refreshCombatLockBanner();
+  }
+
+  private combatLockBanner(): HTMLElement | null {
+    return document.getElementById("combat-lock-banner");
+  }
+
+  private refreshCombatLockBanner() {
+    const leftMs = this.combatLockUntil - Date.now();
+    let banner = this.combatLockBanner();
+    if (leftMs <= 0) {
+      banner?.remove();
+      this.combatLockShownSec = -1;
+      return;
+    }
+    const secs = Math.max(1, Math.ceil(leftMs / 1000));
+    if (secs === this.combatLockShownSec && banner) return;
+    this.combatLockShownSec = secs;
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "combat-lock-banner";
+      document.body.appendChild(banner);
+    }
+    banner.textContent = `In combat. You can't leave for ${secs}s.`;
   }
 
   private entityVisible(
@@ -14343,11 +14624,17 @@ export class WorldScene extends Phaser.Scene {
     this.lastHotbarRenderKey = "";
   }
 
-  private moveInventorySlot(fromSlot: number, toSlot: number) {
+  private moveInventorySlot(
+    fromSlot: number,
+    toSlot: number,
+    splitHalf = false,
+  ) {
     if (!this.room) return;
     const me = this.room.state.players.get(this.sessionId);
     // Drag onto/from the clothing slot starts the same Wear/Remove channel.
+    // A shift-split never wears or removes clothing.
     if (
+      !splitHalf &&
       me &&
       (fromSlot === CLOTHING_SLOT_INDEX || toSlot === CLOTHING_SLOT_INDEX)
     ) {
@@ -14361,7 +14648,9 @@ export class WorldScene extends Phaser.Scene {
     }
     const message: ClientMessage = {
       type: "moveInventorySlot",
-      payload: { fromSlot, toSlot },
+      payload: splitHalf
+        ? { fromSlot, toSlot, splitHalf: true }
+        : { fromSlot, toSlot },
     };
     this.room.send("action", message);
     this.lastInventoryRenderKey = "";
@@ -14378,6 +14667,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.craftUI?.isOpen()) this.closeCraftUI();
     if (this.fireplaceUI?.isOpen()) this.closeFireplaceUI();
     if (this.prefabDepositUI?.isOpen()) this.closePrefabUI();
@@ -14406,6 +14696,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
@@ -14428,6 +14719,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
@@ -14760,6 +15052,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
@@ -14786,6 +15079,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
@@ -15127,12 +15421,156 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private closePlayerMarketUI() {
+    if (!this.playerMarketUI?.isOpen()) return;
+    this.playerMarketUI.close();
+    if (!this.room) return;
+    const message: ClientMessage = { type: "marketClose" };
+    this.room.send("action", message);
+  }
+
+  private requestMarketOpen(traderId: string) {
+    if (!this.room || !traderId) return;
+    if (this.playerMarketUI?.isOpen() && this.playerMarketUI.getTraderId() === traderId) {
+      return;
+    }
+    const message: ClientMessage = {
+      type: "marketOpen",
+      payload: { traderId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendMarketList(listing: {
+    slotIndex: number;
+    itemId: string;
+    quantity: number;
+    price: number;
+  }) {
+    if (!this.room || !this.playerMarketUI?.isOpen()) return;
+    const traderId = this.playerMarketUI.getTraderId();
+    if (!traderId) return;
+    const message: ClientMessage = {
+      type: "marketList",
+      payload: { traderId, ...listing },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendMarketListing(
+    type: "marketBuy" | "marketCancel" | "marketCollectPayout",
+    listingId: number,
+  ) {
+    if (!this.room || !this.playerMarketUI?.isOpen()) return;
+    const traderId = this.playerMarketUI.getTraderId();
+    if (!traderId) return;
+    const message: ClientMessage = {
+      type,
+      payload: { traderId, listingId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendMarketBrowse(browse: { page: number; sort: "new" | "cheap"; query: string }) {
+    if (!this.room || !this.playerMarketUI?.isOpen()) return;
+    const traderId = this.playerMarketUI.getTraderId();
+    if (!traderId) return;
+    const message: ClientMessage = {
+      type: "marketBrowse",
+      payload: { traderId, ...browse },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendMarketCollect() {
+    if (!this.room || !this.playerMarketUI?.isOpen()) return;
+    const traderId = this.playerMarketUI.getTraderId();
+    if (!traderId) return;
+    const message: ClientMessage = {
+      type: "marketCollect",
+      payload: { traderId },
+    };
+    this.room.send("action", message);
+  }
+
+  private applyMarketInventory(payload: {
+    inventoryJson: string;
+    weaponMagazinesJson: string;
+    equippedInventorySlot: number;
+    equippedWeaponIndex: number;
+    magazineRounds: number;
+  }) {
+    if (this.localInventorySync) {
+      this.localInventorySync = {
+        ...this.localInventorySync,
+        inventoryJson: payload.inventoryJson,
+        weaponMagazinesJson: payload.weaponMagazinesJson,
+        equippedInventorySlot: payload.equippedInventorySlot,
+        equippedWeaponIndex: payload.equippedWeaponIndex,
+        magazineRounds: payload.magazineRounds,
+      };
+    }
+    this.lastInventoryRenderKey = "";
+    this.lastHotbarRenderKey = "";
+  }
+
+  private openPlayerMarketUI(payload: {
+    traderId: string;
+    inventoryJson: string;
+    weaponMagazinesJson: string;
+    equippedInventorySlot: number;
+    equippedWeaponIndex: number;
+    magazineRounds: number;
+    ashenReputation: number;
+    listingsJson: string;
+    deskJson: string;
+    boardPage?: number;
+    boardPages?: number;
+    boardTotal?: number;
+    boardSort?: "new" | "cheap";
+    boardQuery?: string;
+  }) {
+    if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
+    if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
+    if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
+    if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
+    if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
+    if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    this.playerMarketUI?.open(payload);
+    this.applyMarketInventory(payload);
+  }
+
+  private updateMarketProximity() {
+    if (!this.playerMarketUI?.isOpen() || !this.room) return;
+    const traderId = this.playerMarketUI.getTraderId();
+    if (!traderId) return;
+    const me = this.room.state.players.get(this.sessionId);
+    if (!me?.alive || (me.equippedWeaponIndex ?? -1) >= 0) {
+      this.closePlayerMarketUI();
+      return;
+    }
+    const trader = this.guardSprites.get(traderId)?.getData("server") as
+      | { x: number; y: number; alive?: boolean; isDead?: boolean }
+      | undefined;
+    if (
+      !trader ||
+      trader.alive === false ||
+      trader.isDead ||
+      !playerNearEntity(me.x, me.y, trader.x, trader.y, this.npcTalkRange(me))
+    ) {
+      this.closePlayerMarketUI();
+    }
+  }
+
   private openTraderUI(payload: {
     traderId: string;
     traderName: string;
     traderBanknotes: number;
     playerBanknotes: number;
     stockJson: string;
+    stockCapacity?: number;
     inventoryJson: string;
     ashenReputation?: number;
   }) {
@@ -15143,6 +15581,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     const me = this.room?.state?.players?.get(this.sessionId);
     this.traderUI?.open({
       ...payload,
@@ -15190,7 +15629,7 @@ export class WorldScene extends Phaser.Scene {
       !trader ||
       trader.alive === false ||
       trader.isDead ||
-      !playerNearEntity(me.x, me.y, trader.x, trader.y)
+      !playerNearEntity(me.x, me.y, trader.x, trader.y, this.npcTalkRange(me))
     ) {
       this.closeTraderUI();
     }
@@ -15281,6 +15720,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -15337,6 +15777,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -15364,6 +15805,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
     if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
     if (this.traderUI?.isOpen()) this.closeTraderUI();
+    if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -15472,18 +15914,38 @@ export class WorldScene extends Phaser.Scene {
     const npcId = this.ashenTraderDialogUI.getNpcId();
     if (!npcId) return;
     const me = this.room.state.players.get(this.sessionId);
-    if (!me?.alive || (me.equippedWeaponIndex ?? -1) >= 0 || me.inInterior) {
+    if (!me?.alive || (me.equippedWeaponIndex ?? -1) >= 0) {
       this.closeAshenTraderDialog();
       return;
     }
     const npc = this.guardSprites.get(npcId)?.getData("server") as
-      | { x: number; y: number; alive?: boolean; isDead?: boolean }
+      | {
+          x: number;
+          y: number;
+          alive?: boolean;
+          isDead?: boolean;
+          inInterior?: boolean;
+          buildingX?: number;
+          buildingY?: number;
+        }
       | undefined;
     if (!npc || npc.alive === false || npc.isDead) {
       this.closeAshenTraderDialog();
       return;
     }
-    if (!playerNearEntity(me.x, me.y, npc.x, npc.y)) {
+    if (me.inInterior || npc.inInterior) {
+      if (
+        !me.inInterior ||
+        !npc.inInterior ||
+        me.buildingX !== npc.buildingX ||
+        me.buildingY !== npc.buildingY ||
+        !isAshenTraderWarehouse(me.buildingX, me.buildingY)
+      ) {
+        this.closeAshenTraderDialog();
+        return;
+      }
+    }
+    if (!playerNearEntity(me.x, me.y, npc.x, npc.y, this.npcTalkRange(me))) {
       this.closeAshenTraderDialog();
     }
   }

@@ -975,6 +975,12 @@ export function removeItemFromInventory(
   return next;
 }
 
+/** How many more of `itemId` the pack can hold. */
+export function inventoryAddRoom(inventory: Inventory, itemId: string): number {
+  if (!getItemDefinition(itemId)) return 0;
+  return remainingAddCapacity(inventory, itemId);
+}
+
 function remainingAddCapacity(inventory: Inventory, itemId: string): number {
   const maxStack = maxStackForItem(itemId);
   if (maxStack <= 0) return 0;
@@ -1247,6 +1253,61 @@ export function moveInventorySlot(
 
   next[fromSlot] = to;
   next[toSlot] = from;
+  return next;
+}
+
+/** Items moved by a shift-drag. Odd piles round down. Stacks of 1 cannot split. */
+export function shiftSplitQuantity(quantity: number): number {
+  if (!Number.isInteger(quantity) || quantity < 2) return 0;
+  return Math.floor(quantity / 2);
+}
+
+/** True when a shift-drag can merge half of `fromSlot` into `toSlot`. */
+export function canSplitInventoryStackHalf(
+  inventory: Inventory,
+  fromSlot: number,
+  toSlot: number,
+): boolean {
+  if (fromSlot === toSlot) return false;
+  const slotCount = Math.min(MAX_INVENTORY_SLOTS, inventory.length);
+  if (
+    fromSlot < 0 ||
+    toSlot < 0 ||
+    fromSlot >= slotCount ||
+    toSlot >= slotCount
+  ) {
+    return false;
+  }
+
+  const from = inventory[fromSlot];
+  const to = inventory[toSlot];
+  if (!from || !to || from.id !== to.id || !getItemDefinition(from.id)) {
+    return false;
+  }
+  if (!itemFitsInSlot(from.id, toSlot)) return false;
+
+  const half = shiftSplitQuantity(from.quantity);
+  const maxStack = maxStackForItem(from.id);
+  return half >= 1 && maxStack > 1 && to.quantity + half <= maxStack;
+}
+
+/**
+ * Shift-drag only merges half a stack onto a slot that already holds the
+ * same item and has room for that whole half. Empty slots and other items
+ * are refused. Returns the same array when the move is not allowed.
+ */
+export function splitInventoryStackHalf(
+  inventory: Inventory,
+  fromSlot: number,
+  toSlot: number,
+): Inventory {
+  if (!canSplitInventoryStackHalf(inventory, fromSlot, toSlot)) return inventory;
+  const half = shiftSplitQuantity(inventory[fromSlot]!.quantity);
+  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const source = next[fromSlot]!;
+  const dest = next[toSlot]!;
+  source.quantity -= half;
+  dest.quantity += half;
   return next;
 }
 

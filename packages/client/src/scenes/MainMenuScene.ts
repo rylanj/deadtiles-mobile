@@ -64,6 +64,7 @@ export class MainMenuScene extends Phaser.Scene {
         return;
       }
       this.registry.set("worldRoom", room);
+      this.registry.set("colyseusClient", connected.client);
       this.registry.set("playerId", connected.playerId);
       this.registry.set("spawnEntities", connected.spawnEntities);
       // Cover the canvas before WorldScene mounts so no fallback sprites flash.

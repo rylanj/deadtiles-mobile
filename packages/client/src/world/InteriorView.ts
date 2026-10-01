@@ -407,7 +407,8 @@ function furnitureRenderHeight(objectType: string): number {
   if (
     objectType === "canteentable1" ||
     objectType === "canteentable2" ||
-    objectType === "canteentable3"
+    objectType === "canteentable3" ||
+    objectType === "canteentable4"
   ) {
     return CANTEENTABLE_RENDER_HEIGHT;
   }
@@ -474,7 +475,8 @@ function furnitureBottomPad(objectType: string): number {
   if (
     objectType === "canteentable1" ||
     objectType === "canteentable2" ||
-    objectType === "canteentable3"
+    objectType === "canteentable3" ||
+    objectType === "canteentable4"
   ) {
     return CANTEENTABLE_BOTTOM_PAD;
   }

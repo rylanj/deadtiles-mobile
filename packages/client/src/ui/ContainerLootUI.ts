@@ -19,6 +19,8 @@ import {
   isWatchSlot,
   isMapSlot,
   itemFitsInSlot,
+  canSplitInventoryStackHalf,
+  shiftSplitQuantity,
   maxStackForItem,
   containerInventoryIsEmpty,
   parseContainerInventory,
@@ -125,7 +127,11 @@ export type ContainerLootUIHandlers = {
   onTakeFromContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onMoveInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onStoreInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
-  onMovePlayerSlot: (fromSlot: number, toSlot: number) => void;
+  onMovePlayerSlot: (
+    fromSlot: number,
+    toSlot: number,
+    splitHalf?: boolean,
+  ) => void;
   onClose: () => void;
 };
 
@@ -537,7 +543,7 @@ export class ContainerLootUI {
           const hit = el?.closest?.(".inventory-cell") as HTMLElement | null;
           return hit && this.overlay.contains(hit) ? hit : null;
         },
-        canDropOn: (target) => {
+        canDropOn: (target, shift) => {
           const toSource = target.dataset.source as DragSource | undefined;
           const toSlot = Number(target.dataset.slotIndex);
           if (!toSource || !Number.isFinite(toSlot)) return false;
@@ -555,9 +561,21 @@ export class ContainerLootUI {
           ) {
             return false;
           }
+          if (shift) {
+            return (
+              source === "player" &&
+              toSource === "player" &&
+              canSplitInventoryStackHalf(this.playerInventory, index, toSlot)
+            );
+          }
           return this.canDrop(source, slot.id, toSource, toSlot);
         },
-        onDropOn: (target) => {
+        shiftGhostQuantity: (shift) => {
+          if (!shift || source !== "player") return null;
+          const qty = shiftSplitQuantity(slot.quantity);
+          return qty >= 1 ? qty : null;
+        },
+        onDropOn: (target, shift) => {
           const toSource = target.dataset.source as DragSource | undefined;
           const toSlot = Number(target.dataset.slotIndex);
           if (!toSource || !Number.isFinite(toSlot)) return;
@@ -575,6 +593,7 @@ export class ContainerLootUI {
           ) {
             return;
           }
+          if (shift && !(source === "player" && toSource === "player")) return;
           if (!this.canDrop(source, slot.id, toSource, toSlot)) return;
 
           if (source === "container" && toSource === "player") {
@@ -582,7 +601,7 @@ export class ContainerLootUI {
           } else if (source === "container" && toSource === "container") {
             this.handlers.onMoveInContainer(containerId, index, toSlot);
           } else if (source === "player" && toSource === "player") {
-            this.handlers.onMovePlayerSlot(index, toSlot);
+            this.handlers.onMovePlayerSlot(index, toSlot, shift);
           } else if (
             source === "player" &&
             toSource === "container" &&

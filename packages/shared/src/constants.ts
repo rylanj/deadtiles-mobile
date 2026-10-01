@@ -225,6 +225,20 @@ export const BARRACKS_GATE_WARN_RADIUS = 5;
 export const BARRACKS_GATE_WARN_LEAVE_RADIUS = 6;
 export const BARRACKS_GATE_WARN_LINE =
   "This is a restricted area. You need to leave.";
+/**
+ * Market door: one outside trader guard speaks when a Hostile or Exiled
+ * player comes this close. Leave radius is larger so the edge does not spam.
+ */
+export const ASHEN_MARKET_DOOR_WARN_RADIUS = 5;
+export const ASHEN_MARKET_DOOR_WARN_LEAVE_RADIUS = 7;
+export const ASHEN_MARKET_DOOR_LINES = [
+  "We don't want your kind inside.",
+  "We don't do business with your kind.",
+  "We don't want your kind in this market.",
+  "We don't do business with your kind. Move along.",
+  "Your kind isn't coming in. We don't want you inside.",
+  "Turn around. We don't do business with your kind.",
+] as const;
 /** Bargate1_Active frames when a Friendly+ player uses the barracks gate. */
 export const BARRACKS_BARGATE_ACTIVE_FRAMES = 5;
 /** Ms per Active frame before the last pose is held. */
@@ -264,6 +278,13 @@ export const DOCTOR_LOBBY_DWELL_MS_MIN = 45_000;
 export const DOCTOR_LOBBY_DWELL_MS_MAX = 90_000;
 /** Idle2 clipboard check beside HospitalBed2/3. */
 export const DOCTOR_BED_DWELL_MS = 60_000;
+
+/** Ashen market shelf guard: Idle2 clipboard check facing a big shelf. */
+export const MARKET_SHELF_LOOK_MS_MIN = 4_000;
+export const MARKET_SHELF_LOOK_MS_MAX = 8_000;
+/** Brief stand between walks around the market shelves. */
+export const MARKET_SHELF_PAUSE_MS_MIN = 1_200;
+export const MARKET_SHELF_PAUSE_MS_MAX = 2_800;
 
 /**
  * Captain Davis mess hall wander: Idle pause in the barracks mess hall

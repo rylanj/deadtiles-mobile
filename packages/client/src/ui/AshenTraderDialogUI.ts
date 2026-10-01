@@ -2,6 +2,7 @@ import {
   ASHEN_REP_START,
   ASHEN_TRADER_DIALOG_LINES,
   ASHEN_TRADERS_FACTION,
+  isAshenMarketTraderId,
   GUARD_NPC_TRADER_GUARD,
   GUARD_NPC_TRADER_MAN,
   ashenStanding,
@@ -14,8 +15,10 @@ import { playerAvatarSrc } from "./playerAvatar";
 
 export type AshenTraderDialogUIHandlers = {
   onClose: () => void;
-  /** Player chose "Do you want to trade?" with a TraderMan. */
+  /** Player chose "Let's see what you have to trade" with a TraderMan. */
   onRequestTrade: (traderId: string) => void;
+  /** Player chose the Birchport player board with the market trader. */
+  onRequestBoard: (traderId: string) => void;
 };
 
 const TRADER_MAN_AVATAR = "/assets/UI/TraderMan1/TraderMan1_Avatar.png";
@@ -172,6 +175,12 @@ export class AshenTraderDialogUI {
     this.updateStandingPill();
     this.speechListEl.replaceChildren();
     for (const line of ASHEN_TRADER_DIALOG_LINES) {
+      if (
+        line.action === "board" &&
+        (!this.isTraderMan() || !isAshenMarketTraderId(this.npcId))
+      ) {
+        continue;
+      }
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "red-dialog-speech-btn ashen-dialog-speech-btn";
@@ -188,6 +197,11 @@ export class AshenTraderDialogUI {
           const traderId = this.npcId;
           this.handlers.onClose();
           this.handlers.onRequestTrade(traderId);
+        }
+        if (line.action === "board" && this.isTraderMan() && this.npcId) {
+          const traderId = this.npcId;
+          this.handlers.onClose();
+          this.handlers.onRequestBoard(traderId);
         }
       });
       this.speechListEl.appendChild(btn);

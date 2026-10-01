@@ -14,8 +14,13 @@ export type SlotPointerDnDOptions = {
   getLastTap: () => SlotTapState;
   setLastTap: (tap: SlotTapState) => void;
   resolveTarget: (el: Element | null) => HTMLElement | null;
-  canDropOn: (target: HTMLElement) => boolean;
-  onDropOn: (target: HTMLElement) => void;
+  canDropOn: (target: HTMLElement, shift: boolean) => boolean;
+  onDropOn: (target: HTMLElement, shift: boolean) => void;
+  /**
+   * Quantity drawn on the ghost while shift is held.
+   * Null keeps the stack's normal label.
+   */
+  shiftGhostQuantity?: (shift: boolean) => number | null;
   onDragBegan?: () => void;
   onDragEnded?: () => void;
   /** Double-click / double-tap action (take / equip). */
@@ -111,11 +116,17 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   let pointerId: number | null = null;
   let startX = 0;
   let startY = 0;
+  let lastX = 0;
+  let lastY = 0;
   let dragging = false;
+  let shiftHeld = false;
+  let shownShift = false;
   let ghost: HTMLElement | null = null;
+  let ghostQtyOriginal = "";
   let hoverTarget: HTMLElement | null = null;
   let suppressClick = false;
   let active: ActiveSlotDrag | null = null;
+  let shiftListener: ((event: KeyboardEvent) => void) | null = null;
 
   const destroyGhost = () => {
     ghost?.remove();
@@ -129,18 +140,46 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
     ghost.style.transform = `translate(${clientX + 12}px, ${clientY + 12}px)`;
   };
 
+  const applyGhostQuantity = () => {
+    if (!ghost || !opts.shiftGhostQuantity) return;
+    const el = ghost.querySelector(".inventory-cell-qty");
+    if (!(el instanceof HTMLElement)) return;
+    const qty = opts.shiftGhostQuantity(shiftHeld);
+    el.textContent = qty == null ? ghostQtyOriginal : String(qty);
+  };
+
+  const stopShiftWatch = () => {
+    if (!shiftListener) return;
+    window.removeEventListener("keydown", shiftListener, true);
+    window.removeEventListener("keyup", shiftListener, true);
+    shiftListener = null;
+  };
+
+  const startShiftWatch = () => {
+    if (shiftListener) return;
+    shiftListener = (event: KeyboardEvent) => {
+      if (event.key !== "Shift") return;
+      shiftHeld = event.shiftKey;
+      applyGhostQuantity();
+      updateHover(lastX, lastY);
+    };
+    window.addEventListener("keydown", shiftListener, true);
+    window.addEventListener("keyup", shiftListener, true);
+  };
+
   const updateHover = (clientX: number, clientY: number) => {
     if (ghost) ghost.style.visibility = "hidden";
     const el = document.elementFromPoint(clientX, clientY);
     if (ghost) ghost.style.visibility = "visible";
 
     const target = opts.resolveTarget(el);
-    if (target === hoverTarget) return;
+    if (target === hoverTarget && shownShift === shiftHeld) return;
 
+    shownShift = shiftHeld;
     opts.clearHover();
     hoverTarget = target;
     if (target && target !== cell) {
-      opts.setHover(target, opts.canDropOn(target));
+      opts.setHover(target, opts.canDropOn(target, shiftHeld));
     }
   };
 
@@ -153,9 +192,13 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   const endDrag = (clientX: number, clientY: number, cancelled: boolean) => {
     const wasDragging = dragging;
     const dropTarget = wasDragging && !cancelled ? hoverTarget : null;
+    const dropShift = shiftHeld;
 
     dragging = false;
     pointerId = null;
+    shiftHeld = false;
+    shownShift = false;
+    stopShiftWatch();
     unregisterActive();
     destroyGhost();
     cell.classList.remove("inventory-cell--dragging");
@@ -164,8 +207,12 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
 
     if (wasDragging) {
       suppressClick = true;
-      if (dropTarget && dropTarget !== cell && opts.canDropOn(dropTarget)) {
-        opts.onDropOn(dropTarget);
+      if (
+        dropTarget &&
+        dropTarget !== cell &&
+        opts.canDropOn(dropTarget, dropShift)
+      ) {
+        opts.onDropOn(dropTarget, dropShift);
       }
       opts.setLastTap(null);
       opts.onDragEnded?.();
@@ -245,6 +292,9 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
 
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    shiftHeld = event.shiftKey;
 
     if (!dragging) {
       if (Math.hypot(dx, dy) < SLOT_DRAG_THRESHOLD_PX) return;
@@ -252,6 +302,7 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
       opts.setLastTap(null);
       opts.onDragBegan?.();
       cell.classList.add("inventory-cell--dragging");
+      startShiftWatch();
 
       clearDragLayer();
       ghost = cell.cloneNode(true) as HTMLElement;
@@ -272,6 +323,9 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
       ghost.style.opacity = "0.92";
       ghost.style.visibility = "visible";
       getDragLayer().appendChild(ghost);
+      const qtyEl = ghost.querySelector(".inventory-cell-qty");
+      ghostQtyOriginal = qtyEl instanceof HTMLElement ? qtyEl.textContent ?? "" : "";
+      applyGhostQuantity();
       moveGhost(event.clientX, event.clientY);
 
       active = {
@@ -284,6 +338,7 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
 
     event.preventDefault();
     moveGhost(event.clientX, event.clientY);
+    applyGhostQuantity();
     updateHover(event.clientX, event.clientY);
   });
 

@@ -545,6 +545,9 @@ export function traderManDieFrameKey(dir: DirectionLabel, frame: number) {
 export function traderGuardIdleKey(dir: DirectionLabel) {
   return `traderguard1-idle-${dir}`;
 }
+export function traderGuardIdle2Key(dir: DirectionLabel) {
+  return `traderguard1-idle2-${dir}`;
+}
 export function traderGuardWalkFrameKey(dir: DirectionLabel, frame: number) {
   return `traderguard1-walk-${dir}-${animFrameTag(frame)}`;
 }
@@ -1172,6 +1175,19 @@ function applyTraderGuardIdle(sprite: Phaser.GameObjects.Sprite, dir: DirectionL
   applyEntitySpriteFrame(sprite, traderGuardIdleKey(dir), HUMAN_FEET_ORIGIN_Y);
 }
 
+function applyTraderGuardIdle2(sprite: Phaser.GameObjects.Sprite, dir: DirectionLabel) {
+  if (!traderGuardPackReady()) {
+    applyTraderGuardIdle(sprite, dir);
+    return;
+  }
+  const key = traderGuardIdle2Key(dir);
+  if (!textureKeyExists(sprite.scene, key)) {
+    applyTraderGuardIdle(sprite, dir);
+    return;
+  }
+  applyEntitySpriteFrame(sprite, key, HUMAN_FEET_ORIGIN_Y);
+}
+
 function applyTraderGuardWalk(
   sprite: Phaser.GameObjects.Sprite,
   dir: DirectionLabel,
@@ -1416,6 +1432,8 @@ export function updateEntityVisual(
         applyTraderGuardFirePistol(sprite, dir, (state.attackFrame ?? 0) + 1);
       } else if (isWalking) {
         applyTraderGuardWalk(sprite, dir, state.animFrame);
+      } else if (state.anim === "idle2") {
+        applyTraderGuardIdle2(sprite, dir);
       } else {
         applyTraderGuardIdle(sprite, dir);
       }

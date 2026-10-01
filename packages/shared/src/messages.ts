@@ -1,4 +1,5 @@
 import { isStructureBuildKind, type StructureBuildKind } from "./buildCosts.js";
+import { MARKET_PRICE_MAX } from "./playerMarket.js";
 import { COOK_SLOT_COUNT, isRawMeat } from "./cooking.js";
 import type { FreeAimSurface } from "./combat.js";
 import {
@@ -78,6 +79,8 @@ export type DropItemMessage = {
 export type MoveInventorySlotMessage = {
   fromSlot: number;
   toSlot: number;
+  /** Move half the stack onto a slot that already holds the same item. */
+  splitHalf?: boolean;
 };
 
 export type TakeFromContainerMessage = {
@@ -130,6 +133,57 @@ export type TradeConfirmMessage = {
   traderId: string;
   sells: TradeOfferSellLineMessage[];
   buys: TradeOfferBuyLineMessage[];
+};
+
+/** Open the Birchport player board at the market trader. */
+export type MarketOpenMessage = {
+  traderId: string;
+};
+
+/** Escrow a stack onto the player board. Price is the whole listing, in banknotes. */
+export type MarketListMessage = {
+  traderId: string;
+  slotIndex: number;
+  itemId: string;
+  quantity: number;
+  price: number;
+};
+
+export type MarketListingIdMessage = {
+  traderId: string;
+  listingId: number;
+};
+
+export type MarketCollectMessage = {
+  traderId: string;
+};
+
+export type MarketBrowseMessage = {
+  traderId: string;
+  page: number;
+  sort: "new" | "cheap";
+  query: string;
+};
+
+/** Authoritative player-board snapshot. Listings and the desk are JSON. */
+export type MarketStatePayload = {
+  traderId: string;
+  inventoryJson: string;
+  weaponMagazinesJson: string;
+  equippedInventorySlot: number;
+  equippedWeaponIndex: number;
+  magazineRounds: number;
+  ashenReputation: number;
+  listingsJson: string;
+  deskJson: string;
+  boardPage?: number;
+  boardPages?: number;
+  boardTotal?: number;
+  boardSort?: "new" | "cheap";
+  /** Search text this page was built from. */
+  boardQuery?: string;
+  /** Close the market dialog after this snapshot. */
+  close?: boolean;
 };
 
 /** Open a talk dialog with a Red Order NPC. */
@@ -348,6 +402,14 @@ export type ClientMessage =
   | { type: "tradeOpen"; payload: TradeOpenMessage }
   | { type: "tradeConfirm"; payload: TradeConfirmMessage }
   | { type: "tradeClose" }
+  | { type: "marketOpen"; payload: MarketOpenMessage }
+  | { type: "marketList"; payload: MarketListMessage }
+  | { type: "marketBuy"; payload: MarketListingIdMessage }
+  | { type: "marketCancel"; payload: MarketListingIdMessage }
+  | { type: "marketCollect"; payload: MarketCollectMessage }
+  | { type: "marketCollectPayout"; payload: MarketListingIdMessage }
+  | { type: "marketBrowse"; payload: MarketBrowseMessage }
+  | { type: "marketClose" }
   | { type: "dialogOpen"; payload: DialogOpenMessage }
   | { type: "dialogCompleteTask"; payload: DialogCompleteTaskMessage }
   | { type: "dialogHeal"; payload: DialogHealMessage }
@@ -401,6 +463,7 @@ const NO_PAYLOAD_TYPES = new Set([
   "buildCancel",
   "chopTreeCancel",
   "tradeClose",
+  "marketClose",
   "dialogClose",
   "craftClose",
   "fireplaceClose",
@@ -543,9 +606,14 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isIntInRange(p.fromSlot, 0, 63) || !isIntInRange(p.toSlot, 0, 63)) {
         return null;
       }
+      if (p.splitHalf !== undefined && p.splitHalf !== true) return null;
       return {
         type,
-        payload: { fromSlot: p.fromSlot, toSlot: p.toSlot },
+        payload: {
+          fromSlot: p.fromSlot,
+          toSlot: p.toSlot,
+          ...(p.splitHalf === true ? { splitHalf: true as const } : {}),
+        },
       };
     }
     case "takeFromContainer":
@@ -567,6 +635,52 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     case "tradeOpen": {
       if (!isIdString(p.traderId)) return null;
       return { type, payload: { traderId: p.traderId } };
+    }
+    case "marketOpen":
+    case "marketCollect": {
+      if (!isIdString(p.traderId)) return null;
+      return { type, payload: { traderId: p.traderId } };
+    }
+    case "marketList": {
+      if (!isIdString(p.traderId) || !isIdString(p.itemId)) return null;
+      if (!isIntInRange(p.slotIndex, 0, 63)) return null;
+      if (!isIntInRange(p.quantity, 1, 100_000)) return null;
+      if (!isIntInRange(p.price, 1, MARKET_PRICE_MAX)) return null;
+      return {
+        type,
+        payload: {
+          traderId: p.traderId,
+          slotIndex: p.slotIndex,
+          itemId: p.itemId,
+          quantity: p.quantity,
+          price: p.price,
+        },
+      };
+    }
+    case "marketBrowse": {
+      if (!isIdString(p.traderId)) return null;
+      if (!isIntInRange(p.page, 0, 10_000)) return null;
+      if (p.sort !== "new" && p.sort !== "cheap") return null;
+      if (typeof p.query !== "string" || p.query.length > 40) return null;
+      return {
+        type,
+        payload: {
+          traderId: p.traderId,
+          page: p.page,
+          sort: p.sort,
+          query: p.query,
+        },
+      };
+    }
+    case "marketBuy":
+    case "marketCancel":
+    case "marketCollectPayout": {
+      if (!isIdString(p.traderId)) return null;
+      if (!isIntInRange(p.listingId, 1, 2_000_000_000)) return null;
+      return {
+        type,
+        payload: { traderId: p.traderId, listingId: p.listingId },
+      };
     }
     case "tradeConfirm": {
       if (!isIdString(p.traderId)) return null;
@@ -830,6 +944,14 @@ export type ServerMessage =
         stockJson: string;
         inventoryJson: string;
       };
+    }
+  | {
+      type: "marketOpen";
+      payload: MarketStatePayload;
+    }
+  | {
+      type: "marketSync";
+      payload: MarketStatePayload;
     }
   | {
       type: "dialogOpen";
@@ -1162,7 +1284,12 @@ export type ServerMessage =
   | {
       /** Owner-only note. Shown as a popup, not a chat bubble. */
       type: "playerNote";
-      payload: { text: string; iconId?: string; durationMs?: number };
+      payload: {
+        text: string;
+        iconId?: string;
+        durationMs?: number;
+        items?: { id?: string; name: string; quantity: number }[];
+      };
     };
 
 /** One-shot / channelled world audio other clients in earshot should play. */

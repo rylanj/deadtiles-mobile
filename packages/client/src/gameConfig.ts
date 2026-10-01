@@ -7,7 +7,7 @@ export const IS_MOBILE = isMobileDevice();
  * Client overworld draw radius cap (tiles each direction from the player).
  * Mobile: fixed square. Desktop: camera-visible tiles, clamped to this max.
  */
-export const CLIENT_RENDER_RADIUS = IS_MOBILE ? 22 : 100;
+export const CLIENT_RENDER_RADIUS = IS_MOBILE ? 32 : 100;
 
 export const CAMERA_ZOOM_MAX = 2;
 /** Scroll-wheel zoom sensitivity (zoom change per wheel deltaY unit). */

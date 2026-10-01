@@ -326,6 +326,10 @@ function scheduleTraderGuardPack(track: TrackFn) {
       `traderguard1-idle-${dir}`,
       `TraderGuard1/Idle/TraderGuard1_Idle_${dir}.png`,
     );
+    track(
+      `traderguard1-idle2-${dir}`,
+      `TraderGuard1/Idle2/TraderGuard1_Idle2_${dir}.png`,
+    );
     for (let f = 1; f <= 8; f++) {
       const tag = animFrameTag(f);
       track(

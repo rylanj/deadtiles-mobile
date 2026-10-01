@@ -108,7 +108,8 @@ export function interiorFurnitureDepthBias(objectType: string): number {
   if (
     objectType === "canteentable1" ||
     objectType === "canteentable2" ||
-    objectType === "canteentable3"
+    objectType === "canteentable3" ||
+    objectType === "canteentable4"
   ) {
     return LONG_BED_DEPTH_BIAS;
   }

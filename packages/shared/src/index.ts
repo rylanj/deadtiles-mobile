@@ -10,6 +10,7 @@ export * from "./items.js";
 export * from "./infection.js";
 export * from "./factionRep.js";
 export * from "./trade.js";
+export * from "./playerMarket.js";
 export * from "./ashenMilitia.js";
 export * from "./redOrder.js";
 export * from "./dialogVariants.js";
