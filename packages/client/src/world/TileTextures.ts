@@ -17,6 +17,7 @@ const GROUND_TEXTURE_KEYS = [
   "tile-ground-tiles",
   "tile-hospital",
   "tile-motel",
+  "tile-office",
 ] as const;
 
 const GROUND_SOURCE_SUFFIX = "__source";
@@ -150,7 +151,7 @@ function canvasHasOpaquePixels(canvas: HTMLCanvasElement): boolean {
  * Bake a ground tile diamond.
  *
  * Square interior floors (`tile-wood`, `tile-ground-tiles`, `tile-hospital`,
- * `tile-motel`, `tile-barracks`) map the PNG onto the iso diamond so PNG top → NW–NE edge
+ * `tile-motel`, `tile-office`, `tile-barracks`) map the PNG onto the iso diamond so PNG top → NW–NE edge
  * (isometric northeast), not screen-up:
  *   top-left  → NW (top vertex)
  *   top-right → NE (right vertex)
@@ -189,6 +190,7 @@ function bakeDiamondCanvas(
       baseKey === "tile-ground-tiles" ||
       baseKey === "tile-hospital" ||
       baseKey === "tile-motel" ||
+      baseKey === "tile-office" ||
       baseKey === "tile-barracks") &&
     isSquareSource(srcW, srcH);
   if (isoMapSquare) {

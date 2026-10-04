@@ -1,6 +1,19 @@
 import {
+  backpackOverflowWorsened,
+  sealedBackpackStackCount,
+  BACKPACK_SLOT_INDEX,
+  BACKPACK_STORAGE_START,
   BASE_INVENTORY_SLOTS,
   CLOTHING_SLOT_INDEX,
+  POCKET_SLOT_COUNT,
+  retiredPocketIndices,
+  shownBackpackStorageCount,
+  inventorySlotAccess,
+  isBackpackItem,
+  isBackpackSlot,
+  isBackpackStorageIndex,
+  moveInventorySlot,
+  shownExtraPockets,
   CONTAINER_INVENTORY_SLOTS,
   parseStorageBoxInventory,
   storageBoxSlotsForObjectType,
@@ -28,7 +41,7 @@ import {
   type Inventory,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
-import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar } from "./itemIcons";
+import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import {
@@ -40,6 +53,9 @@ import {
 const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   desk: "Desk",
   desk2: "Desk",
+  desk3: "Desk",
+  conferencetable: "Conference Table",
+  copier: "Copier",
   bigshelf: "Shelf",
   bigbox: "Crate",
   watercontainer: "Water Container",
@@ -58,6 +74,8 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   nightstand: "Nightstand",
   deadofficer: "Dead Officer",
   bagchair: "Chair",
+  armchair: "Armchair",
+  sofa: "Sofa",
   suitcase: "Suitcase",
   watercooler: "Water Cooler",
   trashcan: "Trash Can",
@@ -79,7 +97,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   counter: "Counter",
   motelbed: "Bed",
   minifridge: "Mini Fridge",
-  groundbackpack: "Backpack",
+  groundbackpack: "Dropped Items",
   militarybed: "Camp Bed",
   footlocker: "Footlocker",
   kitbag: "Kit Bag",
@@ -138,11 +156,13 @@ export type ContainerLootUIHandlers = {
 const CATEGORY_COLORS: Record<string, string> = {
   weapons: "#8b4558",
   clothing: "#4a6a8a",
+  backpack: "#5c6b45",
   equipment: "#5a6a4a",
   ammunition: "#6b7a3a",
   medical: "#3a7070",
   crafting: "#6a6040",
   junk: "#5a5a4a",
+  magazine: "#4d5d73",
   food: "#8a6840",
   drink: "#406080",
 };
@@ -162,6 +182,7 @@ export class ContainerLootUI {
   private piles: LootPileView[] = [];
   private containerInventory: Inventory = [];
   private playerInventory: Inventory = [];
+  private extraPockets = 0;
   private dragFromSlot = -1;
   private dragFromSource: DragSource | null = null;
   /** Last tap on a container cell — used for mobile double-tap take. */
@@ -172,8 +193,11 @@ export class ContainerLootUI {
   private containerSlotsEl: HTMLElement;
   private playerSlotsEl: HTMLElement;
   private playerWeaponsEl: HTMLElement;
+  private playerRadioEl: HTMLElement;
   private playerEquipmentEl: HTMLElement;
   private playerPocketsEl: HTMLElement;
+  private playerBackpackSection: HTMLElement;
+  private playerBackpackEl: HTMLElement;
   private hintEl: HTMLElement;
 
   constructor(private handlers: ContainerLootUIHandlers) {
@@ -222,26 +246,37 @@ export class ContainerLootUI {
     playerTitle.textContent = "Inventory";
     const playerHint = document.createElement("span");
     playerHint.className = "inventory-hint";
-    playerHint.textContent = "Weapons · Clothing · Watch · Radio · Map · Pockets";
+    playerHint.textContent = "Weapons · Radio · Clothing · Backpack · Watch · Map · Pockets";
     playerHeader.append(playerTitle, playerHint);
 
     const playerBody = document.createElement("div");
-    playerBody.className = "inventory-grid-wrap";
+    playerBody.className = "inventory-grid-wrap container-loot-player-body";
 
     const weaponsSection = document.createElement("div");
     weaponsSection.className = "inventory-section";
+    const weaponRowLabels = document.createElement("div");
+    weaponRowLabels.className = "inventory-weapon-row-labels";
     const weaponsLabel = document.createElement("div");
-    weaponsLabel.className = "inventory-section-label";
+    weaponsLabel.className = "inventory-section-label inventory-weapon-row-label";
     weaponsLabel.textContent = "Weapons";
+    const radioLabel = document.createElement("div");
+    radioLabel.className = "inventory-section-label inventory-radio-row-label";
+    radioLabel.textContent = "Radio";
+    weaponRowLabels.append(weaponsLabel, radioLabel);
+    const weaponRow = document.createElement("div");
+    weaponRow.className = "inventory-weapon-row";
     this.playerWeaponsEl = document.createElement("div");
     this.playerWeaponsEl.className = "inventory-grid inventory-grid--weapons";
-    weaponsSection.append(weaponsLabel, this.playerWeaponsEl);
+    this.playerRadioEl = document.createElement("div");
+    this.playerRadioEl.className = "inventory-grid inventory-grid--radio";
+    weaponRow.append(this.playerWeaponsEl, this.playerRadioEl);
+    weaponsSection.append(weaponRowLabels, weaponRow);
 
     const equipmentSection = document.createElement("div");
     equipmentSection.className = "inventory-section";
     const equipmentLabels = document.createElement("div");
     equipmentLabels.className = "inventory-equipment-labels";
-    for (const text of ["Clothing", "Watch", "Radio", "Map"]) {
+    for (const text of ["Clothing", "Backpack", "Watch", "Map"]) {
       const lab = document.createElement("div");
       lab.className = "inventory-section-label";
       lab.textContent = text;
@@ -260,9 +295,23 @@ export class ContainerLootUI {
     this.playerPocketsEl.className = "inventory-grid inventory-grid--pockets";
     pocketsSection.append(pocketsLabel, this.playerPocketsEl);
 
+    this.playerBackpackSection = document.createElement("div");
+    this.playerBackpackSection.className = "inventory-section";
+    this.playerBackpackSection.hidden = true;
+    const backpackLabel = document.createElement("div");
+    backpackLabel.className = "inventory-section-label";
+    backpackLabel.textContent = "Backpack";
+    this.playerBackpackEl = document.createElement("div");
+    this.playerBackpackEl.className = "inventory-grid inventory-grid--pockets";
+    this.playerBackpackSection.append(backpackLabel, this.playerBackpackEl);
+
+    const carryScroll = document.createElement("div");
+    carryScroll.className = "inventory-carry-scroll";
+    carryScroll.append(pocketsSection, this.playerBackpackSection);
+
     this.playerSlotsEl = document.createElement("div");
     this.playerSlotsEl.className = "container-loot-player-grids";
-    this.playerSlotsEl.append(weaponsSection, equipmentSection, pocketsSection);
+    this.playerSlotsEl.append(weaponsSection, equipmentSection, carryScroll);
     playerBody.appendChild(this.playerSlotsEl);
     playerPanel.append(playerHeader, playerBody);
 
@@ -281,6 +330,7 @@ export class ContainerLootUI {
     containerJson: string,
     playerInventoryJson: string,
     piles?: { containerId: string; objectType: string; containerJson: string }[],
+    extraPockets = 0,
   ) {
     const source =
       piles && piles.length > 0
@@ -296,6 +346,7 @@ export class ContainerLootUI {
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("container-loot-open");
+    this.extraPockets = extraPockets;
     this.playerInventory = parseInventory(playerInventoryJson);
     this.containerInventory = this.piles[0]?.inventory ?? [];
     this.titleEl.textContent =
@@ -352,8 +403,9 @@ export class ContainerLootUI {
     this.rebuildGrids();
   }
 
-  syncPlayerInventory(playerInventoryJson: string) {
+  syncPlayerInventory(playerInventoryJson: string, extraPockets = this.extraPockets) {
     if (!this.visible) return;
+    this.extraPockets = extraPockets;
     this.playerInventory = parseInventory(playerInventoryJson);
     this.rebuildGrids();
   }
@@ -395,14 +447,23 @@ export class ContainerLootUI {
       this.containerSlotsEl.appendChild(block);
     }
     this.playerWeaponsEl.replaceChildren();
+    this.playerRadioEl.replaceChildren();
     this.playerEquipmentEl.replaceChildren();
     this.playerPocketsEl.replaceChildren();
+    this.playerBackpackEl.replaceChildren();
 
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       this.playerWeaponsEl.appendChild(
         this.createCell("player", i, this.playerInventory[i] ?? null),
       );
     }
+    this.playerRadioEl.appendChild(
+      this.createCell(
+        "player",
+        RADIO_SLOT_INDEX,
+        this.playerInventory[RADIO_SLOT_INDEX] ?? null,
+      ),
+    );
     this.playerEquipmentEl.append(
       this.createCell(
         "player",
@@ -411,13 +472,13 @@ export class ContainerLootUI {
       ),
       this.createCell(
         "player",
-        WATCH_SLOT_INDEX,
-        this.playerInventory[WATCH_SLOT_INDEX] ?? null,
+        BACKPACK_SLOT_INDEX,
+        this.playerInventory[BACKPACK_SLOT_INDEX] ?? null,
       ),
       this.createCell(
         "player",
-        RADIO_SLOT_INDEX,
-        this.playerInventory[RADIO_SLOT_INDEX] ?? null,
+        WATCH_SLOT_INDEX,
+        this.playerInventory[WATCH_SLOT_INDEX] ?? null,
       ),
       this.createCell(
         "player",
@@ -425,14 +486,30 @@ export class ContainerLootUI {
         this.playerInventory[MAP_SLOT_INDEX] ?? null,
       ),
     );
-    for (let i = WEAPON_SLOT_COUNT; i < CLOTHING_SLOT_INDEX; i++) {
+    for (let i = 0; i < POCKET_SLOT_COUNT; i++) {
+      const idx = WEAPON_SLOT_COUNT + i;
       this.playerPocketsEl.appendChild(
-        this.createCell("player", i, this.playerInventory[i] ?? null),
+        this.createCell("player", idx, this.playerInventory[idx] ?? null),
       );
     }
-    for (let i = BASE_INVENTORY_SLOTS; i < this.playerInventory.length; i++) {
+    for (const idx of retiredPocketIndices(this.playerInventory)) {
       this.playerPocketsEl.appendChild(
-        this.createCell("player", i, this.playerInventory[i] ?? null),
+        this.createCell("player", idx, this.playerInventory[idx] ?? null),
+      );
+    }
+    const extra = shownExtraPockets(this.playerInventory, this.extraPockets);
+    for (let i = 0; i < extra; i++) {
+      const idx = BASE_INVENTORY_SLOTS + i;
+      this.playerPocketsEl.appendChild(
+        this.createCell("player", idx, this.playerInventory[idx] ?? null),
+      );
+    }
+    const packSlots = shownBackpackStorageCount(this.playerInventory);
+    this.playerBackpackSection.hidden = packSlots <= 0;
+    for (let i = 0; i < packSlots; i++) {
+      const idx = BACKPACK_STORAGE_START + i;
+      this.playerBackpackEl.appendChild(
+        this.createCell("player", idx, this.playerInventory[idx] ?? null),
       );
     }
   }
@@ -463,6 +540,12 @@ export class ContainerLootUI {
     if (source === "player" && isMapSlot(index)) {
       cell.classList.add("inventory-cell--map");
     }
+    if (source === "player" && isBackpackSlot(index)) {
+      cell.classList.add("inventory-cell--backpack");
+    }
+    if (source === "player" && isBackpackStorageIndex(index)) {
+      cell.classList.add("inventory-cell--backpack-storage");
+    }
     if (source === "player" && index < WEAPON_SLOT_COUNT) {
       cell.classList.add("inventory-cell--weapon");
       const keyEl = document.createElement("span");
@@ -482,6 +565,7 @@ export class ContainerLootUI {
       const category = def?.category ?? "crafting";
       cell.style.setProperty("--slot-accent", CATEGORY_COLORS[category] ?? "#555");
       cell.classList.add("inventory-cell--filled");
+      markQuestKeepsake(cell, slot.id);
 
       if (!appendItemIcon(cell, slot.id, "inventory-cell-icon")) {
         const label = document.createElement("span");
@@ -490,10 +574,14 @@ export class ContainerLootUI {
         cell.appendChild(label);
       }
 
-      if (slot.quantity > 1) {
+      const packedCount = sealedBackpackStackCount(slot);
+      if (slot.quantity > 1 || packedCount > 0) {
         const qty = document.createElement("span");
         qty.className = "inventory-cell-qty";
-        qty.textContent = String(slot.quantity);
+        qty.textContent = String(slot.quantity > 1 ? slot.quantity : packedCount);
+        if (packedCount > 0 && slot.quantity <= 1) {
+          qty.title = packedCount === 1 ? "1 item inside" : `${packedCount} items inside`;
+        }
         cell.appendChild(qty);
       }
       const radioFreq = getEntryRadioFreq(slot);
@@ -509,6 +597,8 @@ export class ContainerLootUI {
       cell.setAttribute(
         "aria-label",
         `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${
+          packedCount > 0 ? ` · ${packedCount} inside` : ""
+        }${
           getEntryRadioFreq(slot) > 0 ? ` · freq ${getEntryRadioFreq(slot)}` : ""
         }${
           getMaxDurability(slot.id) != null
@@ -565,7 +655,12 @@ export class ContainerLootUI {
             return (
               source === "player" &&
               toSource === "player" &&
-              canSplitInventoryStackHalf(this.playerInventory, index, toSlot)
+              canSplitInventoryStackHalf(
+                this.playerInventory,
+                index,
+                toSlot,
+                this.extraPockets,
+              )
             );
           }
           return this.canDrop(source, slot.id, toSource, toSlot);
@@ -646,18 +741,24 @@ export class ContainerLootUI {
     toSource: DragSource,
     toSlot: number,
   ): boolean {
+    const access = inventorySlotAccess(this.playerInventory, this.extraPockets);
     if (fromSource === "container" && toSource === "player") {
-      return itemFitsInSlot(itemId, toSlot);
+      if (!itemFitsInSlot(itemId, toSlot, access)) return false;
+      if (toSlot === BACKPACK_SLOT_INDEX && isBackpackItem(itemId)) return true;
+      const next = this.playerInventory.map((slot) => (slot ? { ...slot } : null));
+      next[toSlot] = { id: itemId, quantity: 1 };
+      return !backpackOverflowWorsened(this.playerInventory, next);
     }
     if (fromSource === "container" && toSource === "container") return true;
     if (fromSource === "player" && toSource === "player") {
-      const toItem = this.playerInventory[toSlot];
-      // Prefer active drag source; fall back is unused once drag has begun.
-      const fromSlot =
-        this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
+      const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
       return (
-        itemFitsInSlot(itemId, toSlot) &&
-        (!toItem || itemFitsInSlot(toItem.id, fromSlot))
+        moveInventorySlot(
+          this.playerInventory,
+          fromSlot,
+          toSlot,
+          this.extraPockets,
+        ) !== this.playerInventory
       );
     }
     if (
@@ -671,7 +772,7 @@ export class ContainerLootUI {
       if (!dest) return true;
       if (dest.id === itemId && maxStackForItem(itemId) > 1) return true;
       const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
-      return itemFitsInSlot(dest.id, fromSlot);
+      return itemFitsInSlot(dest.id, fromSlot, access);
     }
     return false;
   }
@@ -712,8 +813,10 @@ export class ContainerLootUI {
 
   private findFirstFittingPlayerSlot(itemId: string): number {
     const maxStack = maxStackForItem(itemId);
-    const dedicated =
-      itemId === WATCH_ITEM_ID
+    const access = inventorySlotAccess(this.playerInventory, this.extraPockets);
+    const dedicated = isBackpackItem(itemId)
+      ? BACKPACK_SLOT_INDEX
+      : itemId === WATCH_ITEM_ID
         ? WATCH_SLOT_INDEX
         : itemId === RADIO_ITEM_ID
           ? RADIO_SLOT_INDEX
@@ -722,7 +825,7 @@ export class ContainerLootUI {
             : -1;
     if (dedicated >= 0) {
       const slot = this.playerInventory[dedicated];
-      if (!slot && itemFitsInSlot(itemId, dedicated)) return dedicated;
+      if (!slot && itemFitsInSlot(itemId, dedicated, access)) return dedicated;
     }
 
     // Prefer an existing stack with room before opening a new slot.
@@ -730,14 +833,14 @@ export class ContainerLootUI {
       for (let i = 0; i < this.playerInventory.length; i++) {
         const slot = this.playerInventory[i];
         if (!slot || slot.id !== itemId) continue;
-        if (!itemFitsInSlot(itemId, i)) continue;
+        if (!itemFitsInSlot(itemId, i, access)) continue;
         if (slot.quantity < maxStack) return i;
       }
     }
 
     for (let i = 0; i < this.playerInventory.length; i++) {
       if (this.playerInventory[i]) continue;
-      if (itemFitsInSlot(itemId, i)) return i;
+      if (itemFitsInSlot(itemId, i, access)) return i;
     }
     return -1;
   }

@@ -8,6 +8,7 @@
 export type AnimatedFurnitureType =
   | "desk"
   | "desk2"
+  | "desk3"
   | "bigshelf"
   | "bigbox"
   | "watercontainer"
@@ -26,6 +27,8 @@ export type AnimatedFurnitureType =
   | "nightstand"
   | "deadofficer"
   | "bagchair"
+  | "armchair"
+  | "sofa"
   | "suitcase"
   | "watercooler"
   | "trashcan"
@@ -62,7 +65,12 @@ export type AnimatedFurnitureType =
   | "canteentable3"
   | "canteentable4"
   | "canteenchair"
-  | "lantern1";
+  | "lantern1"
+  | "conferencetable"
+  | "copier"
+  | "officechair"
+  | "whiteboard"
+  | "stairs";
 
 export type AnimatedFurnitureDef = {
   objectType: AnimatedFurnitureType;
@@ -102,6 +110,24 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     filePrefix: "Desk2",
     facing: "SE",
     frameCount: 8,
+  },
+  {
+    objectType: "desk3",
+    idleKey: "furniture-desk3-sw",
+    animKey: "furniture-desk3-sw-searched",
+    folder: "Furniture/Desk3",
+    filePrefix: "Desk3",
+    facing: "SW",
+    frameCount: 6,
+  },
+  {
+    objectType: "desk3",
+    idleKey: "furniture-desk3-se",
+    animKey: "furniture-desk3-se-searched",
+    folder: "Furniture/Desk3",
+    filePrefix: "Desk3",
+    facing: "SE",
+    frameCount: 6,
   },
   {
     objectType: "bigshelf",
@@ -354,6 +380,42 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     filePrefix: "BagChair1",
     facing: "SW",
     frameCount: 8,
+  },
+  {
+    objectType: "armchair",
+    idleKey: "furniture-armchair-se",
+    animKey: "furniture-armchair-se-searched",
+    folder: "Furniture/Armchair1",
+    filePrefix: "Armchair1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "armchair",
+    idleKey: "furniture-armchair-sw",
+    animKey: "furniture-armchair-sw-searched",
+    folder: "Furniture/Armchair1",
+    filePrefix: "Armchair1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "sofa",
+    idleKey: "furniture-sofa-se",
+    animKey: "furniture-sofa-se-searched",
+    folder: "Furniture/Sofa1",
+    filePrefix: "Sofa1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "sofa",
+    idleKey: "furniture-sofa-sw",
+    animKey: "furniture-sofa-sw-searched",
+    folder: "Furniture/Sofa1",
+    filePrefix: "Sofa1",
+    facing: "SW",
+    frameCount: 0,
   },
   {
     objectType: "suitcase",
@@ -973,6 +1035,114 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     animKey: "furniture-lantern1-sw-searched",
     folder: "Furniture/Lantern1",
     filePrefix: "Lantern1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "conferencetable",
+    idleKey: "furniture-conferencetable-se",
+    animKey: "furniture-conferencetable-se-searched",
+    folder: "Furniture/ConferenceTable1",
+    filePrefix: "ConferenceTable1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "conferencetable",
+    idleKey: "furniture-conferencetable-sw",
+    animKey: "furniture-conferencetable-sw-searched",
+    folder: "Furniture/ConferenceTable1",
+    filePrefix: "ConferenceTable1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "copier",
+    idleKey: "furniture-copier-se",
+    animKey: "furniture-copier-se-searched",
+    folder: "Furniture/Copier1",
+    filePrefix: "Copier1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "copier",
+    idleKey: "furniture-copier-sw",
+    animKey: "furniture-copier-sw-searched",
+    folder: "Furniture/Copier1",
+    filePrefix: "Copier1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "officechair",
+    idleKey: "furniture-officechair-se",
+    animKey: "furniture-officechair-se-searched",
+    folder: "Furniture/OfficeChair1",
+    filePrefix: "OfficeChair1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "officechair",
+    idleKey: "furniture-officechair-sw",
+    animKey: "furniture-officechair-sw-searched",
+    folder: "Furniture/OfficeChair1",
+    filePrefix: "OfficeChair1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "officechair",
+    idleKey: "furniture-officechair-ne",
+    animKey: "furniture-officechair-ne-searched",
+    folder: "Furniture/OfficeChair1",
+    filePrefix: "OfficeChair1",
+    facing: "NE",
+    frameCount: 0,
+  },
+  {
+    objectType: "officechair",
+    idleKey: "furniture-officechair-nw",
+    animKey: "furniture-officechair-nw-searched",
+    folder: "Furniture/OfficeChair1",
+    filePrefix: "OfficeChair1",
+    facing: "NW",
+    frameCount: 0,
+  },
+  {
+    objectType: "whiteboard",
+    idleKey: "furniture-whiteboard-se",
+    animKey: "furniture-whiteboard-se-searched",
+    folder: "Furniture/Whiteboard1",
+    filePrefix: "Whiteboard1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "whiteboard",
+    idleKey: "furniture-whiteboard-sw",
+    animKey: "furniture-whiteboard-sw-searched",
+    folder: "Furniture/Whiteboard1",
+    filePrefix: "Whiteboard1",
+    facing: "SW",
+    frameCount: 0,
+  },
+  {
+    objectType: "stairs",
+    idleKey: "furniture-stairs-se",
+    animKey: "furniture-stairs-se-searched",
+    folder: "Furniture/Stairs1",
+    filePrefix: "Stairs1",
+    facing: "SE",
+    frameCount: 0,
+  },
+  {
+    objectType: "stairs",
+    idleKey: "furniture-stairs-sw",
+    animKey: "furniture-stairs-sw-searched",
+    folder: "Furniture/Stairs1",
+    filePrefix: "Stairs1",
     facing: "SW",
     frameCount: 0,
   },

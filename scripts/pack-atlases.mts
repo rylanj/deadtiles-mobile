@@ -49,13 +49,28 @@ type Profile = {
 
 const PROFILES: Profile[] = [
   // Entities render at ENTITY_RENDER_HEIGHT (80px) and CAMERA_ZOOM_MAX is 2, so
-  // nothing is ever drawn taller than 160px. Desktop sits exactly on that
-  // ceiling: 192 was 20% above what any pixel could use, and it also forced a
-  // 2.4:1 minification at zoom 1. At 160 the common case is an exact 2:1 and
-  // full zoom is 1:1. The original 256px art was pure VRAM waste.
+  // a normal frame is never drawn taller than 160px. Desktop sits exactly on
+  // that ceiling: 192 was 20% above what any pixel could use, and it also
+  // forced a 2.4:1 minification at zoom 1. At 160 the common case is an exact
+  // 2:1 and full zoom is 1:1. The original 256px art was pure VRAM waste.
+  // ConferenceTable1 is the exception: see frameSizeCap.
   { name: "mobile", maxFrameSize: 128 },
   { name: "desktop", maxFrameSize: 160 },
 ];
+
+/**
+ * ConferenceTable1 is 512². The shared 160px cap upscales it, so the chairs
+ * and tabletop go soft next to 256 furniture that is drawn under its cap.
+ * This is the height before the extra 20% display shrink in InteriorView.
+ * Leave it here: a smaller on-screen size must not shrink the atlas.
+ */
+const CONFERENCE_ATLAS_FRAME =
+  Math.round((4 + 3) * 32 * (512 / 481) * 0.9) * 2;
+
+function frameSizeCap(key: string, profile: Profile): number {
+  if (key.startsWith("furniture-conferencetable-")) return CONFERENCE_ATLAS_FRAME;
+  return profile.maxFrameSize;
+}
 
 type PreparedFrame = {
   key: string;
@@ -181,8 +196,9 @@ async function prepareFrame(
   const longest = Math.max(srcW, srcH);
   let sourceW = srcW;
   let sourceH = srcH;
-  if (longest > profile.maxFrameSize) {
-    const factor = profile.maxFrameSize / longest;
+  const cap = frameSizeCap(key, profile);
+  if (longest > cap) {
+    const factor = cap / longest;
     sourceW = Math.max(1, Math.round(srcW * factor));
     sourceH = Math.max(1, Math.round(srcH * factor));
     image = image.resize(sourceW, sourceH, {

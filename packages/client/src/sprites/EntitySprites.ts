@@ -43,6 +43,10 @@ import {
   BEAR_RENDER_HEIGHT,
   BEAR_RUN_FRAMES,
   BEAR_WALK_FRAMES,
+  CROW_RENDER_HEIGHT,
+  CROW_FLY_RENDER_HEIGHT,
+  CROW_FLY_FRAMES,
+  CROW_DIE_FRAMES,
   type DirectionLabel,
   type IdleWeaponKey,
 } from "@zombie/shared";
@@ -194,6 +198,18 @@ export function bearDieFrameKey(dir: DirectionLabel, frame: number) {
   return `bear-die-${dir}-${animFrameTag(frame)}`;
 }
 
+export function crowIdleKey(dir: DirectionLabel) {
+  return `crow-idle-${dir}`;
+}
+
+export function crowFlyFrameKey(dir: DirectionLabel, frame: number) {
+  return `crow-fly-${dir}-${animFrameTag(frame)}`;
+}
+
+export function crowDieFrameKey(dir: DirectionLabel, frame: number) {
+  return `crow-die-${dir}-${animFrameTag(frame)}`;
+}
+
 const COYWOLF_FEET_ORIGIN_Y = 0.92;
 /**
  * Idle art fills more of its canvas than walk, so the same height makes a
@@ -229,6 +245,20 @@ function applyBearFrame(
     BEAR_FEET_ORIGIN_Y,
     renderHeight,
   );
+}
+
+/** Idle feet sit a little above the canvas bottom. Fly sheets put the body higher. */
+const CROW_FEET_ORIGIN_Y = 0.88;
+const CROW_FLY_FEET_ORIGIN_Y = 0.78;
+const CROW_DIE_FEET_ORIGIN_Y = 0.85;
+
+function applyCrowFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  textureKey: string,
+  feetOriginY: number,
+  renderHeight: number,
+) {
+  applyEntitySpriteFrame(sprite, textureKey, feetOriginY, renderHeight);
 }
 
 /** @deprecated — Survivor1 weapon-specific idle. */
@@ -641,6 +671,7 @@ export function loadSurvivorAssets(scene: Phaser.Scene) {
   scene.load.image("tile-ground-tiles", "GroundTiles.png");
   scene.load.image("tile-hospital", "GroundHospital.png");
   scene.load.image("tile-motel", "GroundMotel.png");
+  scene.load.image("tile-office", "GroundOffice.png");
 
   // Standing sprite plus the resting frame of the fall, per variant.
   //
@@ -1351,7 +1382,7 @@ function resolvePlayerIdleWeapon(state: EntityVisualState): string | undefined {
 
 export function updateEntityVisual(
   sprite: Phaser.GameObjects.Sprite,
-  kind: "player" | "zombie" | "guard" | "coywolf" | "bear",
+  kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow",
   state: EntityVisualState,
 ) {
   const dir = DIRECTION_LABELS[((state.facing % 8) + 8) % 8]!;
@@ -1377,6 +1408,39 @@ export function updateEntityVisual(
         sprite,
         coywolfIdleKey(dir),
         COYWOLF_RENDER_HEIGHT * COYWOLF_IDLE_RENDER_SCALE,
+      );
+    }
+    sprite.setAngle(0);
+    sprite.setAlpha(1);
+    return;
+  }
+
+  if (kind === "crow") {
+    if (isDead) {
+      const frame = Math.min(
+        CROW_DIE_FRAMES,
+        Math.max(1, (state.dieFrame ?? 0) + 1),
+      );
+      applyCrowFrame(
+        sprite,
+        crowDieFrameKey(dir, frame),
+        CROW_DIE_FEET_ORIGIN_Y,
+        CROW_RENDER_HEIGHT,
+      );
+    } else if (state.anim === "fly") {
+      const frame = (Math.floor(state.animFrame) % CROW_FLY_FRAMES) + 1;
+      applyCrowFrame(
+        sprite,
+        crowFlyFrameKey(dir, frame),
+        CROW_FLY_FEET_ORIGIN_Y,
+        CROW_FLY_RENDER_HEIGHT,
+      );
+    } else {
+      applyCrowFrame(
+        sprite,
+        crowIdleKey(dir),
+        CROW_FEET_ORIGIN_Y,
+        CROW_RENDER_HEIGHT,
       );
     }
     sprite.setAngle(0);

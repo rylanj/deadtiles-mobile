@@ -571,25 +571,7 @@
       .inventory-panel.trader-panel.market-panel .market-yours-body {
         flex: 1 1 auto;
         min-height: 0;
-        max-height: calc(min(78vh, 720px) - 84px);
-        overflow-x: hidden;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        overscroll-behavior: contain;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(120, 190, 120, 0.55) rgba(0, 0, 0, 0.35);
-      }
-      .inventory-panel.trader-panel.market-panel .market-yours-body::-webkit-scrollbar {
-        width: 8px;
-      }
-      .inventory-panel.trader-panel.market-panel .market-yours-body::-webkit-scrollbar-track {
-        background: rgba(0, 0, 0, 0.35);
-        border-radius: 4px;
-      }
-      .inventory-panel.trader-panel.market-panel .market-yours-body::-webkit-scrollbar-thumb {
-        background: rgba(90, 150, 90, 0.55);
-        border: 2px solid rgba(10, 14, 10, 0.98);
-        border-radius: 4px;
+        overflow: hidden;
       }
       .market-panel > .inventory-header,
       .market-board-search,
@@ -601,7 +583,6 @@
       }
       .market-scroll {
         overflow: auto;
-        max-height: min(62vh, 560px);
       }
       .market-board-search {
         flex: 0 0 auto;
@@ -657,7 +638,7 @@
       .inventory-panel.trader-panel.market-panel > .market-scroll {
         flex: 1 1 auto;
         min-height: 0;
-        max-height: calc(min(78vh, 720px) - 200px);
+        max-height: none;
         overflow-x: hidden;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
@@ -678,9 +659,27 @@
         border-radius: 4px;
       }
       .inventory-panel.trader-panel.market-panel .market-scroll--mine {
-        flex: 0 0 auto;
+        flex: 1 1 auto;
+        min-height: 0;
         max-height: none;
-        overflow: visible;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(120, 190, 120, 0.55) rgba(0, 0, 0, 0.35);
+      }
+      .inventory-panel.trader-panel.market-panel .market-scroll--mine::-webkit-scrollbar {
+        width: 8px;
+      }
+      .inventory-panel.trader-panel.market-panel .market-scroll--mine::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 4px;
+      }
+      .inventory-panel.trader-panel.market-panel .market-scroll--mine::-webkit-scrollbar-thumb {
+        background: rgba(90, 150, 90, 0.55);
+        border: 2px solid rgba(10, 14, 10, 0.98);
+        border-radius: 4px;
       }
       .market-row {
         display: flex;
@@ -1140,6 +1139,20 @@
         font: 500 11px/1.35 system-ui, sans-serif;
         color: #a8d8a8;
       }
+      .trader-settlement-block {
+        margin-top: 6px;
+        font: 600 12px/1.35 system-ui, sans-serif;
+        color: #e6b84a;
+      }
+      .trader-confirm-btn:not(:disabled) {
+        background: rgba(36, 110, 48, 0.95);
+        border-color: rgba(120, 220, 120, 0.8);
+        color: #eaffe8;
+      }
+      .trader-confirm-btn:hover:not(:disabled) {
+        background: rgba(48, 140, 62, 0.98);
+        border-color: rgba(150, 235, 150, 0.95);
+      }
       .trader-offer-actions {
         display: flex;
         gap: 8px;
@@ -1595,6 +1608,9 @@
       .red-dialog-speech-btn {
         appearance: none;
         -webkit-appearance: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
         text-align: left;
         width: 100%;
         margin: 0;
@@ -1614,6 +1630,17 @@
         border-color: rgba(220, 120, 120, 0.9);
         background: rgba(60, 22, 22, 0.95);
         color: #ffe8e8;
+      }
+      .red-dialog-speech-icon {
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
+        object-fit: contain;
+        image-rendering: pixelated;
+      }
+      .red-dialog-speech-label {
+        flex: 1 1 auto;
+        min-width: 0;
       }
       .red-dialog-response {
         font: 500 14px/1.5 system-ui, sans-serif;
@@ -1957,6 +1984,24 @@
         border-color: rgba(100, 220, 100, 0.7);
         box-shadow: inset 3px 0 0 #88ff88;
       }
+      .red-dialog-task-list .craft-recipe--capped {
+        border-color: rgba(130, 130, 130, 0.32);
+        background: rgba(18, 18, 18, 0.55);
+      }
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-summary-name {
+        color: #8e8e8e;
+        font-weight: 600;
+      }
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-summary-meta,
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-chevron,
+      .red-dialog-task-list .craft-recipe--capped .red-dialog-task-heading,
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-hint {
+        color: #8a8a8a;
+      }
+      .red-dialog-task-list .craft-recipe--capped .red-dialog-task-cell {
+        filter: grayscale(1);
+        opacity: 0.55;
+      }
       .quest-status-chip {
         display: inline-block;
         margin-left: 8px;
@@ -1976,6 +2021,11 @@
         color: #d8c0c0;
         background: rgba(48, 28, 28, 0.8);
         border: 1px solid rgba(180, 100, 100, 0.45);
+      }
+      .quest-status-chip--capped {
+        color: #c4c4c4;
+        background: rgba(36, 36, 36, 0.9);
+        border: 1px solid rgba(140, 140, 140, 0.45);
       }
       .craft-recipe-summary {
         appearance: none;
@@ -2125,6 +2175,11 @@
         flex: 1 1 auto;
         max-height: min(70vh, 640px);
       }
+      .container-loot-layout .inventory-grid-wrap.container-loot-player-body {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
       .container-loot-pile + .container-loot-pile {
         margin-top: 12px;
       }
@@ -2138,11 +2193,16 @@
       .container-loot-player-grids {
         display: flex;
         flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
         gap: 0;
+      }
+      .container-loot-player-grids > .inventory-section {
+        flex: 0 0 auto;
       }
       .container-loot-layout .inventory-grid--weapons {
         max-width: none;
-        width: 50%;
+        width: calc((100% - 24px) / 2 + 8px);
       }
       .container-loot-layout .inventory-grid--container,
       .container-loot-layout .inventory-grid--pockets {
@@ -2154,7 +2214,7 @@
       }
       .inventory-panel {
         width: min(360px, 92vw);
-        max-height: none;
+        max-height: min(92vh, 920px);
         background: rgba(10, 14, 10, 0.92);
         border: 1px solid rgba(100, 220, 100, 0.45);
         border-radius: 4px;
@@ -2254,11 +2314,86 @@
         padding: 12px 16px;
         overflow: visible;
       }
+      body #inventory-overlay {
+        overflow: hidden;
+      }
+      #inventory-overlay .inventory-header,
+      #inventory-overlay .inventory-footer {
+        flex: 0 0 auto;
+      }
+      #inventory-overlay .inventory-grid-wrap {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        max-height: none;
+      }
+      #inventory-overlay .inventory-grid-wrap > .inventory-section {
+        flex: 0 0 auto;
+      }
+      #inventory-overlay .inventory-carry-scroll,
+      #container-loot-overlay .inventory-carry-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(126, 207, 126, 0.75) rgba(0, 0, 0, 0.28);
+      }
+      #inventory-overlay .inventory-carry-scroll {
+        max-height: min(50vh, calc(100vh - 440px));
+        max-height: min(50vh, calc(100dvh - 440px));
+      }
+      #container-loot-overlay .inventory-carry-scroll {
+        max-height: min(42vh, calc(70vh - 240px));
+        max-height: min(42vh, calc(70dvh - 240px));
+      }
+      #inventory-overlay .inventory-carry-scroll::-webkit-scrollbar,
+      #container-loot-overlay .inventory-carry-scroll::-webkit-scrollbar {
+        width: 8px;
+      }
+      #inventory-overlay .inventory-carry-scroll::-webkit-scrollbar-track,
+      #container-loot-overlay .inventory-carry-scroll::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.28);
+        border-radius: 4px;
+      }
+      #inventory-overlay .inventory-carry-scroll::-webkit-scrollbar-thumb,
+      #container-loot-overlay .inventory-carry-scroll::-webkit-scrollbar-thumb {
+        background: rgba(94, 168, 94, 0.72);
+        border: 2px solid rgba(10, 14, 10, 0.92);
+        border-radius: 4px;
+      }
+      #inventory-overlay .inventory-carry-scroll::-webkit-scrollbar-thumb:hover,
+      #container-loot-overlay .inventory-carry-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(126, 207, 126, 0.9);
+      }
       .inventory-section {
         margin-bottom: 14px;
       }
       .inventory-section:last-of-type {
         margin-bottom: 0;
+      }
+      .inventory-weapon-row-labels,
+      .inventory-weapon-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 8px;
+      }
+      .inventory-weapon-row-labels {
+        margin-bottom: 6px;
+      }
+      .inventory-weapon-row-labels .inventory-section-label {
+        margin-bottom: 0;
+      }
+      .inventory-weapon-row-label {
+        width: calc((100% - 24px) / 2 + 8px);
+      }
+      .inventory-radio-row-label {
+        width: calc((100% - 24px) / 4);
       }
       .inventory-equipment-labels {
         display: grid;
@@ -2283,8 +2418,15 @@
         gap: 8px;
       }
       .inventory-grid--weapons {
-        grid-template-columns: repeat(2, 1fr);
-        max-width: 50%;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: calc((100% - 24px) / 2 + 8px);
+        max-width: none;
+        flex: 0 0 auto;
+      }
+      .inventory-grid--radio {
+        grid-template-columns: minmax(0, 1fr);
+        width: calc((100% - 24px) / 4);
+        flex: 0 0 auto;
       }
       .inventory-cell {
         position: relative;
@@ -2316,6 +2458,10 @@
         cursor: grab;
         border-color: rgba(100, 220, 100, 0.35);
       }
+      .inventory-cell--keepsake {
+        border-color: #e6c15a;
+        box-shadow: inset 0 0 0 1px #e6c15a;
+      }
       /* Trader items are tap-only (no drag) — keep pan-y so lists can scroll on touch. */
       .trader-cell.inventory-cell--filled {
         touch-action: pan-y;
@@ -2330,6 +2476,9 @@
       .inventory-cell:hover {
         background: rgba(94, 200, 94, 0.1);
         border-color: rgba(100, 220, 100, 0.5);
+      }
+      .inventory-cell--keepsake:hover {
+        border-color: #e6c15a;
       }
       .inventory-cell--weapon {
         border-color: rgba(100, 220, 100, 0.35);
@@ -4424,7 +4573,7 @@
           overflow: visible;
         }
         .container-loot-layout .inventory-grid--weapons {
-          width: 50%;
+          width: calc((100% - 24px) / 2 + 8px);
         }
 
         .trader-layout {

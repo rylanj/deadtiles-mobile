@@ -111,10 +111,10 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
     id: "jobs",
     player: "Do you have any jobs for me?",
     npc: [
-      "Bring Ashen Militia dog tags. We'll pay.",
-      "Ashen Militia patrols have been a problem lately. We need some of them taken out. Bring us their dog tags and we'll make it worth your while.",
-      "Work's simple: Ashen Militia patrols. Kill them, bring the dog tags here. You'll get banknotes and we'll remember you helped. They're not soft targets. Armor and numbers, so don't get cocky.",
-      "Yes. Thin out Ashen Militia and bring their tags. Pay's decent if you survive it.",
+      "Dog tags. Rags for armbands. A gold ring if you find one. A warehouse if you can clear it.",
+      "Ashen Militia patrols have been a problem. Bring dog tags. We also take rags, a gold ring, and a cleared warehouse.",
+      "Work's simple: Ashen dog tags, cloth for armbands, a ring to melt, or a warehouse full of walkers. Tags pay best. They're not soft targets.",
+      "Yes. Tags, rags, a gold ring, or floor space in a warehouse. Pay's decent if you survive it.",
     ],
   },
   {
@@ -139,15 +139,83 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
   },
 ];
 
+/** 24h window for capped Red Order jobs. */
+export const RED_ORDER_TASK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export type RedOrderTask = {
+  id: string;
+  dialogLineId: string;
+  requireItemId?: string;
+  requireQty?: number;
+  rewardBanknotes: number;
+  rewardReputation: number;
+  label: string;
+  requireItemLabel?: string;
+  displayItemId?: string;
+  maxCompletionsPerWindow?: number;
+  completionWindowMs?: number;
+};
+
 /** Turn-in: Ashen Militia dog tags for banknotes + Red Order reputation. */
-export const RED_ORDER_ASHEN_PATROL_TASK = {
+export const RED_ORDER_ASHEN_PATROL_TASK: RedOrderTask = {
   id: "ashen_patrol_dogtags",
   dialogLineId: "jobs",
   requireItemId: "dogtag",
   requireQty: 1,
   rewardBanknotes: 200,
   rewardReputation: 500,
-} as const;
+  label: "Ashen Patrol Dog Tags",
+  requireItemLabel: "Dog Tags",
+};
+
+/** Turn-in: rags cut into armbands. Once a day. */
+export const RED_ORDER_CUT_CLOTH_TASK: RedOrderTask = {
+  id: "red_cut_cloth",
+  dialogLineId: "jobs",
+  requireItemId: "rags",
+  requireQty: 6,
+  rewardBanknotes: 40,
+  rewardReputation: 80,
+  label: "Cut Cloth",
+  requireItemLabel: "Rags",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: RED_ORDER_TASK_WINDOW_MS,
+};
+
+/** Turn-in: a gold ring looted from a house. They melt it. */
+export const RED_ORDER_MELT_POT_TASK: RedOrderTask = {
+  id: "red_melt_pot",
+  dialogLineId: "jobs",
+  requireItemId: "gold_ring",
+  requireQty: 1,
+  rewardBanknotes: 130,
+  rewardReputation: 220,
+  label: "Melt Pot",
+  requireItemLabel: "Gold Ring",
+};
+
+/** Clear walkers from a marked warehouse. Once a day. */
+export const RED_ORDER_FLOOR_SPACE_TASK: RedOrderTask = {
+  id: "red_floor_space",
+  dialogLineId: "jobs",
+  rewardBanknotes: 150,
+  rewardReputation: 320,
+  label: "Floor Space",
+  displayItemId: "map",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: RED_ORDER_TASK_WINDOW_MS,
+};
+
+export const RED_ORDER_TASKS: readonly RedOrderTask[] = [
+  RED_ORDER_ASHEN_PATROL_TASK,
+  RED_ORDER_CUT_CLOTH_TASK,
+  RED_ORDER_MELT_POT_TASK,
+  RED_ORDER_FLOOR_SPACE_TASK,
+];
+
+export function redOrderTaskById(id: string): RedOrderTask | undefined {
+  return RED_ORDER_TASKS.find((task) => task.id === id);
+}
 
 export function redOrderDialogLineById(
   id: string,

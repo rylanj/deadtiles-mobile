@@ -3,23 +3,41 @@
  */
 
 import {
+  ASHEN_MILITIA_AISLE_CHECK_TASK,
   ASHEN_MILITIA_AMMO_TASK,
   ASHEN_MILITIA_BARGATE_SCRAP_TASK,
+  ASHEN_MILITIA_BEFORE_IT_TURNS_TASK,
   ASHEN_MILITIA_CAPTAIN_NAME,
   ASHEN_MILITIA_CIGARETTES_TASK,
+  ASHEN_MILITIA_CLEAN_HANDS_TASK,
+  ASHEN_MILITIA_COLD_TINS_TASK,
   ASHEN_MILITIA_DOCTOR_NAME,
   ASHEN_MILITIA_DONT_FEED_THEM_TASK,
+  ASHEN_MILITIA_DONT_HOCK_THEM_TASK,
+  ASHEN_MILITIA_HOT_PLATE_TASK,
   ASHEN_MILITIA_LIGHTER_TASK,
   ASHEN_MILITIA_MEDICAL_TASK,
   ASHEN_MILITIA_MISSING_PAIR_TASK,
   ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK,
+  ASHEN_MILITIA_POCKET_ROUNDS_TASK,
   ASHEN_MILITIA_QUIET_STRETCH_TASK,
+  ASHEN_MILITIA_RAG_BIN_TASK,
+  ASHEN_MILITIA_SOMETHING_SOFT_TASK,
   ASHEN_MILITIA_SPICY_FINGERS_TASK,
+  ASHEN_MILITIA_SPLIT_KIT_TASK,
   ASHEN_MILITIA_TASK_WINDOW_MS,
+  ASHEN_MILITIA_THIN_THE_PACK_TASK,
   ASHEN_MILITIA_WATER_TASK,
   type AshenMilitiaTask,
 } from "./ashenMilitia.js";
 import { RED_ORDER_FACTION } from "./constants.js";
+import {
+  RED_ORDER_CUT_CLOTH_TASK,
+  RED_ORDER_FLOOR_SPACE_TASK,
+  RED_ORDER_MELT_POT_TASK,
+  type RedOrderTask,
+} from "./redOrder.js";
+import { questTargetBuildingLabel } from "./questTargets.js";
 import { getBuildingAt } from "./worldgen.js";
 
 export type QuestFaction = "redOrder" | "ashenTraders" | "ashenMilitia" | "none";
@@ -29,9 +47,11 @@ export type QuestGiverId = "redOrder" | "ashenCaptain" | "ashenDoctor";
 
 export type QuestObjectiveKind =
   | "turnInItem"
+  | "haveItem"
   | "visitTile"
   | "killNpcKind"
   | "clearBuilding"
+  | "searchShelf"
   | "escort";
 
 export type QuestObjective = {
@@ -107,6 +127,10 @@ export type PlayerQuestState = {
   targetY?: number;
   /** Extra one-shot notes (e.g. missing pair found dead). */
   flags?: Record<string, boolean>;
+  /** Furniture id that holds a player-only quest item. */
+  stashId?: string;
+  /** Shelf ids already counted for a search objective. */
+  marks?: string[];
 };
 
 export type QuestAcceptAssignment = {
@@ -131,15 +155,18 @@ export const QUEST_GIVER_LABELS: Record<QuestGiverId, string> = {
 };
 
 function questFromMilitiaTask(
-  task: AshenMilitiaTask,
+  task: AshenMilitiaTask | RedOrderTask,
   extra: {
     description: string;
     giver: QuestGiverId;
     faction: QuestFaction;
+    /** Default true. False posts the job once, like Don't Hock Them. */
+    repeatable?: boolean;
   },
 ): QuestDefinition {
   const itemId = task.requireItemId ?? "wood";
   const itemLabel = (task.requireItemLabel ?? "supplies").toLowerCase();
+  const repeatable = extra.repeatable !== false;
   return {
     id: task.id,
     title: task.label,
@@ -147,9 +174,11 @@ function questFromMilitiaTask(
     faction: extra.faction,
     giver: extra.giver,
     dialogLineId: task.dialogLineId,
-    repeatable: true,
-    maxCompletionsPerWindow: task.maxCompletionsPerWindow,
-    completionWindowMs: task.completionWindowMs,
+    repeatable,
+    maxCompletionsPerWindow: repeatable
+      ? task.maxCompletionsPerWindow
+      : undefined,
+    completionWindowMs: repeatable ? task.completionWindowMs : undefined,
     objectives: [
       {
         id: `turn_in_${itemId}`,
@@ -200,6 +229,12 @@ export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
+  questFromMilitiaTask(ASHEN_MILITIA_POCKET_ROUNDS_TASK, {
+    description:
+      "Sidearms are running dry. Accept with Davis, then bring 20 rounds of 9mm to the barracks. Once a day.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
   questFromMilitiaTask(ASHEN_MILITIA_CIGARETTES_TASK, {
     description:
       "Cigarettes for the barracks board. Accept with Davis, then bring a pack in.",
@@ -212,21 +247,53 @@ export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
+  questFromMilitiaTask(ASHEN_MILITIA_SPLIT_KIT_TASK, {
+    description:
+      "Patrol bags are splitting. Accept with Davis, then bring two rolls of duct tape. Once a day.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
   questFromMilitiaTask(ASHEN_MILITIA_MEDICAL_TASK, {
     description:
-      "Doctor Clark is short on bandages for the ward. Accept the job, then turn them in at the hospital.",
+      "Doctor Clark is short on bandages for the ward. Accept the job, then turn them in at the hospital. Once a day.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_WATER_TASK, {
     description:
-      "Drinking water for Clark's patients. Accept the job, then drop the bottles at the ward.",
+      "Drinking water for Clark's patients. Accept the job, then drop the bottles at the ward. Once a day.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
+  questFromMilitiaTask(ASHEN_MILITIA_CLEAN_HANDS_TASK, {
+    description:
+      "Clark needs alcohol for wounds, not for drinking. Accept the job, then turn two bottles in at the ward. Once a day.",
+    giver: "ashenDoctor",
+    faction: "ashenMilitia",
+  }),
+  questFromMilitiaTask(ASHEN_MILITIA_RAG_BIN_TASK, {
+    description:
+      "The ward boils rags when the bandages run out. Accept with Clark, then bring ten. One time.",
+    giver: "ashenDoctor",
+    faction: "ashenMilitia",
+    repeatable: false,
+  }),
+  questFromMilitiaTask(ASHEN_MILITIA_SOMETHING_SOFT_TASK, {
+    description:
+      "Some patients will not eat chips. Accept with Clark, then bring two cans of peaches. Once a day.",
+    giver: "ashenDoctor",
+    faction: "ashenMilitia",
+  }),
+  questFromMilitiaTask(ASHEN_MILITIA_BEFORE_IT_TURNS_TASK, {
+    description:
+      "Clark wants five packets of antibiotics stocked before the next wave of infections. Accept the job, then turn them in. One time.",
+    giver: "ashenDoctor",
+    faction: "ashenMilitia",
+    repeatable: false,
+  }),
   questFromMilitiaTask(ASHEN_MILITIA_SPICY_FINGERS_TASK, {
     description:
-      "Clark's snack run. Accept first. Hot chips only, and he will not take more than five in a day.",
+      "Clark's snack run. Accept first. Hot chips only, and he will take one bag a day.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
@@ -242,11 +309,29 @@ export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
+  questFromMilitiaTask(ASHEN_MILITIA_COLD_TINS_TASK, {
+    description:
+      "The mess wants beans, not another speech. Accept with Davis, then bring four cans. Once a day.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
+  questFromMilitiaTask(ASHEN_MILITIA_HOT_PLATE_TASK, {
+    description:
+      "Davis wants coyote off a fire for the mess. Accept first. Cooked meat only. Burnt will not turn in. Once a day.",
+    giver: "ashenCaptain",
+    faction: "ashenMilitia",
+  }),
 ];
 
 export const QUEST_ID_QUIET_STRETCH = ASHEN_MILITIA_QUIET_STRETCH_TASK.id;
 export const QUEST_ID_MISSING_PAIR = ASHEN_MILITIA_MISSING_PAIR_TASK.id;
 export const QUEST_ID_DONT_FEED_THEM = ASHEN_MILITIA_DONT_FEED_THEM_TASK.id;
+export const QUEST_ID_AISLE_CHECK = ASHEN_MILITIA_AISLE_CHECK_TASK.id;
+export const QUEST_ID_THIN_THE_PACK = ASHEN_MILITIA_THIN_THE_PACK_TASK.id;
+export const QUEST_ID_DONT_HOCK_THEM = ASHEN_MILITIA_DONT_HOCK_THEM_TASK.id;
+/** Completes when the anniversary earrings are in the player's inventory. */
+export const QUEST_DONT_HOCK_FIND_OBJECTIVE = "find_earrings";
+export const QUEST_ID_FLOOR_SPACE = RED_ORDER_FLOOR_SPACE_TASK.id;
 
 export const QUEST_QUIET_STRETCH: QuestDefinition = {
   id: QUEST_ID_QUIET_STRETCH,
@@ -335,6 +420,126 @@ export const QUEST_DONT_FEED_THEM: QuestDefinition = {
     {
       faction: "ashenMilitia",
       reputation: ASHEN_MILITIA_DONT_FEED_THEM_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_AISLE_CHECK: QuestDefinition = {
+  id: QUEST_ID_AISLE_CHECK,
+  title: ASHEN_MILITIA_AISLE_CHECK_TASK.label,
+  description:
+    "Davis wants a supermarket outside Birchport scouted for a supply run. Accept the job, search three shelves, then report what you found. You do not have to clear it. Once a day.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  repeatable: true,
+  maxCompletionsPerWindow: ASHEN_MILITIA_AISLE_CHECK_TASK.maxCompletionsPerWindow,
+  completionWindowMs: ASHEN_MILITIA_AISLE_CHECK_TASK.completionWindowMs,
+  objectives: [
+    {
+      id: "search_shelves",
+      kind: "searchShelf",
+      label: "Search shelves in the marked supermarket",
+      count: 3,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_AISLE_CHECK_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_AISLE_CHECK_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_THIN_THE_PACK: QuestDefinition = {
+  id: QUEST_ID_THIN_THE_PACK,
+  title: ASHEN_MILITIA_THIN_THE_PACK_TASK.label,
+  description:
+    "Coyotes have been hitting the roads outside Birchport. Davis will not pay for a kill inside town. Three, then turn in at the barracks. Once a day.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  repeatable: true,
+  maxCompletionsPerWindow: ASHEN_MILITIA_THIN_THE_PACK_TASK.maxCompletionsPerWindow,
+  completionWindowMs: ASHEN_MILITIA_THIN_THE_PACK_TASK.completionWindowMs,
+  objectives: [
+    {
+      id: "kill_coyotes",
+      kind: "killNpcKind",
+      label: "Kill coyotes outside Birchport",
+      npcKind: "coywolf",
+      count: 3,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_THIN_THE_PACK_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_THIN_THE_PACK_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_DONT_HOCK_THEM: QuestDefinition = {
+  id: QUEST_ID_DONT_HOCK_THEM,
+  title: ASHEN_MILITIA_DONT_HOCK_THEM_TASK.label,
+  description:
+    "Clark bought his wife gold earrings for their anniversary. She died in the outbreak. He thinks that pair is still in a house outside town. Search the furniture. Once they are in your pack, bring them back to him.",
+  faction: "ashenMilitia",
+  giver: "ashenDoctor",
+  dialogLineId: "jobs",
+  objectives: [
+    {
+      id: QUEST_DONT_HOCK_FIND_OBJECTIVE,
+      kind: "haveItem",
+      label: "Find the anniversary earrings",
+      itemId: "clarks_earrings",
+      count: 1,
+    },
+    {
+      id: "turn_in_earrings",
+      kind: "turnInItem",
+      label: "Hand the anniversary earrings to Clark",
+      itemId: "clarks_earrings",
+      quantity: 1,
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_DONT_HOCK_THEM_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_DONT_HOCK_THEM_TASK.rewardReputation,
+    },
+  ],
+};
+
+export const QUEST_FLOOR_SPACE: QuestDefinition = {
+  id: QUEST_ID_FLOOR_SPACE,
+  title: RED_ORDER_FLOOR_SPACE_TASK.label,
+  description:
+    "Walkers are denned in a warehouse the Red Order wants. Accept the job, clear it, then report back. Once a day.",
+  faction: "redOrder",
+  giver: "redOrder",
+  dialogLineId: "jobs",
+  repeatable: true,
+  maxCompletionsPerWindow: RED_ORDER_FLOOR_SPACE_TASK.maxCompletionsPerWindow,
+  completionWindowMs: RED_ORDER_FLOOR_SPACE_TASK.completionWindowMs,
+  objectives: [
+    {
+      id: "clear_warehouse",
+      kind: "clearBuilding",
+      label: "Clear walkers from the marked warehouse",
+      buildingType: "warehouse",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: RED_ORDER_FLOOR_SPACE_TASK.rewardBanknotes },
+    {
+      faction: "redOrder",
+      reputation: RED_ORDER_FLOOR_SPACE_TASK.rewardReputation,
     },
   ],
 };
@@ -429,12 +634,38 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
   },
 ] as const;
 
+export const QUEST_CUT_CLOTH: QuestDefinition = questFromMilitiaTask(
+  RED_ORDER_CUT_CLOTH_TASK,
+  {
+    description:
+      "Red Order cuts armbands out of rags. Accept the job, then bring six. Once a day.",
+    giver: "redOrder",
+    faction: "redOrder",
+  },
+);
+
+export const QUEST_MELT_POT: QuestDefinition = questFromMilitiaTask(
+  RED_ORDER_MELT_POT_TASK,
+  {
+    description:
+      "They melt jewelry from empty houses. Accept the job, then bring one gold ring.",
+    giver: "redOrder",
+    faction: "redOrder",
+  },
+);
+
 export const QUEST_REGISTRY: readonly QuestDefinition[] = [
   QUEST_ASHEN_PATROL_DOGTAGS,
+  QUEST_CUT_CLOTH,
+  QUEST_MELT_POT,
+  QUEST_FLOOR_SPACE,
   ...QUEST_ASHEN_MILITIA_LIVE,
   QUEST_QUIET_STRETCH,
   QUEST_MISSING_PAIR,
   QUEST_DONT_FEED_THEM,
+  QUEST_AISLE_CHECK,
+  QUEST_THIN_THE_PACK,
+  QUEST_DONT_HOCK_THEM,
   ...QUEST_STUBS,
 ];
 
@@ -497,6 +728,17 @@ export function parseQuestsJson(
           if (v === true) flags[k] = true;
         }
       }
+      const stashId =
+        typeof obj.stashId === "string" &&
+        obj.stashId.length > 0 &&
+        obj.stashId.length <= 80
+          ? obj.stashId
+          : undefined;
+      const marks = Array.isArray(obj.marks)
+        ? obj.marks
+            .filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 80)
+            .slice(0, 64)
+        : undefined;
       const entry: PlayerQuestState = {
         questId,
         status,
@@ -512,6 +754,8 @@ export function parseQuestsJson(
         targetX: Number.isFinite(targetX) ? Math.floor(targetX) : undefined,
         targetY: Number.isFinite(targetY) ? Math.floor(targetY) : undefined,
         flags: Object.keys(flags).length > 0 ? flags : undefined,
+        stashId,
+        marks: marks && marks.length > 0 ? marks : undefined,
       };
       const def = getQuestDefinition(questId);
       const turnedInEarlier =
@@ -525,6 +769,8 @@ export function parseQuestsJson(
         entry.targetX = undefined;
         entry.targetY = undefined;
         entry.flags = undefined;
+        entry.stashId = undefined;
+        entry.marks = undefined;
       }
       quests[questId] = entry;
     }
@@ -579,6 +825,64 @@ export function questStatusOf(
   return state.quests[questId]?.status ?? "available";
 }
 
+/**
+ * Unfinished one-time jobs each giver posts at once. Repeatable jobs are not capped.
+ * Clark posts three: Rag Bin, Before It Turns, and Don't Hock Them.
+ */
+export const ONE_TIME_QUESTS_LISTED = 3;
+
+/**
+ * Which one-time jobs to post, in catalog order.
+ * Finished jobs are skipped, so the next one appears after a turn-in.
+ * An accepted job stays posted until it is turned in, and it counts toward the cap.
+ * If more than the cap are already accepted, those stay up and nothing new is added
+ * until a slot opens.
+ */
+export function selectListedOneTimeQuestIds(
+  orderedIds: readonly string[],
+  statusOf: (questId: string) => QuestStatus,
+  cap = ONE_TIME_QUESTS_LISTED,
+): ReadonlySet<string> {
+  const listed = new Set<string>();
+  for (const id of orderedIds) {
+    if (statusOf(id) === "active") listed.add(id);
+  }
+  if (listed.size >= cap) return listed;
+  for (const id of orderedIds) {
+    if (listed.size >= cap) break;
+    if (listed.has(id)) continue;
+    const status = statusOf(id);
+    if (status === "completed" || status === "failed") continue;
+    listed.add(id);
+  }
+  return listed;
+}
+
+/** One-time jobs this giver is posting right now. */
+export function listedOneTimeQuestIds(
+  state: PlayerQuestsState,
+  giver: QuestGiverId,
+): ReadonlySet<string> {
+  const oneTime = QUEST_REGISTRY.filter(
+    (q) => isOfferableQuest(q) && q.giver === giver && !q.repeatable,
+  );
+  return selectListedOneTimeQuestIds(
+    oneTime.map((q) => q.id),
+    (id) => questStatusOf(state, id),
+  );
+}
+
+/** Repeatable jobs are always posted. One-time jobs follow the board cap. */
+export function isQuestListed(
+  state: PlayerQuestsState,
+  def: QuestDefinition | undefined,
+): boolean {
+  if (!isOfferableQuest(def) || !def) return false;
+  if (def.repeatable) return true;
+  if (!def.giver) return false;
+  return listedOneTimeQuestIds(state, def.giver).has(def.id);
+}
+
 export function isQuestActive(
   state: PlayerQuestsState,
   questId: string,
@@ -605,6 +909,7 @@ export function canAcceptQuest(
 ): boolean {
   const def = getQuestDefinition(questId);
   if (!def || def.stub) return false;
+  if (!isQuestListed(state, def)) return false;
   const status = questStatusOf(state, questId);
   if (status === "active" || status === "failed") return false;
   if (status === "completed" && !def.repeatable) return false;
@@ -742,6 +1047,8 @@ export function completeAcceptedQuest(
         targetX: undefined,
         targetY: undefined,
         flags: undefined,
+        stashId: undefined,
+        marks: undefined,
       },
     },
   };
@@ -788,9 +1095,60 @@ export function assignQuestTarget(
         targetY,
         progress: {},
         flags: undefined,
+        stashId: undefined,
+        marks: undefined,
       },
     },
   };
+}
+
+export function setQuestStash(
+  state: PlayerQuestsState,
+  questId: string,
+  stashId: string,
+): PlayerQuestsState | null {
+  const prev = state.quests[questId];
+  if (!prev || prev.status !== "active") return null;
+  if (prev.stashId === stashId) return null;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: { ...prev, stashId },
+    },
+  };
+}
+
+/**
+ * Count a unique token toward an objective (a shelf id, for example).
+ * Repeats of the same token do nothing.
+ */
+export function addQuestMark(
+  state: PlayerQuestsState,
+  questId: string,
+  mark: string,
+  objectiveId: string,
+): PlayerQuestsState | null {
+  const prev = state.quests[questId];
+  const def = getQuestDefinition(questId);
+  if (!def || !prev || prev.status !== "active") return null;
+  if (!mark) return null;
+  const obj = def.objectives.find((o) => o.id === objectiveId);
+  if (!obj || obj.kind === "turnInItem") return null;
+  const need = Math.max(1, obj.count ?? 1);
+  if ((prev.progress[objectiveId] ?? 0) >= need) return null;
+  if ((prev.marks ?? []).includes(mark)) return null;
+  const marked: PlayerQuestsState = {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        marks: [...(prev.marks ?? []), mark].slice(-64),
+      },
+    },
+  };
+  return incrementQuestObjective(marked, questId, objectiveId);
 }
 
 export function questFlag(
@@ -906,14 +1264,7 @@ export function questAssignedLocationLabel(
 ): string | null {
   const prev = state.quests[questId];
   if (prev?.targetX == null || prev.targetY == null) return null;
-  const bld = getBuildingAt(prev.targetX, prev.targetY);
-  const kind =
-    bld?.buildingType === "motel"
-      ? "motel"
-      : bld?.buildingType === "house"
-        ? "house"
-        : "building";
-  return `${kind} at ${prev.targetX}, ${prev.targetY}`;
+  return questTargetBuildingLabel(prev.targetX, prev.targetY);
 }
 
 export type QuestMapMarker = {

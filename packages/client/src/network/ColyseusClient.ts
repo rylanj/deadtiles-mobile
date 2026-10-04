@@ -28,6 +28,8 @@ export type PlayerPreview = {
   name?: string | null;
   health?: number;
   stamina?: number;
+  /** Fitness cap used to draw the stamina bar. Defaults to the unskilled max. */
+  staminaMax?: number;
   hunger?: number;
   thirst?: number;
   temperature?: number;
@@ -349,6 +351,7 @@ export type PlayerSchema = {
   inInterior: boolean;
   buildingX: number;
   buildingY: number;
+  interiorLevel: number;
   overworldX: number;
   overworldY: number;
   equippedWeaponIndex: number;
@@ -468,6 +471,7 @@ export type PlayerCorpseSchema = {
   inInterior: boolean;
   buildingX: number;
   buildingY: number;
+  interiorLevel: number;
   looted: boolean;
 };
 
@@ -481,6 +485,7 @@ export type SearchableSchema = {
   depleted: boolean;
   buildingX: number;
   buildingY: number;
+  level: number;
   facing: string;
   /** Unix ms when a furnace's fire goes out. 0 when cold or not a furnace. */
   activeUntil: number;
@@ -559,6 +564,35 @@ export type WorldRoomState = {
           health: number;
           isDead: boolean;
           looted?: boolean;
+        },
+        id: string,
+      ) => void,
+    ): void;
+  };
+  crows: {
+    get(id: string): {
+      x: number;
+      y: number;
+      facing: number;
+      anim: string;
+      animFrame: number;
+      health: number;
+      isDead: boolean;
+      looted?: boolean;
+      altitude: number;
+    } | undefined;
+    forEach(
+      cb: (
+        crow: {
+          x: number;
+          y: number;
+          facing: number;
+          anim: string;
+          animFrame: number;
+          health: number;
+          isDead: boolean;
+          looted?: boolean;
+          altitude: number;
         },
         id: string,
       ) => void,
@@ -683,6 +717,12 @@ export type QuestSyncEvent = {
 export type SkillSyncEvent = {
   type: "skillSync";
   payload: { skillsJson: string };
+};
+
+/** Learned weapon recipes. Owner-only, same channel style as skills. */
+export type BlueprintSyncEvent = {
+  type: "blueprintSync";
+  payload: { learnedBlueprintsJson: string };
 };
 
 export type CraftOpenEvent = {
@@ -929,6 +969,7 @@ export type ServerEvent =
   | DialogHealCompleteEvent
   | QuestSyncEvent
   | SkillSyncEvent
+  | BlueprintSyncEvent
   | CraftOpenEvent
   | CraftSyncEvent
   | FireplaceOpenEvent

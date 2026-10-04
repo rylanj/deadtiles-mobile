@@ -727,8 +727,8 @@ export class AudioManager {
   }
 
   /**
-   * Search rummage. Furniture banks are Search1–18 by objectType.
-   * Dead officer furniture and corpse looting use SearchBody1.
+   * Search rummage. Furniture banks are Search1-19 by objectType.
+   * Corpses, dead officers, armchairs, and sofas use SearchBody1.
    */
   playSearch(
     kind: "furniture" | "body",
@@ -2659,12 +2659,15 @@ const FURNITURE_SEARCH_GAIN: Partial<Record<number, number>> = {
   19: 0.15,
 };
 
-/** objectType → SearchN.wav. deadofficer uses SearchBody1 via searchKeyForFurniture. */
+/** objectType → SearchN.wav. Body-search types are handled in searchKeyForFurniture. */
 const FURNITURE_SEARCH_BANK: Record<string, number> = {
   desk: 1,
   dresser: 1,
   nightstand: 1,
   desk2: 1,
+  desk3: 1,
+  conferencetable: 1,
+  copier: 6,
   medicalreception: 1,
   drawers: 1,
   bed: 2,
@@ -2747,14 +2750,22 @@ function unloadKeyForWeapon(itemId: string): string | null {
   return kind ? unloadKey(kind, 0) : null;
 }
 
+function usesBodySearchSound(objectType?: string): boolean {
+  return (
+    objectType === "deadofficer" ||
+    objectType === "armchair" ||
+    objectType === "sofa"
+  );
+}
+
 function searchKeyForFurniture(objectType?: string): string {
-  if (objectType === "deadofficer") return searchKey("body", 0);
+  if (usesBodySearchSound(objectType)) return searchKey("body", 0);
   const bank = objectType ? FURNITURE_SEARCH_BANK[objectType] : undefined;
   return furnitureSearchKey(bank ?? 1);
 }
 
 function searchGain(kind: "furniture" | "body", objectType?: string): number {
-  if (kind === "body" || objectType === "deadofficer") return BODY_SEARCH_GAIN;
+  if (kind === "body" || usesBodySearchSound(objectType)) return BODY_SEARCH_GAIN;
   const bank = objectType ? FURNITURE_SEARCH_BANK[objectType] : undefined;
   return FURNITURE_SEARCH_GAIN[bank ?? 1] ?? SEARCH_GAIN_DEFAULT;
 }

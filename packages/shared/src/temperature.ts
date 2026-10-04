@@ -16,21 +16,29 @@ export const TEMPERATURE_CORE_DEFAULT = 37;
 export const TEMPERATURE_CORE_MIN = 32;
 export const TEMPERATURE_CORE_MAX = 41;
 
-/** Air temperature a t-shirt survivor treats as neutral (°C). */
+/**
+ * Naked resting cold stress begins below this air temperature (°C).
+ * Clothing warmth is added before the compare, so a t-shirt stays neutral
+ * in cooler air than bare skin.
+ */
 export const TEMPERATURE_COMFORT_AIR_C = 18;
 export const TEMPERATURE_COMFORT_LOW = 36.2;
-export const TEMPERATURE_COMFORT_HIGH = 37.6;
+/** Core above this is Hot. A sprint in mild air plateaus at or below it. */
+export const TEMPERATURE_COMFORT_HIGH = 38;
 export const TEMPERATURE_HYPOTHERMIA = 35;
-export const TEMPERATURE_HEATSTROKE = 38.5;
+/** Core above this is heatstroke and deals damage. */
+export const TEMPERATURE_HEATSTROKE = 39;
 
-/** How strongly air deviation from comfort pulls core temp. */
+/** Cold-side slope: core °C lost per degree of exposure below comfort. */
 export const TEMPERATURE_EXPOSURE_TO_CORE = 0.14;
-/** Chase rate toward the target core (1/s). ~10 min time constant. */
+/** Chase rate of core toward the resting target (1/s). About a 10 minute time constant. */
 export const TEMPERATURE_CHASE_RATE = 0.0016;
-/** °C added to felt air per insulation point (dry tee = 1). */
+/** Cold-side clothing warmth per insulation point (dry tee = 1), °C of exposure. */
 export const TEMPERATURE_INSULATION_C = 4;
-/** Extra felt-air penalty while wearing wet clothes. */
+/** Extra cold-side exposure when worn clothes are fully soaked (°C). */
 export const TEMPERATURE_WET_PENALTY_C = 4;
+/** Fraction of insulation lost when clothes are fully soaked. */
+export const TEMPERATURE_WET_INSULATION_LOSS = 0.75;
 /** Lit fireplace adjacent bonus at full strength (°C). */
 export const TEMPERATURE_FIRE_BONUS_C = 12;
 /** Full fire heat on the hearth and neighbouring tiles. */
@@ -39,14 +47,34 @@ export const FIREPLACE_AIR_FULL_TILES = 1;
 export const FIREPLACE_AIR_RANGE_INDOOR = 10;
 /** Outdoor Euclidean tiles where fire air heat reaches 0. */
 export const FIREPLACE_AIR_RANGE_OUTDOOR = 5;
-/** Direct core heat while sprinting (°C/s). Warm-up rate, not an equilibrium offset. */
-export const TEMPERATURE_SPRINT_HEAT_PER_SEC = 0.008;
-/**
- * Extra core °C sprinting may add on top of the air-driven target once felt air
- * is already above comfort. Cold air uses the comfort-band cap instead, so a
- * blizzard sprint cannot cook you.
- */
-export const TEMPERATURE_SPRINT_MAX_EXTRA_C = 0.35;
+/** Skin temperature used when a sprint dumps heat to the air (°C). */
+export const TEMPERATURE_SKIN_C = 33;
+/** Naked rest starts storing heat above this air temperature (°C). */
+export const TEMPERATURE_HEAT_ONSET_NAKED_C = 24;
+/** Each insulation point lowers the air temperature where resting heat begins. */
+export const TEMPERATURE_HEAT_ONSET_PER_INSULATION = 3;
+/** Degrees above heat onset that use the shallow resting-heat slope. */
+export const TEMPERATURE_HEAT_MILD_SPAN_C = 8;
+/** Resting core °C gained per degree of air in the shallow heat band. */
+export const TEMPERATURE_HEAT_MILD_SLOPE = 0.04;
+/** Resting core °C gained per degree of air past the shallow heat band. */
+export const TEMPERATURE_HEAT_HARD_SLOPE = 0.12;
+/** Core offset a sprint would reach if the body could not cool (°C). */
+export const TEMPERATURE_SPRINT_LOAD_C = 1.8;
+/** Sweat cooling available during a sprint, before air and clothing (°C). */
+export const TEMPERATURE_SPRINT_COOL_SWEAT_C = 0.55;
+/** Extra sprint cooling per degree of air below skin temperature. */
+export const TEMPERATURE_SPRINT_COOL_PER_AIR_C = 0.06;
+/** Sprint heat gained per degree of air above skin temperature. */
+export const TEMPERATURE_SPRINT_HEAT_PER_AIR_C = 0.1;
+/** Sprint cooling lost per point of effective insulation. */
+export const TEMPERATURE_SPRINT_INSULATION_PENALTY_C = 0.22;
+/** Sprint cooling lost at full humidity. Rain, fog, snow, and cloud scale this. */
+export const TEMPERATURE_SPRINT_HUMIDITY_PENALTY_C = 0.45;
+/** How fast unmet sprint heat is stored (°C/s). */
+export const TEMPERATURE_EXERTION_RISE_PER_SEC = 0.01;
+/** How fast sprint heat sheds once core is above the resting target (°C/s). */
+export const TEMPERATURE_EXERTION_SHED_PER_SEC = 0.008;
 export const TEMPERATURE_FEVER_MAX_C = 1.4;
 export const TEMPERATURE_DAMAGE_PER_SEC = 1;
 export const TEMPERATURE_DAMAGE_INTERVAL_SEC = STARVATION_DAMAGE_INTERVAL_SEC;
@@ -75,6 +103,10 @@ const CLOUDY_AIR_DELTA = -2;
 const RAIN_AIR_DELTA = -6;
 const SNOW_AIR_DELTA = -11;
 const FOG_AIR_DELTA = -3;
+const HUMIDITY_RAIN = 0.85;
+const HUMIDITY_FOG = 0.5;
+const HUMIDITY_SNOW = 0.2;
+const HUMIDITY_CLOUDY = 0.1;
 
 export type TemperatureBand =
   | "hypothermia"
@@ -266,7 +298,11 @@ export function outdoorAirTemperatureC(
   return air;
 }
 
-export function computeFeltAmbient(opts: {
+/**
+ * Outdoor or room air, plus nearby fire. Clothing does not change this.
+ * The clock shows it as Air.
+ */
+export function ambientAirTemperatureC(opts: {
   worldTimeMs: number;
   sky: SkyId | string;
   precip: PrecipId | string;
@@ -274,8 +310,6 @@ export function computeFeltAmbient(opts: {
   buildingX?: number;
   buildingY?: number;
   fireHeat?: number;
-  insulation: number;
-  wornWetness: number;
 }): number {
   const sky = parseSky(opts.sky);
   const precip = parsePrecip(opts.precip);
@@ -287,12 +321,25 @@ export function computeFeltAmbient(opts: {
   }
   const fireHeat = Math.max(0, Math.min(1, opts.fireHeat ?? 0));
   if (fireHeat > 0) air += TEMPERATURE_FIRE_BONUS_C * fireHeat;
-  const wet = Math.max(0, Math.min(1, opts.wornWetness));
-  const insulation = Math.max(0, opts.insulation);
-  const effectiveInsulation = insulation * (1 - 0.75 * wet);
-  air += effectiveInsulation * TEMPERATURE_INSULATION_C;
-  air -= wet * TEMPERATURE_WET_PENALTY_C;
   return air;
+}
+
+/**
+ * Humidity from 0 to 1. It blocks sweat. Indoor air is treated as dry. Precip wins
+ * over a cloudy sky.
+ */
+export function ambientHumidity(opts: {
+  sky: SkyId | string;
+  precip: PrecipId | string;
+  indoor: boolean;
+}): number {
+  if (opts.indoor) return 0;
+  const precip = parsePrecip(opts.precip);
+  if (precip === "rain") return HUMIDITY_RAIN;
+  if (precip === "fog") return HUMIDITY_FOG;
+  if (precip === "snow") return HUMIDITY_SNOW;
+  if (parseSky(opts.sky) === "cloudy") return HUMIDITY_CLOUDY;
+  return 0;
 }
 
 export function tickClothingWetness(
@@ -370,31 +417,124 @@ export function wornClothingStats(inventory: Inventory, equippedSlot: number): {
   };
 }
 
-export function targetCoreTemperatureC(opts: {
-  feltAirC: number;
-  infection: number;
-}): number {
-  const exposure = opts.feltAirC - TEMPERATURE_COMFORT_AIR_C;
-  const fever =
-    Math.max(0, Math.min(100, opts.infection)) / 100 * TEMPERATURE_FEVER_MAX_C;
-  return clampTemperature(
-    TEMPERATURE_CORE_DEFAULT + exposure * TEMPERATURE_EXPOSURE_TO_CORE + fever,
+function wetFraction(wetness: number): number {
+  if (!Number.isFinite(wetness)) return 0;
+  return Math.max(0, Math.min(1, wetness));
+}
+
+/** Insulation after soak. A soaked garment keeps 25% of its dry value. */
+export function effectiveClothingInsulation(
+  insulation: number,
+  wetness: number,
+): number {
+  const ins = Number.isFinite(insulation) ? Math.max(0, insulation) : 0;
+  return ins * (1 - TEMPERATURE_WET_INSULATION_LOSS * wetFraction(wetness));
+}
+
+/** Exposure offset from clothes. Positive is warmer, wet clothes go negative. */
+function clothingColdOffsetC(insulation: number, wetness: number): number {
+  const wet = wetFraction(wetness);
+  return (
+    effectiveClothingInsulation(insulation, wet) * TEMPERATURE_INSULATION_C -
+    wet * TEMPERATURE_WET_PENALTY_C
   );
 }
 
 /**
- * Highest core sprinting is allowed to push.
- * In cold / mild air that is the top of the comfort band. In warm air it is a
- * small bump over the air-driven target, not the old +5 °C equilibrium.
+ * Core drop from cold air. Zero when clothes and air are at or above the
+ * naked comfort point, so mild weather does not use this slope.
  */
-export function sprintHeatCapC(feltAirC: number, infection = 0): number {
-  const airTarget = targetCoreTemperatureC({ feltAirC, infection });
-  if (!(feltAirC > TEMPERATURE_COMFORT_AIR_C)) {
-    return TEMPERATURE_COMFORT_HIGH;
+export function restingColdDeltaC(
+  airC: number,
+  insulation: number,
+  wetness: number,
+): number {
+  const exposure =
+    airC + clothingColdOffsetC(insulation, wetness) - TEMPERATURE_COMFORT_AIR_C;
+  if (!(exposure < 0)) return 0;
+  return exposure * TEMPERATURE_EXPOSURE_TO_CORE;
+}
+
+/**
+ * Core rise from air that is too warm to dump resting heat. Shallow at first,
+ * then steeper. A t-shirt in 18°C air is below onset, so this stays zero.
+ */
+export function restingHeatDeltaC(
+  airC: number,
+  insulation: number,
+  wetness: number,
+): number {
+  const onset =
+    TEMPERATURE_HEAT_ONSET_NAKED_C -
+    effectiveClothingInsulation(insulation, wetness) *
+      TEMPERATURE_HEAT_ONSET_PER_INSULATION;
+  const gap = Math.max(0, airC - onset);
+  if (gap <= TEMPERATURE_HEAT_MILD_SPAN_C) {
+    return gap * TEMPERATURE_HEAT_MILD_SLOPE;
   }
-  return clampTemperature(
-    Math.max(TEMPERATURE_COMFORT_HIGH, airTarget + TEMPERATURE_SPRINT_MAX_EXTRA_C),
+  return (
+    TEMPERATURE_HEAT_MILD_SPAN_C * TEMPERATURE_HEAT_MILD_SLOPE +
+    (gap - TEMPERATURE_HEAT_MILD_SPAN_C) * TEMPERATURE_HEAT_HARD_SLOPE
   );
+}
+
+export function targetCoreTemperatureC(opts: {
+  airC: number;
+  insulation: number;
+  wornWetness: number;
+  infection: number;
+}): number {
+  const cold = restingColdDeltaC(opts.airC, opts.insulation, opts.wornWetness);
+  const heat = restingHeatDeltaC(opts.airC, opts.insulation, opts.wornWetness);
+  const fever =
+    (Math.max(0, Math.min(100, opts.infection)) / 100) * TEMPERATURE_FEVER_MAX_C;
+  return clampTemperature(TEMPERATURE_CORE_DEFAULT + cold + heat + fever);
+}
+
+/** Core °C of sprint heat the air, clothes, and humidity cannot remove. */
+export function sprintUnmetHeatC(opts: {
+  airC: number;
+  insulation: number;
+  wornWetness: number;
+  humidity: number;
+}): number {
+  const air = Number.isFinite(opts.airC) ? opts.airC : TEMPERATURE_COMFORT_AIR_C;
+  const ins = effectiveClothingInsulation(opts.insulation, opts.wornWetness);
+  const humidity = Math.max(0, Math.min(1, opts.humidity));
+  const convection =
+    air < TEMPERATURE_SKIN_C
+      ? (TEMPERATURE_SKIN_C - air) * TEMPERATURE_SPRINT_COOL_PER_AIR_C
+      : -(air - TEMPERATURE_SKIN_C) * TEMPERATURE_SPRINT_HEAT_PER_AIR_C;
+  const cooling =
+    TEMPERATURE_SPRINT_COOL_SWEAT_C +
+    convection -
+    ins * TEMPERATURE_SPRINT_INSULATION_PENALTY_C -
+    humidity * TEMPERATURE_SPRINT_HUMIDITY_PENALTY_C;
+  return Math.max(0, TEMPERATURE_SPRINT_LOAD_C - cooling);
+}
+
+/**
+ * Highest core a sprint may hold.
+ * Cold air with enough cooling warms you toward 37 and stops there.
+ * Unmet heat (heavy clothes, hot air, humidity) can push past that.
+ */
+export function sprintHeatCapC(opts: {
+  airC: number;
+  insulation: number;
+  wornWetness: number;
+  humidity: number;
+  infection?: number;
+}): number {
+  const resting = targetCoreTemperatureC({
+    airC: opts.airC,
+    insulation: opts.insulation,
+    wornWetness: opts.wornWetness,
+    infection: opts.infection ?? 0,
+  });
+  const unmet = sprintUnmetHeatC(opts);
+  const coldWarmup =
+    resting < TEMPERATURE_CORE_DEFAULT ? TEMPERATURE_CORE_DEFAULT : resting;
+  return clampTemperature(Math.max(coldWarmup, resting + unmet));
 }
 
 export function temperatureStaminaMultipliers(temp: number): {
@@ -475,10 +615,17 @@ type TemperatureAcc = {
   hunger: number;
   thirst: number;
   damageTimer: number;
-  core: number;
+  /** Slow weather-driven core, without the current sprint's stored heat. */
+  env: number;
+  /** Heat stored by sprinting. Sheds quickly once core is above the resting target. */
+  exertion: number;
 };
 
 const temperatureAcc = new Map<string, TemperatureAcc>();
+
+function displayedCore(acc: TemperatureAcc): number {
+  return clampTemperature(acc.env + acc.exertion);
+}
 
 export function clearTemperatureTick(playerId: string): void {
   temperatureAcc.delete(playerId);
@@ -486,7 +633,9 @@ export function clearTemperatureTick(playerId: string): void {
 
 export function syncTemperatureCore(playerId: string, value: number): void {
   const acc = temperatureAcc.get(playerId);
-  if (acc) acc.core = clampTemperature(value);
+  if (!acc) return;
+  const next = clampTemperature(value);
+  acc.env = clampTemperature(next - acc.exertion);
 }
 
 export type TemperatureVitalState = {
@@ -507,15 +656,19 @@ export type TemperatureTickResult = {
 };
 
 /**
- * Drift core temperature toward the felt-air target. Applies light hunger /
- * thirst extras and hypothermia / heat-stroke damage.
+ * Drift resting core toward the air. Sprint heat is stored separately and
+ * only up to what cooling cannot dump, so mild air does not cook a runner.
+ * Applies light hunger / thirst extras and hypothermia / heatstroke damage.
  */
 export function tickCoreTemperature(
   playerId: string,
   state: TemperatureVitalState,
   dt: number,
   opts: {
-    feltAirC: number;
+    airC: number;
+    insulation: number;
+    wornWetness: number;
+    humidity: number;
     sprinting: boolean;
     infection: number;
     skipDamage: boolean;
@@ -528,31 +681,59 @@ export function tickCoreTemperature(
       hunger: 0,
       thirst: 0,
       damageTimer: 0,
-      core: clampTemperature(state.temperature),
+      env: clampTemperature(state.temperature),
+      exertion: 0,
     };
     temperatureAcc.set(playerId, acc);
   }
 
-  const target = targetCoreTemperatureC({
-    feltAirC: opts.feltAirC,
+  const balance = {
+    airC: opts.airC,
+    insulation: opts.insulation,
+    wornWetness: opts.wornWetness,
     infection: opts.infection,
-  });
+  };
+  const resting = targetCoreTemperatureC(balance);
   let rate = TEMPERATURE_CHASE_RATE;
-  if (state.hunger <= 0 && target < acc.core) rate *= 1.3;
-  if (state.thirst <= 0 && target > acc.core) rate *= 1.3;
-  acc.core += (target - acc.core) * rate * Math.max(0, dt);
+  if (state.hunger <= 0 && resting < acc.env) rate *= 1.3;
+  if (state.thirst <= 0 && resting > acc.env) rate *= 1.3;
+  const dtSec = Math.max(0, dt);
+  acc.env += (resting - acc.env) * rate * dtSec;
+  acc.env = clampTemperature(acc.env);
+
   if (opts.sprinting) {
-    const cap = sprintHeatCapC(opts.feltAirC, opts.infection);
-    if (acc.core < cap) {
-      acc.core = Math.min(
-        cap,
-        acc.core + TEMPERATURE_SPRINT_HEAT_PER_SEC * Math.max(0, dt),
+    const cap = sprintHeatCapC({
+      airC: opts.airC,
+      insulation: opts.insulation,
+      wornWetness: opts.wornWetness,
+      humidity: opts.humidity,
+      infection: opts.infection,
+    });
+    const want = Math.max(0, cap - acc.env);
+    if (acc.exertion < want) {
+      acc.exertion = Math.min(
+        want,
+        acc.exertion + TEMPERATURE_EXERTION_RISE_PER_SEC * dtSec,
+      );
+    } else if (acc.exertion > want) {
+      acc.exertion = Math.max(
+        want,
+        acc.exertion - TEMPERATURE_EXERTION_SHED_PER_SEC * dtSec,
+      );
+    }
+  } else if (acc.exertion > 0) {
+    const extra = acc.env + acc.exertion - resting;
+    if (extra > 0) {
+      acc.exertion = Math.max(
+        0,
+        acc.exertion - Math.min(extra, TEMPERATURE_EXERTION_SHED_PER_SEC * dtSec),
       );
     }
   }
-  acc.core = clampTemperature(acc.core);
+  if (acc.exertion < 1e-6) acc.exertion = 0;
 
-  const band = temperatureBand(acc.core);
+  const shown = Math.round(displayedCore(acc) * 10) / 10;
+  const band = temperatureBand(shown);
   let hunger = state.hunger;
   let thirst = state.thirst;
   if (band === "cold" || band === "hypothermia") {
@@ -590,7 +771,7 @@ export function tickCoreTemperature(
   }
 
   return {
-    temperature: Math.round(acc.core * 10) / 10,
+    temperature: shown,
     hunger,
     thirst,
     health,

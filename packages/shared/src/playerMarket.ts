@@ -2,12 +2,17 @@ import { factionStanding } from "./factionRep.js";
 import {
   addToInventory,
   canAddToInventory,
+  cloneInventory,
   countItemInInventory,
   getAmmoTypeForWeapon,
   getEntryDurability,
   getItemDefinition,
   getMaxDurability,
+  BACKPACK_SLOT_INDEX,
+  backpackStorageHasItems,
   inventoryAddRoom,
+  inventorySlotAccess,
+  isBackpackStorageIndex,
   isItemRarity,
   isPocketSlot,
   isWeaponSlot,
@@ -185,6 +190,9 @@ export function sanitizeMarketItem(raw: unknown): InventoryEntry | null {
       durability: typeof source.durability === "number" ? source.durability : undefined,
       wetness: typeof source.wetness === "number" ? source.wetness : undefined,
       radioFreq: typeof source.radioFreq === "number" ? source.radioFreq : undefined,
+      contents: Array.isArray(source.contents)
+        ? (source.contents as InventoryEntry["contents"])
+        : undefined,
     },
   );
   if (entry.id !== def.id || entry.quantity !== source.quantity) return null;
@@ -254,7 +262,17 @@ export function isMarketListableSlot(
   slotIndex: number,
   equippedSlot: number,
 ): boolean {
-  if (!isPocketSlot(slotIndex) && !isWeaponSlot(slotIndex)) return false;
+  if (slotIndex === BACKPACK_SLOT_INDEX && backpackStorageHasItems(inventory)) {
+    return false;
+  }
+  if (
+    !isPocketSlot(slotIndex) &&
+    !isBackpackStorageIndex(slotIndex) &&
+    slotIndex !== BACKPACK_SLOT_INDEX &&
+    !isWeaponSlot(slotIndex)
+  ) {
+    return false;
+  }
   const slot = inventory[slotIndex];
   if (!slot || !Number.isInteger(slot.quantity) || slot.quantity <= 0) return false;
   const def = getItemDefinition(slot.id);
@@ -319,13 +337,14 @@ export function grantMarketItem(
   if (!clean) return null;
   if (!canAddToInventory(inventory, clean.id, clean.quantity)) return null;
   const beforeCount = countItemInInventory(inventory, clean.id);
-  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const access = inventorySlotAccess(inventory);
+  const next = cloneInventory(inventory);
   const maxStack = maxStackForItem(clean.id);
   let remaining = clean.quantity;
   let placedSlot = -1;
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
-    if (!itemFitsInSlot(clean.id, i)) continue;
+    if (!itemFitsInSlot(clean.id, i, access)) continue;
     const slot = next[i];
     if (!slot || slot.id !== clean.id) continue;
     const room = maxStack - slot.quantity;
@@ -336,7 +355,7 @@ export function grantMarketItem(
   }
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
-    if (!itemFitsInSlot(clean.id, i) || next[i]) continue;
+    if (!itemFitsInSlot(clean.id, i, access) || next[i]) continue;
     const add = Math.min(maxStack, remaining);
     const isFirstNew = placedSlot < 0;
     next[i] = makeInventoryEntry(

@@ -2,6 +2,8 @@ import {
   canAddToInventory,
   addToInventory,
   countItemInInventory,
+  inventorySlotAccess,
+  isBackpackStorageIndex,
   itemFitsInSlot,
   maxStackForItem,
   isPocketSlot,
@@ -28,7 +30,57 @@ export type CraftRecipe = {
   breakdown?: boolean;
   /** Extra line on a breakdown card. */
   note?: string;
+  /**
+   * When set, the recipe is hidden at the bench until this blueprint has
+   * been learned. The item id is the blueprint sheet, not the weapon.
+   */
+  blueprintItemId?: string;
 };
+
+/** True when a learned-blueprint gate does not hide this recipe. */
+export function craftRecipeIsVisible(
+  recipe: CraftRecipe,
+  learnedRecipeIds: ReadonlySet<string>,
+): boolean {
+  if (!recipe.blueprintItemId) return true;
+  return learnedRecipeIds.has(recipe.id);
+}
+
+export const EMPTY_LEARNED_BLUEPRINTS_JSON = "[]";
+
+/** Recipe ids this player has unlocked. Unknown or corrupt entries are dropped. */
+export function parseLearnedBlueprints(json: string | null | undefined): Set<string> {
+  const known = new Set(
+    CRAFT_RECIPES.filter((recipe) => recipe.blueprintItemId).map((recipe) => recipe.id),
+  );
+  if (!json) return new Set();
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    const out = new Set<string>();
+    for (const id of parsed) {
+      if (typeof id === "string" && known.has(id)) out.add(id);
+    }
+    return out;
+  } catch {
+    return new Set();
+  }
+}
+
+/** Returns the next JSON, or null when the recipe was already learned or is not a blueprint recipe. */
+export function withLearnedBlueprint(
+  json: string | null | undefined,
+  recipeId: string,
+): string | null {
+  const known = CRAFT_RECIPES.some(
+    (recipe) => recipe.id === recipeId && !!recipe.blueprintItemId,
+  );
+  if (!known) return null;
+  const set = parseLearnedBlueprints(json);
+  if (set.has(recipeId)) return null;
+  set.add(recipeId);
+  return JSON.stringify([...set].sort());
+}
 
 /** Default workbench craft channel time. */
 export const CRAFT_DURATION_MS = 10_000;
@@ -139,6 +191,84 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
       { itemId: "duct_tape", quantity: 2 },
     ],
   },
+  {
+    id: "craft_pistol",
+    station: "workbench",
+    blueprintItemId: "blueprint_pistol",
+    output: { itemId: "weapon_pistol", quantity: 1 },
+    inputs: [
+      { itemId: "pistol_frame", quantity: 1 },
+      { itemId: "pistol_slide", quantity: 1 },
+      { itemId: "pistol_trigger", quantity: 1 },
+      { itemId: "small_spring", quantity: 1 },
+    ],
+  },
+  {
+    id: "craft_revolver",
+    station: "workbench",
+    blueprintItemId: "blueprint_revolver",
+    output: { itemId: "weapon_revolver", quantity: 1 },
+    inputs: [
+      { itemId: "revolver_frame", quantity: 1 },
+      { itemId: "revolver_cylinder", quantity: 1 },
+      { itemId: "revolver_barrel", quantity: 1 },
+      { itemId: "revolver_trigger", quantity: 1 },
+      { itemId: "small_spring", quantity: 1 },
+    ],
+  },
+  {
+    id: "craft_shotgun",
+    station: "workbench",
+    blueprintItemId: "blueprint_shotgun",
+    output: { itemId: "weapon_shotgun", quantity: 1 },
+    inputs: [
+      { itemId: "shotgun_receiver", quantity: 1 },
+      { itemId: "shotgun_barrel", quantity: 1 },
+      { itemId: "shotgun_stock", quantity: 1 },
+      { itemId: "shotgun_trigger", quantity: 1 },
+      { itemId: "large_spring", quantity: 1 },
+    ],
+  },
+  {
+    id: "craft_hunting_rifle",
+    station: "workbench",
+    blueprintItemId: "blueprint_hunting_rifle",
+    output: { itemId: "weapon_hunting_rifle", quantity: 1 },
+    inputs: [
+      { itemId: "rifle_receiver", quantity: 1 },
+      { itemId: "rifle_barrel", quantity: 1 },
+      { itemId: "rifle_stock", quantity: 1 },
+      { itemId: "rifle_trigger", quantity: 1 },
+      { itemId: "scope", quantity: 1 },
+      { itemId: "large_spring", quantity: 1 },
+    ],
+  },
+  {
+    id: "craft_ak",
+    station: "workbench",
+    blueprintItemId: "blueprint_ak",
+    output: { itemId: "weapon_assault_rifle", quantity: 1 },
+    inputs: [
+      { itemId: "ak_receiver", quantity: 1 },
+      { itemId: "ak_barrel", quantity: 1 },
+      { itemId: "ak_stock", quantity: 1 },
+      { itemId: "rifle_trigger", quantity: 1 },
+      { itemId: "large_spring", quantity: 1 },
+    ],
+  },
+  {
+    id: "craft_m4",
+    station: "workbench",
+    blueprintItemId: "blueprint_m4",
+    output: { itemId: "weapon_m4a1", quantity: 1 },
+    inputs: [
+      { itemId: "m4_receiver", quantity: 1 },
+      { itemId: "m4_barrel", quantity: 1 },
+      { itemId: "m4_stock", quantity: 1 },
+      { itemId: "rifle_trigger", quantity: 1 },
+      { itemId: "large_spring", quantity: 1 },
+    ],
+  },
 ] as const;
 
 export function getCraftRecipe(recipeId: string): CraftRecipe | undefined {
@@ -152,7 +282,7 @@ export function isCraftItemQty(ing: CraftIngredient): ing is CraftItemQty {
 function countItemInPockets(inventory: Inventory, itemId: string): number {
   let total = 0;
   for (let i = 0; i < inventory.length; i++) {
-    if (!isPocketSlot(i)) continue;
+    if (!isPocketSlot(i) && !isBackpackStorageIndex(i)) continue;
     const slot = inventory[i];
     if (slot?.id === itemId) total += slot.quantity;
   }
@@ -181,7 +311,11 @@ export function resolveCraftIngredient(
   return null;
 }
 
-export function canCraftRecipe(inventory: Inventory, recipe: CraftRecipe): boolean {
+export function canCraftRecipe(
+  inventory: Inventory,
+  recipe: CraftRecipe,
+  extraPockets?: number,
+): boolean {
   for (const ing of recipe.inputs) {
     if (!resolveCraftIngredient(inventory, ing)) return false;
   }
@@ -189,6 +323,7 @@ export function canCraftRecipe(inventory: Inventory, recipe: CraftRecipe): boole
     inventory,
     recipe.output.itemId,
     recipe.output.quantity,
+    extraPockets,
   );
 }
 
@@ -349,10 +484,15 @@ function stackedRoom(inventory: Inventory, itemId: string): number {
   return room;
 }
 
-function emptySlotsFor(inventory: Inventory, itemId: string): number {
+function emptySlotsFor(
+  inventory: Inventory,
+  itemId: string,
+  extraPockets?: number,
+): number {
+  const access = inventorySlotAccess(inventory, extraPockets);
   let n = 0;
   for (let i = 0; i < inventory.length; i++) {
-    if (!inventory[i] && itemFitsInSlot(itemId, i)) n++;
+    if (!inventory[i] && itemFitsInSlot(itemId, i, access)) n++;
   }
   return n;
 }
@@ -365,13 +505,14 @@ export function canDisassemble(
   inventory: Inventory,
   recipe: DisassemblyRecipe,
   deferSlots: readonly number[] = [],
+  extraPockets?: number,
 ): boolean {
   if (countItemInInventory(inventory, recipe.weaponId) < 1) return false;
   const next = consumeCraftInput(inventory, recipe.weaponId, 1, deferSlots);
   const needsSlot = recipe.parts.filter((id) => stackedRoom(next, id) < 1);
   const slotsNeeded = Math.min(recipe.returnCount, needsSlot.length);
   if (slotsNeeded === 0) return true;
-  return emptySlotsFor(next, needsSlot[0]!) >= slotsNeeded;
+  return emptySlotsFor(next, needsSlot[0]!, extraPockets) >= slotsNeeded;
 }
 
 function pickDistinctParts(

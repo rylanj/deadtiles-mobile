@@ -114,6 +114,10 @@ export class PlayerMarketUI {
   private visible = false;
   private traderId = "";
   private busy = false;
+  /** Sold ad hidden locally until this payout collect is settled. */
+  private pendingPayoutId: number | null = null;
+  /** True after the listing form has been shown, so a refresh can keep the draft. */
+  private formLive = false;
   private ashenReputation = ASHEN_REP_START;
   private inventoryJson = "[]";
   private equippedInventorySlot = -1;
@@ -299,6 +303,8 @@ export class PlayerMarketUI {
     this.traderId = payload.traderId;
     this.visible = true;
     this.busy = false;
+    this.pendingPayoutId = null;
+    this.formLive = false;
     this.boardQuery = "";
     this.appliedQuery = "";
     this.boardPage = 0;
@@ -315,13 +321,17 @@ export class PlayerMarketUI {
 
   sync(payload: MarketStatePayload) {
     if (!this.visible || payload.traderId !== this.traderId) return;
-    this.busy = false;
+    if (!this.collectInFlight() || this.snapshotSettlesCollect(payload)) {
+      this.busy = false;
+    }
     this.apply(payload);
   }
 
   close() {
     this.visible = false;
     this.busy = false;
+    this.pendingPayoutId = null;
+    this.formLive = false;
     this.pickAbort.abort();
     this.pickAbort = new AbortController();
     this.expandedBoardId = null;
@@ -343,24 +353,85 @@ export class PlayerMarketUI {
     this.overlay.remove();
   }
 
+  private collectInFlight(): boolean {
+    return this.pendingPayoutId != null;
+  }
+
+  /** True when this snapshot is the server's answer to the payout collect in flight. */
+  private snapshotSettlesCollect(payload: MarketStatePayload): boolean {
+    return (
+      this.pendingPayoutId != null && payload.settledListingId === this.pendingPayoutId
+    );
+  }
+
   private markBusy() {
     this.busy = true;
     window.clearTimeout(this.busyTimer);
     this.busyTimer = window.setTimeout(() => {
       if (!this.busy || !this.visible || !this.lastPayload) return;
       this.busy = false;
+      this.pendingPayoutId = null;
       this.apply(this.lastPayload);
     }, 2000);
   }
 
+  /** Drop a sold ad from Your ads as soon as Collect is pressed. */
+  private beginPayoutCollect(listingId: number) {
+    const listing = this.listings.find((row) => row.id === listingId && row.yours);
+    this.pendingPayoutId = listingId;
+    if (this.expandedMineId === listingId) this.expandedMineId = null;
+    if (listing) {
+      this.desk = {
+        ...this.desk,
+        activeCount: Math.max(0, this.desk.activeCount - 1),
+      };
+      this.paintListingCap();
+      this.refreshHint();
+    }
+    this.mineKey = `${this.yoursMineKey()}|${listingId}`;
+    this.renderMine();
+  }
+
+  private yoursMineKey(): string {
+    return this.listings
+      .filter((listing) => listing.yours)
+      .map(
+        (listing) =>
+          `${listing.id}:${listing.awaitingPayout ? 1 : 0}:${listing.price}:${listing.expiresAt}`,
+      )
+      .join("|");
+  }
+
+  private paintListingCap() {
+    const cap = this.formEl.querySelector(".market-cap");
+    if (cap) {
+      cap.textContent = `You have posted ${this.desk.activeCount}/${this.desk.listingCap} ads`;
+    }
+    const listBtn = this.formEl.querySelector("button.market-action");
+    if (listBtn instanceof HTMLButtonElement) {
+      const full = this.desk.activeCount >= this.desk.listingCap;
+      listBtn.disabled = this.busy || full || !this.selectedSlot();
+    }
+  }
+
   private apply(payload: MarketStatePayload) {
-    window.clearTimeout(this.busyTimer);
+    const settles = this.snapshotSettlesCollect(payload);
+    if (!this.collectInFlight() || settles) {
+      window.clearTimeout(this.busyTimer);
+    }
+    if (settles) this.pendingPayoutId = null;
     this.lastPayload = payload;
     this.ashenReputation = payload.ashenReputation ?? ASHEN_REP_START;
     this.inventoryJson = payload.inventoryJson;
     this.equippedInventorySlot = payload.equippedInventorySlot;
     this.listings = readListings(payload.listingsJson);
     this.desk = readDesk(payload.deskJson);
+    if (this.pendingPayoutId != null) {
+      this.desk = {
+        ...this.desk,
+        activeCount: Math.max(0, this.desk.activeCount - 1),
+      };
+    }
     const carried = countItemInInventory(parseInventory(this.inventoryJson), "banknote");
     this.boardNotesEl.textContent = `$${carried}`;
     this.boardNotesEl.setAttribute("aria-label", `${carried} banknotes`);
@@ -369,17 +440,22 @@ export class PlayerMarketUI {
     this.boardSort = payload.boardSort === "cheap" ? "cheap" : "new";
     this.appliedQuery = payload.boardQuery ?? "";
     const formKey = `${payload.inventoryJson}|${payload.equippedInventorySlot}|${payload.deskJson}|${payload.ashenReputation}`;
-    const mineKey = this.listings
-      .filter((listing) => listing.yours)
-      .map((listing) => `${listing.id}:${listing.awaitingPayout ? 1 : 0}:${listing.price}:${listing.expiresAt}`)
-      .join("|");
+    const displayKey = `${this.yoursMineKey()}|${this.pendingPayoutId ?? ""}`;
     if (this.formKey !== formKey) {
       this.formKey = formKey;
       this.renderDesk();
-      this.renderForm();
+      this.renderForm(this.formLive);
+      this.formLive = true;
+    } else {
+      const nextCap = `You have posted ${this.desk.activeCount}/${this.desk.listingCap} ads`;
+      const cap = this.formEl.querySelector(".market-cap");
+      if (!cap || cap.textContent !== nextCap) {
+        this.paintListingCap();
+        this.refreshHint();
+      }
     }
-    if (this.mineKey !== mineKey) {
-      this.mineKey = mineKey;
+    if (this.mineKey !== displayKey) {
+      this.mineKey = displayKey;
       this.renderMine();
     }
     this.renderBoard();
@@ -527,7 +603,9 @@ export class PlayerMarketUI {
     }
   }
 
-  private renderForm() {
+  private renderForm(keepDraft = false) {
+    const draftPrice = keepDraft && this.priceInput ? this.priceInput.value : "";
+    const draftQty = keepDraft && this.qtyInput ? this.qtyInput.value : "";
     this.pickAbort.abort();
     this.pickAbort = new AbortController();
     const signal = this.pickAbort.signal;
@@ -689,6 +767,13 @@ export class PlayerMarketUI {
       this.qtyInput.max = String(selected.quantity);
       this.qtyInput.value = String(selected.quantity);
     }
+    if (keepDraft && selected && draftQty !== "") {
+      const n = Number(draftQty);
+      if (Number.isInteger(n) && n >= 1) {
+        this.qtyInput.value = String(Math.min(n, selected.quantity));
+      }
+    }
+    if (keepDraft && draftPrice !== "") this.priceInput.value = draftPrice;
     this.formEl.append(cap, slotField, qtyLabel, priceLabel, this.hintEl, listBtn);
     this.refreshHint();
   }
@@ -743,7 +828,10 @@ export class PlayerMarketUI {
     const scrollTop = this.mineEl.scrollTop;
     this.mineEl.replaceChildren();
     const mine = this.listings.filter(
-      (listing) => listing.yours && (listing.awaitingPayout || listing.expiresAt > now),
+      (listing) =>
+        listing.id !== this.pendingPayoutId &&
+        listing.yours &&
+        (listing.awaitingPayout || listing.expiresAt > now),
     );
     mine.sort((a, b) => Number(b.awaitingPayout) - Number(a.awaitingPayout));
     if (mine.length === 0) {
@@ -757,8 +845,7 @@ export class PlayerMarketUI {
       this.mineEl.append(this.listingCard(listing, now, "mine"));
     }
     this.mineEl.scrollTop = scrollTop;
-    const scroller = this.mineEl.parentElement;
-    if (scroller instanceof HTMLElement) this.revealExpanded(scroller);
+    this.revealExpanded(this.mineEl);
   }
 
   /** Keep an open ad, including its action button, inside the scrolling list. */
@@ -899,6 +986,7 @@ export class PlayerMarketUI {
       button.addEventListener("click", () => {
         if (this.busy) return;
         this.markBusy();
+        this.beginPayoutCollect(listing.id);
         this.handlers.onCollectPayout(listing.id);
       });
       details.append(line, button);

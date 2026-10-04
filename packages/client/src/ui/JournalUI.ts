@@ -341,15 +341,23 @@ export class JournalUI {
     }
 
     if (status === "active") {
+      const fieldOpen = def.objectives.some(
+        (obj) =>
+          obj.kind !== "turnInItem" && !isQuestObjectiveDone(state, def, obj),
+      );
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = questHasItemTurnIn(def)
+      hint.textContent = fieldOpen
         ? giver
-          ? `Turn in with ${giver} once you have the items.`
-          : "Turn in with the quest giver once you have the items."
-        : giver
-          ? `Report back to ${giver} when the job is done.`
-          : "Report back to the quest giver when the job is done.";
+          ? `Finish the steps, then turn in with ${giver}.`
+          : "Finish the steps, then turn them in."
+        : questHasItemTurnIn(def)
+          ? giver
+            ? `Turn in with ${giver} once you have the items.`
+            : "Turn in with the quest giver once you have the items."
+          : giver
+            ? `Report back to ${giver} when the job is done.`
+            : "Report back to the quest giver when the job is done.";
       details.appendChild(hint);
     }
 
@@ -449,10 +457,12 @@ export class JournalUI {
       subMeta.textContent = skillMeta(sub, parentLevel);
       subHead.append(subName, subMeta);
       row.append(subHead, skillBar(sub, parentLevel));
-      const benefit = document.createElement("div");
-      benefit.className = "craft-recipe-hint journal-skill-benefit";
-      benefit.textContent = SUB_SKILL_BENEFIT[subId];
-      row.appendChild(benefit);
+      for (const line of SUB_SKILL_BENEFIT[subId]) {
+        const benefit = document.createElement("div");
+        benefit.className = "craft-recipe-hint journal-skill-benefit";
+        benefit.textContent = line;
+        row.appendChild(benefit);
+      }
       subs.appendChild(row);
     }
     details.appendChild(subs);

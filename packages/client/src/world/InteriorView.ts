@@ -10,6 +10,10 @@ import {
   houseRoomsForBuilding,
   houseRoomAtTile,
   motelRoomAtTile,
+  officeMeetingRoomForBuilding,
+  officeMeetingRoomAtTile,
+  officeManagerRoomForBuilding,
+  officeManagerRoomAtTile,
   interiorDimensions,
   interiorExitForBuildingAt,
   interiorWallCornerDepthBias,
@@ -29,6 +33,7 @@ import {
   type HouseRoom,
   type InteriorWallTile,
   type MotelRoom,
+  type OfficeMeetingRoom,
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
@@ -194,13 +199,22 @@ const FURNITURE_RENDER_HEIGHT = FURNITURE_RENDER_HEIGHT_PX;
 const BIGSHELF_RENDER_HEIGHT = BIGSHELF_RENDER_HEIGHT_PX;
 /** Desk display height relative to generic furniture scale. */
 const DESK_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.968);
-/** Desk2 L-desk — slightly larger than Desk1. */
-const DESK2_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.12);
+/** Desk2 L-desk. Was 1.12× generic furniture, then scaled down 10%. */
+const DESK2_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.12 * 0.9);
 /**
  * Desk art has empty padding under the feet. Positive = lower on screen.
  * Tuned so legs sit on the tile, then raised 10% of display height.
  */
 const DESK_BOTTOM_PAD = Math.round(DESK_RENDER_HEIGHT * 0.12);
+/** Desk3 office bullpen. Desk1 size, then 10% larger. */
+const DESK3_RENDER_HEIGHT = Math.round(DESK_RENDER_HEIGHT * 1.2);
+const DESK3_BOTTOM_PAD = Math.round(DESK3_RENDER_HEIGHT * 0.12);
+/** Stairs1 flight. Long enough to read across a 3-tile run. */
+const STAIRS_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.8);
+/** Ascending flight. Positive pad moves the sprite down the screen. */
+const STAIRS_BOTTOM_PAD = Math.round(STAIRS_RENDER_HEIGHT * 0.125);
+/** Descending flight. Drops the sprite into the hole in the upper floor. */
+const STAIRS_DESCEND_BOTTOM_PAD = Math.round(STAIRS_RENDER_HEIGHT * 0.55);
 const DESK2_BOTTOM_PAD = Math.round(DESK2_RENDER_HEIGHT * 0.12);
 /** BigShelf1 — lower by 10% of display height. */
 const BIGSHELF_BOTTOM_PAD = Math.round(BIGSHELF_RENDER_HEIGHT * 0.1);
@@ -264,6 +278,7 @@ const GROUNDBACKPACK_RENDER_HEIGHT = Math.round(SUITCASE_RENDER_HEIGHT * 0.5 * 1
 const GROUNDBACKPACK_BOTTOM_PAD = -Math.round(GROUNDBACKPACK_RENDER_HEIGHT * 0.25);
 /** WaterCooler — tall office cooler. */
 const WATERCOOLER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.05);
+const WATERCOOLER_BOTTOM_PAD = -Math.round(WATERCOOLER_RENDER_HEIGHT * 0.05);
 /** TrashCan1 — ~55% base, then 30% smaller. */
 const TRASHCAN_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.55 * 0.7);
 /** TrashCan1 — raise by 30% of display height. */
@@ -327,6 +342,13 @@ const DRINKDISPLAY_BOTTOM_PAD =
   COUNTER_BOTTOM_PAD + Math.round(DRINKDISPLAY_RENDER_HEIGHT * 0.025);
 /** BagChair1 — 20% smaller than generic furniture. */
 const BAGCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.8);
+/** Armchair1 — wingback, then 10% smaller. */
+const ARMCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 0.9);
+/** Sofa1: bench height so a 2-tile seat reads wide, then 10% smaller. */
+const SOFA_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 1.2 * 0.9);
+/** Sofa1: bench drop of 12.5%, then raised by 5% of display height. */
+const SOFA_BOTTOM_PAD =
+  Math.round(SOFA_RENDER_HEIGHT * 0.125) - Math.round(SOFA_RENDER_HEIGHT * 0.05);
 /** CampChair1 — 20% then 20% smaller than BagChair1, then 20% larger, then 10% smaller. */
 const CAMPCHAIR_RENDER_HEIGHT = Math.round(
   BAGCHAIR_RENDER_HEIGHT * 0.8 * 0.8 * 1.2 * 0.9,
@@ -378,9 +400,36 @@ const FURNACE1_BOTTOM_PAD = Math.round(FURNACE1_RENDER_HEIGHT * 0.05);
 const MANTEL1_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.5);
 /** Mantel1 — lower by 5% of display height, same as the furnace. */
 const MANTEL1_BOTTOM_PAD = Math.round(MANTEL1_RENDER_HEIGHT * 0.05);
+/**
+ * ConferenceTable1 is 512². The floor ellipse covers a 4×3 tile diamond
+ * (screen width 224). Opaque art is 481/512 of the canvas. The sprite is
+ * 10% under that footprint-filling height, then another 20% smaller, anchored
+ * on the footprint center. The pad drops the canvas so the chair wheels
+ * (43px of empty canvas) meet the south corner. The atlas stays at the
+ * pre-shrink height, so this cut does not throw away pixels.
+ */
+const CONFERENCE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 2);
+const CONFERENCE_BOTTOM_PAD = Math.round(CONFERENCE_RENDER_HEIGHT * 0.25);
+/** Copier1 reads as a tall machine on one tile. */
+const COPIER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.8);
+const COPIER_BOTTOM_PAD = -Math.round(COPIER_RENDER_HEIGHT * 0.05);
+/** OfficeChair1, then scaled down 20%. */
+const OFFICECHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.7);
+/**
+ * Whiteboard1 on a 2×1 diamond (screen width 96). Opaque width is 176/256
+ * of the canvas. Display height is two 10% cuts under the footprint-filling size.
+ * Pad drops the stand onto the south edge, raises it by 10% of display height, then lowers it by 5%.
+ */
+const WHITEBOARD_RENDER_HEIGHT = Math.round(140 * 0.9 * 0.9);
+const WHITEBOARD_BOTTOM_PAD =
+  Math.round(12 * 0.9 * 0.9) -
+  Math.round(WHITEBOARD_RENDER_HEIGHT * 0.1) +
+  Math.round(WHITEBOARD_RENDER_HEIGHT * 0.05);
 
 function furnitureRenderHeight(objectType: string): number {
   if (objectType === "desk") return DESK_RENDER_HEIGHT;
+  if (objectType === "desk3") return DESK3_RENDER_HEIGHT;
+  if (objectType === "stairs") return STAIRS_RENDER_HEIGHT;
   if (objectType === "desk2") return DESK2_RENDER_HEIGHT;
   if (objectType === "bigshelf") return BIGSHELF_RENDER_HEIGHT;
   if (objectType === "bed") return BED_RENDER_HEIGHT;
@@ -423,6 +472,8 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "hotdisplay") return COUNTER_RENDER_HEIGHT;
   if (objectType === "drinkdisplay") return DRINKDISPLAY_RENDER_HEIGHT;
   if (objectType === "bagchair") return BAGCHAIR_RENDER_HEIGHT;
+  if (objectType === "armchair") return ARMCHAIR_RENDER_HEIGHT;
+  if (objectType === "sofa") return SOFA_RENDER_HEIGHT;
   if (objectType === "groundbackpack") return GROUNDBACKPACK_RENDER_HEIGHT;
   if (objectType === "ivstand") return IVSTAND_RENDER_HEIGHT;
   if (objectType === "medicalcart") return MEDICALCART_RENDER_HEIGHT;
@@ -435,11 +486,17 @@ function furnitureRenderHeight(objectType: string): number {
   ) {
     return THREESEATER_RENDER_HEIGHT;
   }
+  if (objectType === "conferencetable") return CONFERENCE_RENDER_HEIGHT;
+  if (objectType === "copier") return COPIER_RENDER_HEIGHT;
+  if (objectType === "officechair") return OFFICECHAIR_RENDER_HEIGHT;
+  if (objectType === "whiteboard") return WHITEBOARD_RENDER_HEIGHT;
   return FURNITURE_RENDER_HEIGHT;
 }
 
 function furnitureBottomPad(objectType: string): number {
   if (objectType === "desk") return DESK_BOTTOM_PAD;
+  if (objectType === "desk3") return DESK3_BOTTOM_PAD;
+  if (objectType === "stairs") return STAIRS_BOTTOM_PAD;
   if (objectType === "desk2") return DESK2_BOTTOM_PAD;
   if (objectType === "bigshelf") return BIGSHELF_BOTTOM_PAD;
   if (objectType === "bigbox") return BIGBOX_BOTTOM_PAD;
@@ -457,6 +514,7 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "workbench") return WORKBENCH_BOTTOM_PAD;
   if (objectType === "nightstand") return NIGHTSTAND_BOTTOM_PAD;
   if (objectType === "suitcase") return SUITCASE_BOTTOM_PAD;
+  if (objectType === "watercooler") return WATERCOOLER_BOTTOM_PAD;
   if (objectType === "trashcan") return TRASHCAN_BOTTOM_PAD;
   if (objectType === "checkout") return CHECKOUT_BOTTOM_PAD;
   if (objectType === "supershelf1" || objectType === "supershelf2") {
@@ -502,9 +560,13 @@ function furnitureBottomPad(objectType: string): number {
   ) {
     return THREESEATER_BOTTOM_PAD;
   }
+  if (objectType === "sofa") return SOFA_BOTTOM_PAD;
   if (objectType === "vendingmachine") return VENDINGMACHINE_BOTTOM_PAD;
   if (objectType === "furnace") return FURNACE1_BOTTOM_PAD;
   if (objectType === "mantel") return MANTEL1_BOTTOM_PAD;
+  if (objectType === "conferencetable") return CONFERENCE_BOTTOM_PAD;
+  if (objectType === "copier") return COPIER_BOTTOM_PAD;
+  if (objectType === "whiteboard") return WHITEBOARD_BOTTOM_PAD;
   return 0;
 }
 
@@ -536,7 +598,9 @@ export class InteriorView {
    */
   private fadeComposite: Phaser.GameObjects.RenderTexture | null = null;
   /** Hospital cubicles + motel room bays — SW/SE faces fade while inside. */
-  private fadeCubicles: Array<HospitalCubicle | MotelRoom | HouseRoom> = [];
+  private fadeCubicles: Array<
+    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom
+  > = [];
   /** Last cubicle fade key — skip redundant rebuild when tile unchanged. */
   private lastCubicleFadeKey = "";
   private objectSprites = new Map<string, ObjectSprite>();
@@ -632,6 +696,12 @@ export class InteriorView {
   /** Current interior tile dimensions (2× the exterior footprint). */
   private iW = 4;
   private iH = 4;
+  /** 0 is the ground floor. Upper floors are an empty shell. */
+  private floorLevel = 0;
+  /** Furniture currently drawn in this interior. Used to cut stair holes upstairs. */
+  private syncedSearchables: SearchableVisual[] = [];
+  /** Stair tiles omitted from the last upper-floor bake, so it is not rebaked every frame. */
+  private stairHoleKey = "";
 
   constructor(private scene: Phaser.Scene) {}
 
@@ -770,6 +840,10 @@ export class InteriorView {
     if (item.objectType === "groundbackpack") {
       return this.groundBagDepthAt(item.x, item.y);
     }
+    // Upper-floor stairs sit under the carpet so the flight reads as a hole.
+    if (item.objectType === "stairs" && this.floorLevel > 0) {
+      return interiorFloorDepth(0, 0) - 2;
+    }
     const { w, h } = searchableFootprint(item);
     return (
       interiorFurnitureDepth(item.x + w - 1, item.y + h - 1) +
@@ -785,16 +859,46 @@ export class InteriorView {
     this.visible = true;
     this.buildingX = buildingX;
     this.buildingY = buildingY;
+    this.floorLevel = 0;
     const dims = interiorDimensions(buildingX, buildingY);
     this.iW = dims.iW;
     this.iH = dims.iH;
-    this.fadeCubicles = [
-      ...hospitalCubiclesForBuilding(buildingX, buildingY),
-      ...motelRoomsForBuilding(buildingX, buildingY),
-      ...houseRoomsForBuilding(buildingX, buildingY),
-    ];
+    this.fadeCubicles = this.groundFadeCubicles();
     this.drawFloor();
     this.drawWalls();
+  }
+
+  /** Redraw the shell when the player changes storey. Same building, no enter fade. */
+  setFloorLevel(level: number) {
+    const next = level > 0 ? level : 0;
+    if (this.floorLevel === next) return;
+    this.floorLevel = next;
+    if (!this.visible) return;
+    for (const sprite of this.floorSprites) sprite.destroy();
+    this.floorSprites = [];
+    this.clearWallSprites();
+    this.clearInternalDoorSprites();
+    this.clearFadeComposite();
+    this.lastCubicleFadeKey = "";
+    this.fadeCubicles = next > 0 ? [] : this.groundFadeCubicles();
+    this.drawFloor();
+    this.drawWalls();
+    this.stairHoleKey = this.stairHoleSignature();
+    this.applySearchableDepths();
+  }
+
+  private groundFadeCubicles(): Array<
+    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom
+  > {
+    const officeRoom = officeMeetingRoomForBuilding(this.buildingX, this.buildingY);
+    const managerRoom = officeManagerRoomForBuilding(this.buildingX, this.buildingY);
+    return [
+      ...hospitalCubiclesForBuilding(this.buildingX, this.buildingY),
+      ...motelRoomsForBuilding(this.buildingX, this.buildingY),
+      ...houseRoomsForBuilding(this.buildingX, this.buildingY),
+      ...(officeRoom ? [officeRoom] : []),
+      ...(managerRoom ? [managerRoom] : []),
+    ];
   }
 
   /**
@@ -1018,6 +1122,7 @@ export class InteriorView {
 
   /** Merged procedural + admin + persistent-structure walls (doors count as wall presence too, for run adjacency). */
   getMergedWalls(): InteriorWallTile[] {
+    if (this.floorLevel > 0) return [];
     const base = interiorWallsForBuilding(this.buildingX, this.buildingY);
     const seen = new Set(base.map((w) => `${w.x},${w.y}`));
     const out = [...base];
@@ -1035,6 +1140,9 @@ export class InteriorView {
 
   hide() {
     this.visible = false;
+    this.floorLevel = 0;
+    this.syncedSearchables = [];
+    this.stairHoleKey = "";
     const floorTexKey = interiorFloorTextureKey(this.buildingX, this.buildingY);
     for (const sprite of this.floorSprites) sprite.destroy();
     this.floorSprites = [];
@@ -1783,6 +1891,7 @@ export class InteriorView {
     const relevant = items.filter(
       (item) => item.buildingX === this.buildingX && item.buildingY === this.buildingY,
     );
+    this.syncedSearchables = relevant;
     const ids = new Set(relevant.map((item) => item.id));
 
     for (const [id, sprite] of this.objectSprites) {
@@ -1800,21 +1909,90 @@ export class InteriorView {
     for (const item of relevant) {
       this.upsertSearchable(item, searchingIds?.has(item.id) === true);
     }
+    this.refreshUpperStairHoles();
+  }
+
+  /** Tiles a stair occupies. Upper floors leave these out of the carpet. */
+  private upperStairHoleKeys(): Set<string> {
+    const holes = new Set<string>();
+    if (this.floorLevel <= 0) return holes;
+    for (const item of this.syncedSearchables) {
+      if (item.objectType !== "stairs") continue;
+      const { w, h } = searchableFootprint(item);
+      for (let ty = item.y; ty < item.y + h; ty++) {
+        for (let tx = item.x; tx < item.x + w; tx++) {
+          holes.add(`${tx},${ty}`);
+        }
+      }
+    }
+    return holes;
+  }
+
+  private stairHoleSignature(): string {
+    if (this.floorLevel <= 0) return "";
+    const parts: string[] = [];
+    for (const item of this.syncedSearchables) {
+      if (item.objectType !== "stairs") continue;
+      parts.push(`${item.x},${item.y},${item.facing ?? ""}`);
+    }
+    parts.sort();
+    return parts.join("|");
+  }
+
+  /** Rebake the carpet when the upstairs stair opening changes. */
+  private refreshUpperStairHoles() {
+    if (this.floorLevel <= 0) return;
+    const sig = this.stairHoleSignature();
+    if (sig === this.stairHoleKey) return;
+    this.stairHoleKey = sig;
+    for (const sprite of this.floorSprites) sprite.destroy();
+    this.floorSprites = [];
+    this.drawFloor();
+  }
+
+  private applySearchableDepths() {
+    for (const item of this.syncedSearchables) {
+      const sprite = this.objectSprites.get(item.id);
+      if (!sprite) continue;
+      sprite.setDepth(this.searchableDepth(item));
+      if (item.objectType === "stairs") this.placeStairSprite(sprite, item);
+    }
+  }
+
+  /** Ascending stairs use the normal pad. Descending stairs drop into the floor hole. */
+  private furniturePad(item: SearchableVisual): number {
+    if (item.objectType === "stairs" && this.floorLevel > 0) {
+      return STAIRS_DESCEND_BOTTOM_PAD;
+    }
+    return furnitureBottomPad(item.objectType);
+  }
+
+  private placeStairSprite(sprite: ObjectSprite, item: SearchableVisual) {
+    const { w, h } = searchableFootprint(item);
+    const iso = cartesianToIso(item.x + w / 2, item.y + h / 2);
+    sprite.setPosition(iso.x, iso.y + TILE_HEIGHT / 2 + this.furniturePad(item));
   }
 
   private drawFloor() {
+    const holes = this.upperStairHoleKeys();
     const tileCoords: { x: number; y: number }[] = [];
     for (let y = 0; y < this.iH; y++) {
-      for (let x = 0; x < this.iW; x++) tileCoords.push({ x, y });
+      for (let x = 0; x < this.iW; x++) {
+        if (holes.has(`${x},${y}`)) continue;
+        tileCoords.push({ x, y });
+      }
     }
 
     const exit = interiorExitForBuildingAt(this.buildingX, this.buildingY);
     const exitX = exit.outsideX;
     const exitY = exit.outsideY;
-    tileCoords.push({ x: exitX, y: exitY });
+    if (this.floorLevel === 0) {
+      tileCoords.push({ x: exitX, y: exitY });
+    }
 
     // Houses get wood; police → GroundTiles; hospital → GroundHospital;
-    // motel → GroundMotel carpet; tent → barracks gravel; else concrete.
+    // motel → GroundMotel carpet; office → GroundOffice carpet;
+    // tent → barracks gravel; else concrete.
     const bType = getBuildingAt(this.buildingX, this.buildingY)?.buildingType;
     const floorKey =
       bType === "house" || bType === undefined
@@ -1825,9 +2003,11 @@ export class InteriorView {
             ? "tile-hospital"
             : bType === "motel"
               ? "tile-motel"
-              : bType === "tent" || bType === "mess_hall"
-                ? "tile-barracks"
-                : "tile-concrete";
+              : bType === "office"
+                ? "tile-office"
+                : bType === "tent" || bType === "mess_hall"
+                  ? "tile-barracks"
+                  : "tile-concrete";
     const floor = createInteriorFloorImage(
       this.scene,
       this.buildingX,
@@ -1839,6 +2019,8 @@ export class InteriorView {
       floor.setDepth(interiorFloorDepth(0, 0));
       this.floorSprites.push(floor);
     }
+
+    if (this.floorLevel > 0) return;
 
     // Arrow along the iso exit axis (SE face → +x / SE; SW face → +y / SW).
     const exitIso = cartesianToIso(exitX + 0.5, exitY + 0.5);
@@ -2045,6 +2227,10 @@ export class InteriorView {
     if (motel) return motel.facing;
     const hospital = hospitalCubicleAtTile(this.buildingX, this.buildingY, tx, ty);
     if (hospital) return hospital.facing;
+    const office = officeMeetingRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (office) return office.facing;
+    const manager = officeManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (manager) return manager.facing;
     return null;
   }
 
@@ -2225,6 +2411,7 @@ export class InteriorView {
       // Keep depth in sync (footprint / sort rules can change without recreate).
       const depth = this.searchableDepth(item);
       if ("setDepth" in sprite) sprite.setDepth(depth);
+      if (item.objectType === "stairs") this.placeStairSprite(sprite, item);
       this.trackGroundBagTile(item);
       this.searchedState.set(item.id, item.searched);
       this.searchingState.set(item.id, isSearching);
@@ -2240,7 +2427,7 @@ export class InteriorView {
     const depth = this.searchableDepth(item);
 
     // Anchor sprites to the south vertex of the tile diamond so they sit on the floor.
-    const groundY = iso.y + TILE_HEIGHT / 2 + furnitureBottomPad(item.objectType);
+    const groundY = iso.y + TILE_HEIGHT / 2 + this.furniturePad(item);
 
     if (animDef && textureKeyExists(this.scene, animDef.idleKey)) {
       const animSprite = addSpriteForKey(this.scene, iso.x, groundY, animDef.idleKey);

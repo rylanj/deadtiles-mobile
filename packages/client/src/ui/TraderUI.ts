@@ -5,11 +5,14 @@ import {
   ASHEN_REP_PER_DOLLAR_TAKEN,
   ashenStanding,
   ashenStandingLabel,
+  backpackHoldsItems,
   getItemDefinition,
+  isBackpackItem,
+  isQuestKeepsakeItem,
   parseInventory,
   tradeOfferTotals,
   tradeOfferCashSettlement,
-  tradeOfferFitsTraderStock,
+  tradeOfferStockFitProblem,
   TRADER_SHOP_CAPACITY,
   traderBuyPrice,
   traderSellPrice,
@@ -18,7 +21,7 @@ import {
   type TradeOfferBuyLine,
   type TradeOfferSellLine,
 } from "@zombie/shared";
-import { appendItemIcon } from "./itemIcons";
+import { appendItemIcon, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
@@ -56,6 +59,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   medical: "#3a7070",
   crafting: "#6a6040",
   junk: "#5a5a4a",
+  magazine: "#4d5d73",
   food: "#8a6840",
   drink: "#406080",
 };
@@ -523,6 +527,7 @@ export class TraderUI {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "inventory-cell inventory-cell--filled trader-cell";
+    markQuestKeepsake(cell, opts.id);
     if (opts.selected) cell.classList.add("inventory-cell--selected");
     if (opts.offered > 0) cell.classList.add("trader-cell--offered");
     cell.style.setProperty(
@@ -635,11 +640,10 @@ export class TraderUI {
       this.traderBanknotes,
       this.playerBanknotes,
     );
-    const fits = tradeOfferFitsTraderStock(
-      this.stock,
+    const blockReason = this.confirmBlockReason(
+      cash.playerCanAfford,
       sells,
       buys,
-      this.stockCapacity,
     );
     const repGain =
       buyTotal * ASHEN_REP_PER_DOLLAR_GIVEN +
@@ -695,18 +699,45 @@ export class TraderUI {
       this.settlementEl.append(repLine);
     }
 
+    if (blockReason) {
+      const block = document.createElement("div");
+      block.className = "trader-settlement-block";
+      block.textContent = blockReason;
+      this.settlementEl.append(block);
+    }
+
     this.clearOfferBtn.hidden = false;
     this.clearOfferBtn.disabled = this.confirmPending;
     this.confirmBtn.hidden = false;
-    this.confirmBtn.disabled =
-      !cash.playerCanAfford || !fits || this.confirmPending;
-    this.confirmBtn.title = this.confirmPending
-      ? "Confirming…"
-      : !fits
-        ? "Trader can't carry that much"
-        : cash.playerCanAfford
-          ? ""
-          : "Not enough banknotes";
+    this.confirmBtn.disabled = blockReason.length > 0;
+    this.confirmBtn.title = blockReason;
+  }
+
+  private confirmBlockReason(
+    playerCanAfford: boolean,
+    sells: TradeOfferSellLine[],
+    buys: TradeOfferBuyLine[],
+  ): string {
+    if (this.confirmPending) return "Confirming…";
+    const problem = tradeOfferStockFitProblem(
+      this.stock,
+      sells,
+      buys,
+      this.stockCapacity,
+    );
+    if (problem?.kind === "stale") return "That offer is no longer available.";
+    if (problem?.kind === "shelf") {
+      return "The merchant cannot accept any more goods right now.";
+    }
+    if (problem?.kind === "limit") {
+      const name = getItemDefinition(problem.itemId)?.name ?? "that";
+      if (problem.room === 1) {
+        return `The merchant can only take one more ${name}.`;
+      }
+      return `The merchant can only take ${problem.room} more ${name}.`;
+    }
+    if (!playerCanAfford) return "Not enough banknotes.";
+    return "";
   }
 
   private updateActionButtons() {
@@ -720,11 +751,18 @@ export class TraderUI {
     this.buy10Btn.hidden = !buy;
 
     if (sell && this.selection?.side === "player") {
+      const keepsake = isQuestKeepsakeItem(this.selection.id);
+      const packLocked = this.wornPackLocked(this.selection.slotIndex, this.selection.id);
       const remaining =
         this.selection.quantity - this.offeredSellQty(this.selection.slotIndex);
-      this.sellBtn.disabled = remaining < 1;
-      this.sell5Btn.disabled = remaining < 5;
-      this.sell10Btn.disabled = remaining < 10;
+      this.sellBtn.disabled = keepsake || packLocked || remaining < 1;
+      this.sellBtn.title = keepsake
+        ? "Traders will not buy these."
+        : packLocked
+          ? "Empty the pack to sell it."
+          : "";
+      this.sell5Btn.disabled = keepsake || packLocked || remaining < 5;
+      this.sell10Btn.disabled = keepsake || packLocked || remaining < 10;
     }
     if (buy && this.selection?.side === "trader") {
       const remaining =
@@ -735,8 +773,22 @@ export class TraderUI {
     }
   }
 
+  private wornPackLocked(slotIndex: number, itemId: string): boolean {
+    if (!isBackpackItem(itemId)) return false;
+    return backpackHoldsItems(this.playerInventory, slotIndex);
+  }
+
   private addToOffer(quantity: number) {
     if (!this.selection || quantity <= 0) return;
+    if (this.selection.side === "player" && isQuestKeepsakeItem(this.selection.id)) {
+      return;
+    }
+    if (
+      this.selection.side === "player" &&
+      this.wornPackLocked(this.selection.slotIndex, this.selection.id)
+    ) {
+      return;
+    }
     if (this.selection.side === "player") {
       const already = this.offeredSellQty(this.selection.slotIndex);
       const add = Math.min(quantity, this.selection.quantity - already);

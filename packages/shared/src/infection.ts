@@ -11,8 +11,10 @@ export const INFECTION_TICK_UP = 1;
 /** Percent lost per tick while antibiotics are active. */
 export const INFECTION_TICK_DOWN = 2;
 export const INFECTION_MAX = 100;
-/** One course of antibiotics lasts this long. */
+/** One course of antibiotics lasts this long before Medicine extends it. */
 export const ANTIBIOTIC_DURATION_MS = 30 * 60 * 1000;
+/** Longest course Medicine can grant. Saves must keep this much remaining time. */
+export const ANTIBIOTIC_DURATION_MAX_MS = ANTIBIOTIC_DURATION_MS * 2;
 
 export type InfectionState = {
   infected: boolean;
@@ -160,7 +162,7 @@ export function persistInfectionTimers(
   return {
     antibioticRemainingMs:
       state.antibioticUntil > now
-        ? Math.min(ANTIBIOTIC_DURATION_MS, state.antibioticUntil - now)
+        ? Math.min(ANTIBIOTIC_DURATION_MAX_MS, state.antibioticUntil - now)
         : 0,
     infectionTickRemainingMs:
       state.infectionTickAt > now
@@ -181,7 +183,7 @@ export function restoreInfectionTimers(
     antibioticStored,
     now,
     savedAtMs,
-    ANTIBIOTIC_DURATION_MS,
+    ANTIBIOTIC_DURATION_MAX_MS,
   );
   const tick = remainingMsFromSavedTimer(
     tickStored,

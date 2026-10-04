@@ -1,10 +1,19 @@
 import {
   BASE_INVENTORY_SLOTS,
+  BACKPACK_SLOT_INDEX,
+  BACKPACK_STORAGE_START,
+  sealedBackpackStackCount,
   canUseConsumable,
   CLOTHING_SLOT_INDEX,
   WATCH_SLOT_INDEX,
   RADIO_SLOT_INDEX,
   MAP_SLOT_INDEX,
+  POCKET_SLOT_COUNT,
+  retiredPocketIndices,
+  shownBackpackStorageCount,
+  isBackpackItem,
+  isBackpackSlot,
+  isBackpackStorageIndex,
   getEntryDurability,
   getEntryRadioFreq,
   getEntryWetness,
@@ -15,12 +24,15 @@ import {
   WEAPON_SLOT_COUNT,
   isClothingItem,
   isConsumable,
+  isWeaponBlueprint,
+  isSkillMagazine,
   isHotbarOnlyItem,
   isRadioSlot,
   isWatchSlot,
   isMapSlot,
-  itemFitsInSlot,
+  moveInventorySlot,
   canSplitInventoryStackHalf,
+  shownExtraPockets,
   shiftSplitQuantity,
   parseInventory,
   parseWeaponMagazines,
@@ -32,7 +44,7 @@ import {
 } from "@zombie/shared";
 import { AudioManager } from "../audio/AudioManager";
 import { isMobileDevice } from "../device";
-import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar } from "./itemIcons";
+import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import {
@@ -67,12 +79,14 @@ const CATEGORY_COLORS: Record<string, string> = {
   weapons: "#8b4558",
   clothing: "#4a6a8a",
   equipment: "#5a6a4a",
+  backpack: "#5c6b45",
   ammunition: "#6b7a3a",
   medical: "#3a7070",
   crafting: "#6a6040",
   food: "#8a6840",
   drink: "#406080",
   junk: "#5a5a4a",
+  magazine: "#4d5d73",
 };
 
 function shortLabel(name: string): string {
@@ -105,9 +119,13 @@ export class InventoryUI {
   private gridEl: HTMLElement;
   private detailEl: HTMLElement;
   private footerEl: HTMLElement;
+  private extraPockets = 0;
   private weaponSlotsEl: HTMLElement;
+  private radioSlotEl: HTMLElement;
   private equipmentSlotsEl: HTMLElement;
   private pocketSlotsEl: HTMLElement;
+  private backpackSection: HTMLElement;
+  private backpackSlotsEl: HTMLElement;
   private dropBtn: HTMLButtonElement;
   private dropAllBtn: HTMLButtonElement;
   private useBtn: HTMLButtonElement;
@@ -144,18 +162,29 @@ export class InventoryUI {
 
     const weaponsSection = document.createElement("div");
     weaponsSection.className = "inventory-section";
+    const weaponRowLabels = document.createElement("div");
+    weaponRowLabels.className = "inventory-weapon-row-labels";
     const weaponsLabel = document.createElement("div");
-    weaponsLabel.className = "inventory-section-label";
+    weaponsLabel.className = "inventory-section-label inventory-weapon-row-label";
     weaponsLabel.textContent = "Weapons";
+    const radioLabel = document.createElement("div");
+    radioLabel.className = "inventory-section-label inventory-radio-row-label";
+    radioLabel.textContent = "Radio";
+    weaponRowLabels.append(weaponsLabel, radioLabel);
+    const weaponRow = document.createElement("div");
+    weaponRow.className = "inventory-weapon-row";
     this.weaponSlotsEl = document.createElement("div");
     this.weaponSlotsEl.className = "inventory-grid inventory-grid--weapons";
-    weaponsSection.append(weaponsLabel, this.weaponSlotsEl);
+    this.radioSlotEl = document.createElement("div");
+    this.radioSlotEl.className = "inventory-grid inventory-grid--radio";
+    weaponRow.append(this.weaponSlotsEl, this.radioSlotEl);
+    weaponsSection.append(weaponRowLabels, weaponRow);
 
     const equipmentSection = document.createElement("div");
     equipmentSection.className = "inventory-section";
     const equipmentLabels = document.createElement("div");
     equipmentLabels.className = "inventory-equipment-labels";
-    for (const text of ["Clothing", "Watch", "Radio", "Map"]) {
+    for (const text of ["Clothing", "Backpack", "Watch", "Map"]) {
       const lab = document.createElement("div");
       lab.className = "inventory-section-label";
       lab.textContent = text;
@@ -174,7 +203,21 @@ export class InventoryUI {
     this.pocketSlotsEl.className = "inventory-grid inventory-grid--pockets";
     pocketsSection.append(pocketsLabel, this.pocketSlotsEl);
 
-    this.gridEl.append(weaponsSection, equipmentSection, pocketsSection);
+    this.backpackSection = document.createElement("div");
+    this.backpackSection.className = "inventory-section";
+    this.backpackSection.hidden = true;
+    const backpackLabel = document.createElement("div");
+    backpackLabel.className = "inventory-section-label";
+    backpackLabel.textContent = "Backpack";
+    this.backpackSlotsEl = document.createElement("div");
+    this.backpackSlotsEl.className = "inventory-grid inventory-grid--pockets";
+    this.backpackSection.append(backpackLabel, this.backpackSlotsEl);
+
+    const carryScroll = document.createElement("div");
+    carryScroll.className = "inventory-carry-scroll";
+    carryScroll.append(pocketsSection, this.backpackSection);
+
+    this.gridEl.append(weaponsSection, equipmentSection, carryScroll);
 
     this.detailEl = document.createElement("div");
     this.detailEl.className = "inventory-detail";
@@ -305,9 +348,11 @@ export class InventoryUI {
     equippedClothingSlot = -1,
     weaponMagazinesJson = "{}",
     equippedMagazineRounds = 0,
+    extraPockets = 0,
   ) {
     cancelAllSlotDrags();
     const inventory = parseInventory(inventoryJson);
+    this.extraPockets = extraPockets;
     this.currentInventory = inventory;
     this.equippedInventorySlot = equippedInventorySlot;
     this.equippedClothingSlot = equippedClothingSlot;
@@ -323,18 +368,32 @@ export class InventoryUI {
     }
 
     this.weaponSlotsEl.replaceChildren();
+    this.radioSlotEl.replaceChildren();
     this.equipmentSlotsEl.replaceChildren();
     this.pocketSlotsEl.replaceChildren();
+    this.backpackSlotsEl.replaceChildren();
 
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       this.weaponSlotsEl.appendChild(
         this.createCell(i, inventory[i] ?? null, inventoryJson),
       );
     }
+    this.radioSlotEl.appendChild(
+      this.createCell(
+        RADIO_SLOT_INDEX,
+        inventory[RADIO_SLOT_INDEX] ?? null,
+        inventoryJson,
+      ),
+    );
     this.equipmentSlotsEl.append(
       this.createCell(
         CLOTHING_SLOT_INDEX,
         inventory[CLOTHING_SLOT_INDEX] ?? null,
+        inventoryJson,
+      ),
+      this.createCell(
+        BACKPACK_SLOT_INDEX,
+        inventory[BACKPACK_SLOT_INDEX] ?? null,
         inventoryJson,
       ),
       this.createCell(
@@ -343,24 +402,35 @@ export class InventoryUI {
         inventoryJson,
       ),
       this.createCell(
-        RADIO_SLOT_INDEX,
-        inventory[RADIO_SLOT_INDEX] ?? null,
-        inventoryJson,
-      ),
-      this.createCell(
         MAP_SLOT_INDEX,
         inventory[MAP_SLOT_INDEX] ?? null,
         inventoryJson,
       ),
     );
-    for (let i = WEAPON_SLOT_COUNT; i < CLOTHING_SLOT_INDEX; i++) {
+    for (let i = 0; i < POCKET_SLOT_COUNT; i++) {
+      const idx = WEAPON_SLOT_COUNT + i;
       this.pocketSlotsEl.appendChild(
-        this.createCell(i, inventory[i] ?? null, inventoryJson),
+        this.createCell(idx, inventory[idx] ?? null, inventoryJson),
       );
     }
-    for (let i = BASE_INVENTORY_SLOTS; i < inventory.length; i++) {
+    for (const idx of retiredPocketIndices(inventory)) {
       this.pocketSlotsEl.appendChild(
-        this.createCell(i, inventory[i] ?? null, inventoryJson),
+        this.createCell(idx, inventory[idx] ?? null, inventoryJson),
+      );
+    }
+    const extra = shownExtraPockets(inventory, extraPockets);
+    for (let i = 0; i < extra; i++) {
+      const idx = BASE_INVENTORY_SLOTS + i;
+      this.pocketSlotsEl.appendChild(
+        this.createCell(idx, inventory[idx] ?? null, inventoryJson),
+      );
+    }
+    const packSlots = shownBackpackStorageCount(inventory);
+    this.backpackSection.hidden = packSlots <= 0;
+    for (let i = 0; i < packSlots; i++) {
+      const idx = BACKPACK_STORAGE_START + i;
+      this.backpackSlotsEl.appendChild(
+        this.createCell(idx, inventory[idx] ?? null, inventoryJson),
       );
     }
 
@@ -392,6 +462,10 @@ export class InventoryUI {
       cell.classList.add("inventory-cell--radio");
     } else if (isMapSlot(index)) {
       cell.classList.add("inventory-cell--map");
+    } else if (isBackpackSlot(index)) {
+      cell.classList.add("inventory-cell--backpack");
+    } else if (isBackpackStorageIndex(index)) {
+      cell.classList.add("inventory-cell--backpack-storage");
     }
 
     if (index === this.selectedSlot) {
@@ -406,6 +480,7 @@ export class InventoryUI {
       const category = def?.category ?? "crafting";
       cell.style.setProperty("--slot-accent", CATEGORY_COLORS[category] ?? "#555");
       cell.classList.add("inventory-cell--filled");
+      markQuestKeepsake(cell, slot.id);
 
       const hasIcon = appendItemIcon(cell, slot.id, "inventory-cell-icon");
       if (hasIcon) {
@@ -417,10 +492,14 @@ export class InventoryUI {
       label.textContent = shortLabel(def?.name ?? slot.id);
       cell.appendChild(label);
 
-      if (slot.quantity > 1) {
+      const packedCount = sealedBackpackStackCount(slot);
+      if (slot.quantity > 1 || packedCount > 0) {
         const qty = document.createElement("span");
         qty.className = "inventory-cell-qty";
-        qty.textContent = String(slot.quantity);
+        qty.textContent = String(slot.quantity > 1 ? slot.quantity : packedCount);
+        if (packedCount > 0 && slot.quantity <= 1) {
+          qty.title = packedCount === 1 ? "1 item inside" : `${packedCount} items inside`;
+        }
         cell.appendChild(qty);
       }
       const radioFreq = getEntryRadioFreq(slot);
@@ -443,7 +522,8 @@ export class InventoryUI {
         isClothingWorn ||
         isWatchSlot(index) ||
         isRadioSlot(index) ||
-        isMapSlot(index)
+        isMapSlot(index) ||
+        (isBackpackSlot(index) && isBackpackItem(slot.id))
       ) {
         cell.classList.add("inventory-cell--equipped");
       }
@@ -492,12 +572,20 @@ export class InventoryUI {
           const fromItem = this.currentInventory[index];
           if (!fromItem) return false;
           if (shift) {
-            return canSplitInventoryStackHalf(this.currentInventory, index, toSlot);
+            return canSplitInventoryStackHalf(
+              this.currentInventory,
+              index,
+              toSlot,
+              this.extraPockets,
+            );
           }
-          const toItem = this.currentInventory[toSlot];
           return (
-            itemFitsInSlot(fromItem.id, toSlot) &&
-            (!toItem || itemFitsInSlot(toItem.id, index))
+            moveInventorySlot(
+              this.currentInventory,
+              index,
+              toSlot,
+              this.extraPockets,
+            ) !== this.currentInventory
           );
         },
         onDropOn: (target, shift) => {
@@ -596,12 +684,18 @@ export class InventoryUI {
     let zoneHint = "";
     if (this.selectedSlot < WEAPON_SLOT_COUNT) zoneHint = " · weapon slot";
     else if (inClothingSlot) zoneHint = " · clothing slot";
+    else if (isBackpackSlot(this.selectedSlot)) zoneHint = " · backpack slot";
     else if (isWatchSlot(this.selectedSlot)) zoneHint = " · watch slot";
     else if (isRadioSlot(this.selectedSlot)) zoneHint = " · radio slot";
     else if (isMapSlot(this.selectedSlot)) zoneHint = " · map slot";
+    else if (isBackpackStorageIndex(this.selectedSlot)) zoneHint = " · backpack";
     else zoneHint = " · pocket";
     if (isHotbarOnlyItem(slot.id)) zoneHint += " · too large for pockets";
     if (worn) zoneHint += " · worn";
+    const packedCount = sealedBackpackStackCount(slot);
+    if (packedCount > 0) {
+      zoneHint += packedCount === 1 ? " · 1 item inside" : ` · ${packedCount} items inside`;
+    }
     const wet = getEntryWetness(slot);
     if (wet > 0.7) zoneHint += " · soaked";
     else if (wet > 0.005) zoneHint += ` · ${Math.round(wet * 100)}% wet`;
@@ -631,7 +725,9 @@ export class InventoryUI {
 
     this.useBtn.hidden = !isUsableType || !needed;
     this.useBtn.disabled = false;
-    if (isDrink) this.useBtn.textContent = "Drink";
+    if (isWeaponBlueprint(slot.id)) this.useBtn.textContent = "Learn";
+    else if (isSkillMagazine(slot.id)) this.useBtn.textContent = "Read";
+    else if (isDrink) this.useBtn.textContent = "Drink";
     else if (isFood) this.useBtn.textContent = "Eat";
     else this.useBtn.textContent = "Use";
 
@@ -639,7 +735,12 @@ export class InventoryUI {
     const canUnload =
       loadedRounds > 0 &&
       !!ammoType &&
-      canAddToInventory(this.currentInventory, ammoType, loadedRounds);
+      canAddToInventory(
+        this.currentInventory,
+        ammoType,
+        loadedRounds,
+        this.extraPockets,
+      );
     this.unloadBtn.hidden = !canUnload;
     this.unloadBtn.disabled = false;
     this.unloadBtn.textContent = "Unload";

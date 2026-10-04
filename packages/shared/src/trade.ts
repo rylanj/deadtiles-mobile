@@ -1,9 +1,13 @@
 import {
   INVENTORY_ITEMS,
   addToInventory,
+  backpackHoldsItems,
+  backpackStorageContained,
   canAddToInventory,
+  cloneInventory,
   countItemInInventory,
   getItemDefinition,
+  isQuestKeepsakeItem,
   lootCategoryItemIds,
   maxStackForItem,
   removeFromInventorySlot,
@@ -93,14 +97,38 @@ export const ITEM_TRADE_VALUES: Record<string, number> = {
   blue_cigarettes: 20,
   white_tshirt: 50,
   black_tshirt: 50,
+  backpack_fanny: 35,
+  backpack_utility: 70,
+  backpack_small: 110,
+  backpack_black: 110,
+  backpack_hunting: 170,
+  backpack_leather: 240,
+  backpack_hiking: 320,
   gold_chain: 250,
   gold_earrings: 180,
+  clarks_earrings: 0,
   gold_ring: 150,
   silver_chain: 150,
   silver_ring: 90,
   old_teddy: 5,
   teddy: 10,
   map: 15,
+  magazine_melee: 100,
+  magazine_harvesting: 100,
+  magazine_carrying: 100,
+  magazine_construction: 100,
+  magazine_fitness: 100,
+  magazine_immunity: 100,
+  magazine_recovery: 100,
+  magazine_accuracy: 100,
+  magazine_crafting: 100,
+  magazine_scavenging: 100,
+  magazine_stealth: 100,
+  magazine_cooking: 100,
+  magazine_medicine: 100,
+  magazine_reading: 100,
+  magazine_persuasion: 100,
+  magazine_bartering: 100,
   watch: 80,
   handheld_radio: 120,
   canned_beans: 20,
@@ -412,7 +440,7 @@ export function ashenTraderRates(reputation: number): {
 }
 
 export function itemBaseTradeValue(itemId: string): number {
-  if (itemId === "banknote") return 0;
+  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
   return Math.max(1, ITEM_TRADE_VALUES[itemId] ?? 5);
 }
 
@@ -422,10 +450,10 @@ export function traderSellPrice(
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (itemId === "banknote") return 0;
+  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
   const { buyRate } = ashenTraderRates(reputation);
   const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
-  const rate = Math.max(0.65, buyRate * (1 - 0.15 * t));
+  const rate = Math.max(0.65, buyRate * (1 - 0.1 * t));
   return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
 }
 
@@ -445,10 +473,10 @@ export function traderBuyPrice(
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (itemId === "banknote") return 0;
+  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
   const { sellRate } = ashenTraderRates(reputation);
   const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
-  const rate = Math.min(0.5, sellRate * (1 + 0.15 * t));
+  const rate = Math.min(0.5, sellRate * (1 + 0.1 * t));
   return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
 }
 
@@ -469,7 +497,7 @@ export function removeItemQuantity(
   if (quantity <= 0) return inventory;
   if (countItemInInventory(inventory, itemId) < quantity) return null;
   let remaining = quantity;
-  let next = inventory.map((s) => (s ? { ...s } : null));
+  let next = cloneInventory(inventory);
   for (let i = 0; i < next.length && remaining > 0; i++) {
     const slot = next[i];
     if (slot?.id !== itemId) continue;
@@ -490,22 +518,52 @@ export function addToTraderStock(
   }
   const def = getItemDefinition(itemId)!;
   const next = stock.map((e) => ({ ...e }));
-  if (def.stackable) {
-    const existing = next.find((e) => e.id === itemId);
-    if (existing) {
-      existing.quantity += quantity;
-      return next;
-    }
-  }
-  // Non-stackable: one entry per unit.
   if (!def.stackable) {
     for (let i = 0; i < quantity; i++) {
       next.push({ id: itemId, quantity: 1 });
     }
     return next;
   }
-  next.push({ id: itemId, quantity });
+  const max = maxStackForItem(itemId);
+  if (max <= 0) return next;
+  let remaining = quantity;
+  for (const entry of next) {
+    if (entry.id !== itemId || entry.quantity >= max) continue;
+    const into = Math.min(remaining, max - entry.quantity);
+    entry.quantity += into;
+    remaining -= into;
+    if (remaining <= 0) return next;
+  }
+  while (remaining > 0) {
+    const into = Math.min(remaining, max);
+    next.push({ id: itemId, quantity: into });
+    remaining -= into;
+  }
   return next;
+}
+
+/**
+ * How many of `itemId` still fit.
+ * A line stops at {@link maxStackForItem}. Leftover units open another line
+ * while the shop is under `capacity`.
+ */
+export function traderPurchaseRoom(
+  stock: readonly InventoryEntry[],
+  itemId: string,
+  capacity = TRADER_SHOP_CAPACITY,
+): number {
+  const def = getItemDefinition(itemId);
+  if (!def || itemId === "banknote") return 0;
+  const max = maxStackForItem(itemId);
+  if (max <= 0) return 0;
+  const freeLines = Math.max(0, capacity - stock.length);
+  if (!def.stackable) return freeLines;
+  let room = freeLines * max;
+  for (const entry of stock) {
+    if (entry.id !== itemId) continue;
+    room += Math.max(0, max - entry.quantity);
+  }
+  return room;
 }
 
 /** True when `quantity` of `itemId` fits without passing the line cap or a stack cap. */
@@ -518,15 +576,49 @@ export function canAddToTraderStock(
   if (quantity <= 0 || itemId === "banknote" || !getItemDefinition(itemId)) {
     return false;
   }
-  const def = getItemDefinition(itemId)!;
-  const max = maxStackForItem(itemId);
-  if (max <= 0) return false;
-  if (!def.stackable) {
-    return stock.length + quantity <= capacity;
+  return traderPurchaseRoom(stock, itemId, capacity) >= quantity;
+}
+
+export type TradeStockFitProblem =
+  | { kind: "stale" }
+  | { kind: "shelf" }
+  | { kind: "limit"; itemId: string; room: number };
+
+/**
+ * Why an offer does not fit the trader's stock, or null when it does.
+ * Buys are removed first, so a full shelf can still take goods when the same
+ * offer frees a line.
+ */
+export function tradeOfferStockFitProblem(
+  stock: readonly InventoryEntry[],
+  sells: readonly { itemId: string; quantity: number }[],
+  buys: readonly { stockIndex: number; itemId: string; quantity: number }[],
+  capacity = TRADER_SHOP_CAPACITY,
+): TradeStockFitProblem | null {
+  let next = stock.map((entry) => ({ ...entry }));
+  const buyByIndexDesc = [...buys].sort((a, b) => b.stockIndex - a.stockIndex);
+  for (const line of buyByIndexDesc) {
+    if (line.quantity <= 0) continue;
+    const entry = next[line.stockIndex];
+    if (!entry || entry.id !== line.itemId) return { kind: "stale" };
+    const removed = removeFromTraderStock(next, line.stockIndex, line.quantity);
+    if (!removed) return { kind: "stale" };
+    next = removed;
   }
-  const existing = stock.find((entry) => entry.id === itemId);
-  if (existing) return existing.quantity + quantity <= max;
-  return stock.length < capacity && quantity <= max;
+  for (const line of sells) {
+    if (line.quantity <= 0) continue;
+    if (!getItemDefinition(line.itemId) || line.itemId === "banknote") {
+      return { kind: "stale" };
+    }
+    if (canAddToTraderStock(next, line.itemId, line.quantity, capacity)) {
+      next = addToTraderStock(next, line.itemId, line.quantity);
+      continue;
+    }
+    const room = traderPurchaseRoom(next, line.itemId, capacity);
+    if (room <= 0) return { kind: "shelf" };
+    return { kind: "limit", itemId: line.itemId, room };
+  }
+  return next.length <= capacity ? null : { kind: "shelf" };
 }
 
 /**
@@ -540,22 +632,7 @@ export function tradeOfferFitsTraderStock(
   buys: readonly { stockIndex: number; itemId: string; quantity: number }[],
   capacity = TRADER_SHOP_CAPACITY,
 ): boolean {
-  let next = stock.map((entry) => ({ ...entry }));
-  const buyByIndexDesc = [...buys].sort((a, b) => b.stockIndex - a.stockIndex);
-  for (const line of buyByIndexDesc) {
-    if (line.quantity <= 0) continue;
-    const entry = next[line.stockIndex];
-    if (!entry || entry.id !== line.itemId) return false;
-    const removed = removeFromTraderStock(next, line.stockIndex, line.quantity);
-    if (!removed) return false;
-    next = removed;
-  }
-  for (const line of sells) {
-    if (line.quantity <= 0) continue;
-    if (!canAddToTraderStock(next, line.itemId, line.quantity, capacity)) return false;
-    next = addToTraderStock(next, line.itemId, line.quantity);
-  }
-  return next.length <= capacity;
+  return tradeOfferStockFitProblem(stock, sells, buys, capacity) === null;
 }
 
 export function removeFromTraderStock(
@@ -580,8 +657,8 @@ export const TRADER_SHOP_ITEM_COUNT = 12;
 /**
  * Max stock lines an arterial caravan will hold. Spawn fills the first
  * {@link TRADER_SHOP_ITEM_COUNT}. Further player sales stop at this count.
- * Each line also stops at {@link maxStackForItem}, so one stack cannot grow
- * past a normal inventory stack.
+ * Each line stops at {@link maxStackForItem}. A full stack spills onto
+ * another line until this count is reached.
  */
 export const TRADER_SHOP_CAPACITY = 36;
 /** Birchport warehouse trader: stock lines present when the shop first opens. */
@@ -885,6 +962,8 @@ export function applyTradeOffer(
       return null;
     }
     if (!getItemDefinition(line.itemId)) return null;
+    if (isQuestKeepsakeItem(line.itemId)) return null;
+    if (backpackHoldsItems(playerInv, line.slotIndex)) return null;
   }
 
   for (const line of buyLines) {
@@ -918,7 +997,7 @@ export function applyTradeOffer(
   }
   const { playerPays, playerReceives, shortfall } = cash;
 
-  let nextInv = playerInv.map((s) => (s ? { ...s } : null));
+  let nextInv = cloneInventory(playerInv);
   for (const line of sellLines) {
     nextInv = removeFromInventorySlot(nextInv, line.slotIndex, line.quantity);
   }
@@ -957,6 +1036,9 @@ export function applyTradeOffer(
     if (!canAddToInventory(nextInv, "banknote", playerReceives)) return null;
     nextInv = addToInventory(nextInv, "banknote", playerReceives);
   }
+
+  // Selling the worn pack must not leave its contents with nowhere to sit.
+  if (!backpackStorageContained(nextInv)) return null;
 
   return {
     playerInv: nextInv,

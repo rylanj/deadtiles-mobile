@@ -22,6 +22,7 @@ import {
   isMilitiaCaptainSkin,
   isMilitiaDoctorSkin,
   isQuestActive,
+  isQuestListed,
   militiaGuardArtSkin,
   parseInventory,
   parseQuestsJson,
@@ -39,7 +40,7 @@ import {
   PLAYER_MAX_HEALTH,
   type AshenMilitiaTask,
 } from "@zombie/shared";
-import { appendItemIcon } from "./itemIcons";
+import { appendItemIcon, fillSpeechButton, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
@@ -91,6 +92,7 @@ function makeDisplayCell(opts: {
 
   const hasIcon = appendItemIcon(cell, opts.itemId, "inventory-cell-icon");
   if (hasIcon) cell.classList.add("inventory-cell--has-icon");
+  markQuestKeepsake(cell, opts.itemId);
 
   if (opts.qtyLabel) {
     const qty = document.createElement("span");
@@ -111,6 +113,7 @@ export class AshenMilitiaDialogUI {
   private isDoctor = false;
   private ashenReputation = ASHEN_REP_START;
   private inventoryJson = "[]";
+  private extraPockets = 0;
   private playerHealth = PLAYER_MAX_HEALTH;
   private playerInfected = false;
   /** Completions used in the current rolling window, keyed by task id. */
@@ -250,6 +253,7 @@ export class AshenMilitiaDialogUI {
     taskCompletionsJson?: string;
     questsJson?: string;
     doctorHealCost?: number;
+    extraPockets?: number;
   }) {
     this.npcId = opts.npcId;
     this.npcSkin = opts.npcSkin;
@@ -275,6 +279,7 @@ export class AshenMilitiaDialogUI {
       opts.ashenReputation ??
       ASHEN_REP_START;
     this.inventoryJson = opts.inventoryJson ?? "[]";
+    this.extraPockets = opts.extraPockets ?? 0;
     this.playerHealth = opts.playerHealth ?? PLAYER_MAX_HEALTH;
     this.playerInfected = !!opts.playerInfected;
     this.taskCompletions = this.parseTaskCompletions(opts.taskCompletionsJson);
@@ -300,8 +305,10 @@ export class AshenMilitiaDialogUI {
     playerInfected?: boolean;
     taskCompletionsJson?: string;
     questsJson?: string;
+    extraPockets?: number;
   }) {
     if (opts.inventoryJson != null) this.inventoryJson = opts.inventoryJson;
+    if (opts.extraPockets != null) this.extraPockets = opts.extraPockets;
     if (opts.ashenMilitiaReputation != null) {
       this.ashenReputation = opts.ashenMilitiaReputation;
     } else if (opts.ashenReputation != null) {
@@ -369,7 +376,13 @@ export class AshenMilitiaDialogUI {
         btn.classList.add("red-dialog-speech-btn--active");
         btn.classList.add("ashen-dialog-speech-btn--active");
       }
-      btn.textContent = line.player;
+      const iconId =
+        (this.isCaptain || this.isDoctor) && line.id === "jobs"
+          ? "journal"
+          : this.isDoctor && line.id === "heal"
+            ? "bandages"
+            : undefined;
+      fillSpeechButton(btn, line.player, iconId);
       btn.addEventListener("click", () => {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
@@ -433,13 +446,7 @@ export class AshenMilitiaDialogUI {
       list.className = "craft-recipe-list red-dialog-task-list";
       for (const task of tasks) {
         const def = getQuestDefinition(task.id);
-        if (
-          def &&
-          !def.repeatable &&
-          questStatusOf(quests, task.id) === "completed"
-        ) {
-          continue;
-        }
+        if (def && !isQuestListed(quests, def)) continue;
         list.appendChild(this.buildTaskSection(task));
       }
       if (list.childElementCount > 0) this.responseEl.appendChild(list);
@@ -527,7 +534,12 @@ export class AshenMilitiaDialogUI {
     );
     const payoutFits =
       !!afterTurnIn &&
-      canAddToInventory(afterTurnIn, "banknote", task.rewardBanknotes);
+      canAddToInventory(
+        afterTurnIn,
+        "banknote",
+        task.rewardBanknotes,
+        this.extraPockets,
+      );
     const displayItemId = task.displayItemId ?? itemId;
     const location = questAssignedLocationLabel(quests, task.id);
     const expanded = this.expandedTaskId === task.id;
@@ -537,13 +549,20 @@ export class AshenMilitiaDialogUI {
     if (expanded) section.classList.add("craft-recipe--expanded");
     if (canComplete) section.classList.add("craft-recipe--ready");
     if (accepted) section.classList.add("craft-recipe--accepted");
+    else if (atCap) section.classList.add("craft-recipe--capped");
     else if (canAccept) section.classList.add("craft-recipe--available");
 
     const summary = document.createElement("button");
     summary.type = "button";
     summary.className = "craft-recipe-summary";
     summary.setAttribute("aria-expanded", expanded ? "true" : "false");
-    const statusWord = accepted ? "accepted" : canAccept ? "available" : "";
+    const statusWord = accepted
+      ? "accepted"
+      : atCap
+        ? "unavailable, daily limit reached"
+        : canAccept
+          ? "available"
+          : "";
     summary.setAttribute(
       "aria-label",
       `${expanded ? "Collapse" : "Expand"} ${task.label} task${
@@ -572,12 +591,14 @@ export class AshenMilitiaDialogUI {
     const nameEl = document.createElement("span");
     nameEl.className = "craft-recipe-summary-name";
     nameEl.textContent = task.label;
-    if (accepted || canAccept) {
+    if (accepted || canAccept || atCap) {
       const chip = document.createElement("span");
       chip.className = accepted
         ? "quest-status-chip quest-status-chip--accepted"
-        : "quest-status-chip quest-status-chip--available";
-      chip.textContent = accepted ? "Accepted" : "Available";
+        : atCap
+          ? "quest-status-chip quest-status-chip--capped"
+          : "quest-status-chip quest-status-chip--available";
+      chip.textContent = accepted ? "Accepted" : atCap ? "Daily limit" : "Available";
       nameEl.appendChild(chip);
     }
     const meta = document.createElement("span");
@@ -595,11 +616,18 @@ export class AshenMilitiaDialogUI {
       meta.textContent = itemId && haveItems
         ? "Accept this job to turn in"
         : "Available · accept to start";
-    } else if (accepted && location) {
-      meta.textContent = location;
     } else if (accepted && def) {
       const stages = def.objectives.filter((obj) => obj.kind !== "turnInItem");
-      const shown = stages.length > 0 ? stages : def.objectives;
+      const turnIns = def.objectives.filter((obj) => obj.kind === "turnInItem");
+      const fieldOpen = stages.some(
+        (obj) => !isQuestObjectiveDone(quests, def, obj),
+      );
+      const shown =
+        stages.length > 0 && !fieldOpen && turnIns.length > 0
+          ? turnIns
+          : stages.length > 0
+            ? stages
+            : def.objectives;
       shown.forEach((obj, i) => {
         if (i > 0) meta.append(" · ");
         const stage = document.createElement("span");
@@ -609,6 +637,12 @@ export class AshenMilitiaDialogUI {
         }
         meta.appendChild(stage);
       });
+      if (location && fieldOpen) {
+        if (shown.length > 0) meta.append(" · ");
+        meta.append(location);
+      }
+    } else if (accepted && location) {
+      meta.textContent = location;
     } else if (accepted && itemId) {
       meta.textContent = `Need ×${itemQty} ${task.requireItemLabel ?? "items"}`;
     } else if (itemId) {
@@ -636,6 +670,35 @@ export class AshenMilitiaDialogUI {
 
     const details = document.createElement("div");
     details.className = "craft-recipe-details";
+
+    if (def?.description) {
+      const blurb = document.createElement("div");
+      blurb.className = "craft-recipe-hint";
+      blurb.textContent = def.description;
+      details.appendChild(blurb);
+    }
+
+    if (itemId && def?.objectives.some((obj) => obj.kind !== "turnInItem")) {
+      const fieldOpen = def.objectives.some(
+        (obj) =>
+          obj.kind !== "turnInItem" && !isQuestObjectiveDone(quests, def, obj),
+      );
+      for (const obj of def.objectives) {
+        const line = document.createElement("div");
+        line.className = "craft-recipe-hint";
+        line.textContent = questObjectiveLine(quests, def, obj);
+        if (isQuestObjectiveDone(quests, def, obj)) {
+          line.classList.add("quest-stage--done");
+        }
+        details.appendChild(line);
+      }
+      if (location && fieldOpen) {
+        const loc = document.createElement("div");
+        loc.className = "craft-recipe-hint";
+        loc.textContent = `Marked ${location}`;
+        details.appendChild(loc);
+      }
+    }
 
     const needTitle = document.createElement("div");
     needTitle.className = "red-dialog-task-heading";

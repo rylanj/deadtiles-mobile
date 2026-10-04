@@ -82,6 +82,10 @@ export function bearPackReady(): boolean {
   return isEntityPackReady("bear");
 }
 
+export function crowPackReady(): boolean {
+  return isEntityPackReady("crow");
+}
+
 export function isEntityPackReady(id: EntityPackId): boolean {
   return packs.get(id)?.state === "ready";
 }
@@ -166,6 +170,7 @@ function packLoadsLooseExtras(id: EntityPackId): boolean {
     id === "zombie-10" ||
     id === "coywolf" ||
     id === "bear" ||
+    id === "crow" ||
     id === "traderguard"
   );
 }
@@ -301,6 +306,7 @@ export function syncEntityAssetPacks(
     players?: Iterable<{ x: number; y: number; clothingSkin?: number }>;
     coywolves?: Iterable<{ x: number; y: number }>;
     bears?: Iterable<{ x: number; y: number }>;
+    crows?: Iterable<{ x: number; y: number }>;
   },
 ) {
   repairBootResidentTextures(scene);
@@ -386,6 +392,7 @@ export function collectNeededEntityPacks(opts: {
   players?: Iterable<{ x: number; y: number; clothingSkin?: number }>;
   coywolves?: Iterable<{ x: number; y: number }>;
   bears?: Iterable<{ x: number; y: number }>;
+  crows?: Iterable<{ x: number; y: number }>;
 }): Set<EntityPackId> {
   const preloadR = CLIENT_RENDER_RADIUS + PRELOAD_MARGIN;
   const needed = new Set<EntityPackId>();
@@ -412,6 +419,9 @@ export function collectNeededEntityPacks(opts: {
   }
   for (const bear of opts.bears ?? []) {
     consider(bear.x, bear.y, "bear");
+  }
+  for (const crow of opts.crows ?? []) {
+    consider(crow.x, crow.y, "crow");
   }
 
   needed.add("zombie-1");

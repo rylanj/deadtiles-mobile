@@ -468,6 +468,10 @@ export type RaycastTarget = {
   isDead: boolean;
   /** Drawn sprite height, for free-aim silhouette hits. Defaults to a full human. */
   renderHeight?: number;
+  /** Extra screen-Y lift so the silhouette matches a sprite drawn above its tile. */
+  screenLiftPx?: number;
+  /** Swings and bites miss. Guns still test the silhouette. */
+  meleeImmune?: boolean;
 };
 
 /** @deprecated Use RaycastTarget */
@@ -614,6 +618,7 @@ export function fireRaycast(params: {
 
     for (const target of activeTargets) {
       if (target.isDead || target.health <= 0) continue;
+      if (target.meleeImmune) continue;
       const headX = target.x - headOffset;
       const headY = target.y - headOffset;
       const sdx = headX - target.x;
@@ -806,7 +811,12 @@ export function freeAimRaycast(params: {
   let bodyId: string | undefined;
   for (const target of targets) {
     if (target.isDead || target.health <= 0) continue;
-    const box = entityScreenBox(target.x, target.y, target.renderHeight);
+    const box = entityScreenBox(
+      target.x,
+      target.y,
+      target.renderHeight,
+      target.screenLiftPx ?? 0,
+    );
     const span = segmentBoxSpan(screenOrigin, screenStep, box);
     if (!span) continue;
     const entry = Math.max(0, span.enter);
@@ -1037,6 +1047,83 @@ export function isInWeaponRange(
     );
   }
   return shotDistance(originX, originY, targetX, targetY) <= weapon.range;
+}
+
+/**
+ * Aimed melee only hits targets in the forward half of the swing.
+ * 0 = 90 degrees either side of the cursor.
+ */
+const MELEE_SWING_MIN_DOT = 0;
+
+/**
+ * Closest living target in melee range and in front of an aimed swing.
+ * The aim point can sit far past weapon range: it only sets direction.
+ * Walls and closed doors block the swing. Returns null on a whiff.
+ */
+export function closestMeleeSwingTarget(params: {
+  originX: number;
+  originY: number;
+  aimX: number;
+  aimY: number;
+  weapon: WeaponDefinition;
+  targets: RaycastTarget[];
+  inInterior: boolean;
+  furnitures?: SearchableObject[];
+  walls?: InteriorWallTile[];
+  blocksSightAt?: (tx: number, ty: number) => boolean;
+}): RaycastTarget | null {
+  const {
+    originX,
+    originY,
+    aimX,
+    aimY,
+    weapon,
+    targets,
+    inInterior,
+    furnitures,
+    walls,
+    blocksSightAt,
+  } = params;
+  if (!isMeleeWeapon(weapon)) return null;
+  const adx = aimX - originX;
+  const ady = aimY - originY;
+  const aimDist = Math.hypot(adx, ady);
+  if (aimDist <= 0.001) return null;
+  const ax = adx / aimDist;
+  const ay = ady / aimDist;
+
+  let best: RaycastTarget | null = null;
+  let bestDist = Infinity;
+  for (const target of targets) {
+    if (target.isDead || target.health <= 0 || target.meleeImmune) continue;
+    if (!isInWeaponRange(originX, originY, target.x, target.y, weapon)) continue;
+    const tdx = target.x - originX;
+    const tdy = target.y - originY;
+    const dist = Math.hypot(tdx, tdy);
+    if (dist > 0.001) {
+      const along = (tdx / dist) * ax + (tdy / dist) * ay;
+      if (along < MELEE_SWING_MIN_DOT) continue;
+    }
+    if (
+      !hasEntityLineOfSight({
+        fromX: originX,
+        fromY: originY,
+        toX: target.x,
+        toY: target.y,
+        inInterior,
+        furnitures,
+        walls,
+        blocksSightAt,
+      })
+    ) {
+      continue;
+    }
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = target;
+    }
+  }
+  return best;
 }
 
 export function evaluateAimState(params: {

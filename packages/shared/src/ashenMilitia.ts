@@ -220,9 +220,9 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       id: "jobs",
       player: "Do you have any work for me?",
       npc: [
-        "Yes. Standing board: ammo, smokes, lighters, wood for the night watch, scrap for the bargate. I've also got a building in town to clear, a motel we lost on the radio, and walkers on the roads outside town. Bandages and water go to Clark.",
-        "I do. Bring 7.62, cigarettes, lighters, wood, or scrap and I'll pay. If you can handle a building sweep, a motel check, or thinning walkers outside Birchport, those are posted too. Ward stock is Clark's.",
-        "Look at the board. Supply turn-ins and a few field jobs. Banknotes and reputation for what you finish. Clark still takes the ward list at the hospital.",
+        "Yes. Ammo, tape, mess food, smokes, lighters, wood, and scrap. Field work is a building in town, a motel, a supermarket to scout, walkers, and coyotes outside town. Ward stock is Clark's.",
+        "I do. Bring 7.62 or 9mm, cigarettes, lighters, tape, wood, scrap, beans, or cooked coyote. There's a building sweep, a motel check, a supermarket scout, and thinning to do outside town. Ward stock is Clark's.",
+        "Look at the board. Supply turn-ins, a supermarket scout, coyotes outside town, and the older field jobs. Clark still takes the ward list at the hospital.",
       ],
     },
     {
@@ -245,7 +245,7 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
     },
   ];
 
-/** Turn-in: bandages for the hospital ward. */
+/** Turn-in: bandages for the hospital ward. Once a day. */
 export const ASHEN_MILITIA_MEDICAL_TASK: AshenMilitiaTask = {
   id: "ashen_militia_bandages",
   dialogLineId: "jobs",
@@ -255,6 +255,22 @@ export const ASHEN_MILITIA_MEDICAL_TASK: AshenMilitiaTask = {
   rewardReputation: 100,
   label: "Three's a Wrap",
   requireItemLabel: "Bandages",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Turn-in: pistol ammo for sidearms. Once a day. */
+export const ASHEN_MILITIA_POCKET_ROUNDS_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_pocket_rounds",
+  dialogLineId: "jobs",
+  requireItemId: "ammo_9x19",
+  requireQty: 20,
+  rewardBanknotes: 90,
+  rewardReputation: 160,
+  label: "Pocket Rounds",
+  requireItemLabel: "9x19mm Rounds",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 /** Turn-in: rifle ammo for street patrols. */
@@ -269,7 +285,7 @@ export const ASHEN_MILITIA_AMMO_TASK: AshenMilitiaTask = {
   requireItemLabel: "7.62x39mm Rounds",
 };
 
-/** Turn-in: drinking water for the hospital ward. */
+/** Turn-in: drinking water for the hospital ward. Once a day. */
 export const ASHEN_MILITIA_WATER_TASK: AshenMilitiaTask = {
   id: "ashen_militia_water",
   dialogLineId: "jobs",
@@ -279,6 +295,8 @@ export const ASHEN_MILITIA_WATER_TASK: AshenMilitiaTask = {
   rewardReputation: 100,
   label: "Dry Patrol",
   requireItemLabel: "Water",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 /** Turn-in: cigarettes for morale. */
@@ -293,6 +311,20 @@ export const ASHEN_MILITIA_CIGARETTES_TASK: AshenMilitiaTask = {
   requireItemLabel: "Cigarettes",
 };
 
+/** Turn-in: duct tape for split patrol kits. Once a day. */
+export const ASHEN_MILITIA_SPLIT_KIT_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_split_kit",
+  dialogLineId: "jobs",
+  requireItemId: "duct_tape",
+  requireQty: 2,
+  rewardBanknotes: 40,
+  rewardReputation: 80,
+  label: "Split Kit",
+  requireItemLabel: "Duct Tape",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
 /** Turn-in: lighter for field kits. */
 export const ASHEN_MILITIA_LIGHTER_TASK: AshenMilitiaTask = {
   id: "ashen_militia_lighter",
@@ -303,6 +335,34 @@ export const ASHEN_MILITIA_LIGHTER_TASK: AshenMilitiaTask = {
   rewardReputation: 50,
   label: "Firestarter",
   requireItemLabel: "Lighter",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Turn-in: canned beans for the barracks mess. Once a day. */
+export const ASHEN_MILITIA_COLD_TINS_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_cold_tins",
+  dialogLineId: "jobs",
+  requireItemId: "canned_beans",
+  requireQty: 4,
+  rewardBanknotes: 60,
+  rewardReputation: 110,
+  label: "Cold Tins",
+  requireItemLabel: "Canned Beans",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Turn-in: cooked coyote for the mess. Burnt meat will not do. Once a day. */
+export const ASHEN_MILITIA_HOT_PLATE_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_hot_plate",
+  dialogLineId: "jobs",
+  requireItemId: "cooked_coyote_meat",
+  requireQty: 2,
+  rewardBanknotes: 80,
+  rewardReputation: 140,
+  label: "Hot Plate",
+  requireItemLabel: "Cooked Coyote Meat",
   maxCompletionsPerWindow: 1,
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
@@ -360,6 +420,30 @@ export const ASHEN_MILITIA_BARGATE_SCRAP_TASK: AshenMilitiaTask = {
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
+/** Scout a supermarket outside town. Search three shelves, then report. Once a day. */
+export const ASHEN_MILITIA_AISLE_CHECK_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_aisle_check",
+  dialogLineId: "jobs",
+  rewardBanknotes: 100,
+  rewardReputation: 180,
+  label: "Aisle Check",
+  displayItemId: "map",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** Kill coyotes on the roads outside Birchport. Town kills do not count. */
+export const ASHEN_MILITIA_THIN_THE_PACK_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_thin_the_pack",
+  dialogLineId: "jobs",
+  rewardBanknotes: 120,
+  rewardReputation: 220,
+  label: "Thin the Pack",
+  displayItemId: "map",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
 /** Kill walkers on the roads outside Birchport. Town kills do not count. */
 export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
   id: "ashen_militia_dont_feed_them",
@@ -374,13 +458,19 @@ export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
 
 export const ASHEN_MILITIA_CAPTAIN_TASKS: readonly AshenMilitiaTask[] = [
   ASHEN_MILITIA_AMMO_TASK,
+  ASHEN_MILITIA_POCKET_ROUNDS_TASK,
   ASHEN_MILITIA_CIGARETTES_TASK,
   ASHEN_MILITIA_LIGHTER_TASK,
+  ASHEN_MILITIA_SPLIT_KIT_TASK,
   ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK,
   ASHEN_MILITIA_BARGATE_SCRAP_TASK,
+  ASHEN_MILITIA_COLD_TINS_TASK,
+  ASHEN_MILITIA_HOT_PLATE_TASK,
   ASHEN_MILITIA_QUIET_STRETCH_TASK,
   ASHEN_MILITIA_MISSING_PAIR_TASK,
+  ASHEN_MILITIA_AISLE_CHECK_TASK,
   ASHEN_MILITIA_DONT_FEED_THEM_TASK,
+  ASHEN_MILITIA_THIN_THE_PACK_TASK,
 ];
 
 /** True if Clark's paid treatment should be offered (missing HP or infection). */
@@ -504,9 +594,9 @@ export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDial
       id: "jobs",
       player: "Need anything from outside?",
       npc: [
-        "Bandages and drinking water for the ward. Hot chips if you can spare them. I'll pay.",
-        "The ward's always short on bandages and bottled water. Bring those, or a bag of hot chips, and I'll remember who helps and who doesn't.",
-        "Yes. Bandages and water for the patients, hot chips for me. Don't flood me with snacks or Captain Davis will give me a hard time.",
+        "Bandages, water, alcohol, peaches. Hot chips if you can spare a bag. I also need a one-time stock of antibiotics and rags. And there's something of my wife's I want back.",
+        "Daily: bandages, water, alcohol, peaches, and chips. Once: five antibiotic packs, ten rags, and a personal ask. I'll pay.",
+        "Yes. Ward stock once a day. A stock of antibiotics and rags before the next wave, just once. And a pair of earrings I should have kept closer.",
       ],
     },
     {
@@ -520,7 +610,74 @@ export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDial
     },
   ];
 
-/** Doctor Clark snack turn-in (capped). */
+/** Turn-in: alcohol for the ward. Once a day. */
+export const ASHEN_MILITIA_CLEAN_HANDS_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_clean_hands",
+  dialogLineId: "jobs",
+  requireItemId: "alcohol",
+  requireQty: 2,
+  rewardBanknotes: 45,
+  rewardReputation: 90,
+  label: "Clean Hands",
+  requireItemLabel: "Alcohol",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/** One-shot. Five antibiotic packets stocked before the next wave. */
+export const ASHEN_MILITIA_BEFORE_IT_TURNS_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_before_it_turns",
+  dialogLineId: "jobs",
+  requireItemId: "antibiotics",
+  requireQty: 5,
+  rewardBanknotes: 150,
+  rewardReputation: 300,
+  label: "Before It Turns",
+  requireItemLabel: "Antibiotics",
+};
+
+/** One-shot. Ten rags Clark can boil for the ward. */
+export const ASHEN_MILITIA_RAG_BIN_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_rag_bin",
+  dialogLineId: "jobs",
+  requireItemId: "rags",
+  requireQty: 10,
+  rewardBanknotes: 30,
+  rewardReputation: 60,
+  label: "Rag Bin",
+  requireItemLabel: "Rags",
+};
+
+/** Turn-in: canned peaches for patients who will not eat chips. Once a day. */
+export const ASHEN_MILITIA_SOMETHING_SOFT_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_something_soft",
+  dialogLineId: "jobs",
+  requireItemId: "canned_peaches",
+  requireQty: 2,
+  rewardBanknotes: 40,
+  rewardReputation: 80,
+  label: "Something Soft",
+  requireItemLabel: "Canned Peaches",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+};
+
+/**
+ * One-shot. The anniversary earrings Clark gave his wife.
+ * A house outside town hides the pair in one piece of furniture.
+ */
+export const ASHEN_MILITIA_DONT_HOCK_THEM_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_dont_hock_them",
+  dialogLineId: "jobs",
+  requireItemId: "clarks_earrings",
+  requireQty: 1,
+  rewardBanknotes: 100,
+  rewardReputation: 220,
+  label: "Don't Hock Them",
+  requireItemLabel: "Anniversary Earrings",
+};
+
+/** Turn-in: one bag of hot chips. Once a day. */
 export const ASHEN_MILITIA_SPICY_FINGERS_TASK: AshenMilitiaTask = {
   id: "ashen_militia_spicy_fingers",
   dialogLineId: "jobs",
@@ -530,14 +687,19 @@ export const ASHEN_MILITIA_SPICY_FINGERS_TASK: AshenMilitiaTask = {
   rewardReputation: 20,
   label: "Spicy Fingers",
   requireItemLabel: "Hot Chips",
-  maxCompletionsPerWindow: 5,
+  maxCompletionsPerWindow: 1,
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 export const ASHEN_MILITIA_DOCTOR_TASKS: readonly AshenMilitiaTask[] = [
   ASHEN_MILITIA_MEDICAL_TASK,
   ASHEN_MILITIA_WATER_TASK,
+  ASHEN_MILITIA_CLEAN_HANDS_TASK,
+  ASHEN_MILITIA_RAG_BIN_TASK,
+  ASHEN_MILITIA_SOMETHING_SOFT_TASK,
+  ASHEN_MILITIA_BEFORE_IT_TURNS_TASK,
   ASHEN_MILITIA_SPICY_FINGERS_TASK,
+  ASHEN_MILITIA_DONT_HOCK_THEM_TASK,
 ];
 
 export function ashenMilitiaDialogLineById(

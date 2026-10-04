@@ -1,22 +1,31 @@
 import { RAW_MEAT_INFECTION_CHANCE } from "./infection.js";
-import { mulberry32, xmur3 } from "./worldgen.js";
+import { parentOfSub, type SubSkillId } from "./skills.js";
+import {
+  getBuildingAt,
+  getSettlementType,
+  mulberry32,
+  SETTLEMENT_CELL_SIZE,
+  xmur3,
+} from "./worldgen.js";
 import { ZOMBIE_SKIN_MAN11 } from "./sprites.js";
 
 /** Fixed slot count — each occupied slot holds one stack. */
 export const WEAPON_SLOT_COUNT = 2;
-export const POCKET_SLOT_COUNT = 12;
-/** Dedicated worn-clothing cell (UI shows it between weapons and pockets). */
+/** Usable pockets. Indices 10-13 stay reserved so older 12-pocket saves do not shift. */
+export const POCKET_SLOT_COUNT = 8;
+export const LEGACY_POCKET_SLOT_COUNT = 12;
+/** Dedicated worn-clothing cell. The inventory dialog shows it on the gear row. */
 export const CLOTHING_SLOT_COUNT = 1;
-/** Index of the clothing equipment slot (after pockets so legacy 14-slot saves pad cleanly). */
-export const CLOTHING_SLOT_INDEX = WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT;
+/** Index of the clothing equipment slot. Stays at 14 so watch, radio, map, and the backpack do not move. */
+export const CLOTHING_SLOT_INDEX = WEAPON_SLOT_COUNT + LEGACY_POCKET_SLOT_COUNT;
 export const WATCH_SLOT_COUNT = 1;
 export const RADIO_SLOT_COUNT = 1;
 export const MAP_SLOT_COUNT = 1;
-/** Watch cell sits beside clothing on the equipment row. */
+/** Watch cell. The dialog shows it on the gear row beside the backpack. */
 export const WATCH_SLOT_INDEX = CLOTHING_SLOT_INDEX + 1;
-/** Radio cell sits beside clothing on the equipment row. */
+/** Radio cell. The dialog shows it on the weapon row, separated from the guns. */
 export const RADIO_SLOT_INDEX = CLOTHING_SLOT_INDEX + 2;
-/** Map cell sits after radio on the equipment row. */
+/** Map cell sits after the watch on the gear row. */
 export const MAP_SLOT_INDEX = CLOTHING_SLOT_INDEX + 3;
 export const WATCH_ITEM_ID = "watch";
 export const RADIO_ITEM_ID = "handheld_radio";
@@ -28,14 +37,41 @@ export const RADIO_FREQ_BIRCHPORT_TRADE = 2;
 export const MAP_ITEM_ID = "map";
 export const BASE_INVENTORY_SLOTS =
   WEAPON_SLOT_COUNT +
-  POCKET_SLOT_COUNT +
+  LEGACY_POCKET_SLOT_COUNT +
   CLOTHING_SLOT_COUNT +
   WATCH_SLOT_COUNT +
   RADIO_SLOT_COUNT +
   MAP_SLOT_COUNT;
-/** Extra carrying pockets append after equipment so clothing/watch indices stay stable. */
+/**
+ * Extra carrying pockets use indices BASE .. BASE+extra-1.
+ * The backpack slot sits after the reserved extra-pocket range so older
+ * saves (length <= 22) never collide with it.
+ */
 export const MAX_EXTRA_POCKET_SLOTS = 4;
-export const MAX_INVENTORY_SLOTS = BASE_INVENTORY_SLOTS + MAX_EXTRA_POCKET_SLOTS;
+export const BACKPACK_SLOT_COUNT = 1;
+export const BACKPACK_SLOT_INDEX = BASE_INVENTORY_SLOTS + MAX_EXTRA_POCKET_SLOTS;
+export const BACKPACK_STORAGE_START = BACKPACK_SLOT_INDEX + 1;
+export const BACKPACK_FANNY_SLOTS = 8;
+export const BACKPACK_UTILITY_SLOTS = 12;
+export const BACKPACK_SMALL_SLOTS = 16;
+export const BACKPACK_HUNTING_SLOTS = 20;
+export const BACKPACK_LEATHER_SLOTS = 24;
+export const BACKPACK_HIKING_SLOTS = 28;
+/**
+ * Ceiling for storage indices. Larger than the hiking pack so a save that
+ * still has items past a reduced pack keeps those cells until they are emptied.
+ */
+export const MAX_BACKPACK_STORAGE_SLOTS = 32;
+export const BACKPACK_FANNY_ID = "backpack_fanny";
+export const BACKPACK_UTILITY_ID = "backpack_utility";
+export const BACKPACK_SMALL_ID = "backpack_small";
+export const BACKPACK_HUNTING_ID = "backpack_hunting";
+export const BACKPACK_LEATHER_ID = "backpack_leather";
+export const BACKPACK_HIKING_ID = "backpack_hiking";
+/** Previous black pack. Loads as a Small Backpack. */
+export const LEGACY_BACKPACK_BLACK_ID = "backpack_black";
+export const MAX_INVENTORY_SLOTS =
+  BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS;
 /** @deprecated Use WEAPON_SLOT_COUNT — kept for transitional imports. */
 export const HOTBAR_SLOT_COUNT = WEAPON_SLOT_COUNT;
 /** Fixed slot grid for looted container contents (fits a full player inventory). */
@@ -87,6 +123,13 @@ export type InventoryEntry = {
    * 3-3000 = player nets. Missing = untuned.
    */
   radioFreq?: number;
+  /**
+   * Items sealed inside a backpack that is not being worn.
+   * While the pack is worn, those items live in the backpack storage slots
+   * and this field stays empty so they are not saved twice.
+   * Null cells keep their positions. A pack inside a pack keeps its own contents.
+   */
+  contents?: (InventoryEntry | null)[];
 };
 
 export function isItemRarity(value: unknown): value is ItemRarity {
@@ -176,6 +219,92 @@ export type ItemDefinition = {
   insulation?: number;
 };
 
+/** Time to read a weapon blueprint. The sheet is consumed when this finishes. */
+export const BLUEPRINT_LEARN_MS = 60_000;
+
+/** Time to read a skill magazine. The issue is consumed when this finishes. */
+export const MAGAZINE_READ_MS = 30_000;
+
+/**
+ * Skill magazines the player can find. Item ids match UI_magazine_<skill>.png.
+ * `skill` is the subskill a finished read trains, on top of Reading.
+ * `also` lists extra subskills that receive a smaller grant.
+ */
+export const SKILL_MAGAZINES = [
+  { itemId: "magazine_melee", name: "Octagon Impact Magazine", skill: "melee", also: ["fitness"] },
+  { itemId: "magazine_harvesting", name: "Garden Growth Magazine", skill: "harvesting", also: [] },
+  { itemId: "magazine_carrying", name: "Ultra Hiker Magazine", skill: "carrying", also: ["fitness"] },
+  { itemId: "magazine_construction", name: "Build It Yourself Magazine", skill: "construction", also: ["fitness"] },
+  { itemId: "magazine_fitness", name: "Ultra Runner Magazine", skill: "fitness", also: ["recovery"] },
+  { itemId: "magazine_immunity", name: "Healthy Living Magazine", skill: "immunity", also: ["cooking"] },
+  { itemId: "magazine_recovery", name: "Slim & Shred Magazine", skill: "recovery", also: ["cooking"] },
+  { itemId: "magazine_accuracy", name: "Tactical Trades Magazine", skill: "accuracy", also: ["crafting"] },
+  { itemId: "magazine_crafting", name: "Handy Crafts Magazine", skill: "crafting", also: [] },
+  { itemId: "magazine_scavenging", name: "Metal Detector Magazine", skill: "scavenging", also: ["stealth"] },
+  { itemId: "magazine_stealth", name: "Wildlife Harvest Magazine", skill: "stealth", also: ["scavenging"] },
+  { itemId: "magazine_cooking", name: "The Pixel Kitchen Magazine", skill: "cooking", also: ["recovery"] },
+  { itemId: "magazine_medicine", name: "First Aid Magazine", skill: "medicine", also: ["recovery", "immunity"] },
+  { itemId: "magazine_reading", name: "The Book Club Magazine", skill: "reading", also: [] },
+  { itemId: "magazine_persuasion", name: "Love Life Magazine", skill: "persuasion", also: [] },
+  { itemId: "magazine_bartering", name: "Negotiation Power Magazine", skill: "bartering", also: [] },
+] as const satisfies readonly {
+  itemId: string;
+  name: string;
+  skill: SubSkillId;
+  also: readonly SubSkillId[];
+}[];
+
+export function isSkillMagazine(itemId: string): boolean {
+  return skillMagazineSubSkill(itemId) != null;
+}
+
+/** Subskill trained by this magazine, or null when it is not one. */
+export function skillMagazineSubSkill(itemId: string): SubSkillId | null {
+  if (!itemId.startsWith("magazine_")) return null;
+  const skill = itemId.slice("magazine_".length) as SubSkillId;
+  if (!parentOfSub(skill)) return null;
+  for (const magazine of SKILL_MAGAZINES) {
+    if (magazine.itemId === itemId) return magazine.skill;
+  }
+  return null;
+}
+
+/** Extra subskills a finished magazine trains, besides its cover skill. */
+export function skillMagazineBonusSkills(itemId: string): readonly SubSkillId[] {
+  for (const magazine of SKILL_MAGAZINES) {
+    if (magazine.itemId === itemId) return magazine.also;
+  }
+  return [];
+}
+
+/**
+ * Weapon blueprints are not loot. Learning one unlocks that craft recipe.
+ * recipeId matches the workbench recipe in crafting.ts.
+ */
+export const WEAPON_BLUEPRINTS = [
+  { itemId: "blueprint_pistol", name: "Pistol Blueprint", recipeId: "craft_pistol" },
+  { itemId: "blueprint_revolver", name: "Revolver Blueprint", recipeId: "craft_revolver" },
+  { itemId: "blueprint_shotgun", name: "Shotgun Blueprint", recipeId: "craft_shotgun" },
+  {
+    itemId: "blueprint_hunting_rifle",
+    name: "Hunting Rifle Blueprint",
+    recipeId: "craft_hunting_rifle",
+  },
+  { itemId: "blueprint_ak", name: "AK Blueprint", recipeId: "craft_ak" },
+  { itemId: "blueprint_m4", name: "M4 Blueprint", recipeId: "craft_m4" },
+] as const;
+
+export function weaponBlueprintRecipeId(itemId: string): string | undefined {
+  for (const blueprint of WEAPON_BLUEPRINTS) {
+    if (blueprint.itemId === itemId) return blueprint.recipeId;
+  }
+  return undefined;
+}
+
+export function isWeaponBlueprint(itemId: string): boolean {
+  return weaponBlueprintRecipeId(itemId) !== undefined;
+}
+
 export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "weapon_pistol", name: "Glock 17 Pistol", category: "weapons", stackable: false, weight: 1.0 },
   {
@@ -251,6 +380,48 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     category: "equipment",
     stackable: false,
     weight: 0.4,
+  },
+  {
+    id: BACKPACK_FANNY_ID,
+    name: "Fanny Pack",
+    category: "backpack",
+    stackable: false,
+    weight: 0.25,
+  },
+  {
+    id: BACKPACK_UTILITY_ID,
+    name: "Utility Pouch",
+    category: "backpack",
+    stackable: false,
+    weight: 0.4,
+  },
+  {
+    id: BACKPACK_SMALL_ID,
+    name: "Small Backpack",
+    category: "backpack",
+    stackable: false,
+    weight: 0.7,
+  },
+  {
+    id: BACKPACK_HUNTING_ID,
+    name: "Hunting Backpack",
+    category: "backpack",
+    stackable: false,
+    weight: 1.0,
+  },
+  {
+    id: BACKPACK_LEATHER_ID,
+    name: "Leather Backpack",
+    category: "backpack",
+    stackable: false,
+    weight: 1.2,
+  },
+  {
+    id: BACKPACK_HIKING_ID,
+    name: "Hiking Backpack",
+    category: "backpack",
+    stackable: false,
+    weight: 1.5,
   },
   { id: "ammo_9x19", name: "9x19mm Rounds", category: "ammunition", stackable: true, weight: 0.01 },
   { id: "ammo_buckshot", name: "Buckshot Shells", category: "ammunition", stackable: true, weight: 0.01 },
@@ -335,6 +506,22 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "m4_receiver", name: "M4 Receiver", category: "crafting", stackable: true, weight: 0.7 },
   { id: "m4_barrel", name: "M4 Barrel", category: "crafting", stackable: true, weight: 0.5 },
   { id: "m4_stock", name: "M4 Stock", category: "crafting", stackable: true, weight: 0.45 },
+  ...WEAPON_BLUEPRINTS.map((blueprint) => ({
+    id: blueprint.itemId,
+    name: blueprint.name,
+    category: "blueprint",
+    stackable: true,
+    weight: 0.05,
+    consumeDurationMs: BLUEPRINT_LEARN_MS,
+  })),
+  ...SKILL_MAGAZINES.map((magazine) => ({
+    id: magazine.itemId,
+    name: magazine.name,
+    category: "magazine",
+    stackable: true,
+    weight: 0.1,
+    consumeDurationMs: MAGAZINE_READ_MS,
+  })),
   /** Fuel for Fireplace1 — looted from felled trees. */
   { id: "wood", name: "Wood", category: "crafting", stackable: false, weight: 0.5 },
   { id: "banknote", name: "Banknote", category: "junk", stackable: true, weight: 0.01 },
@@ -343,6 +530,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "blue_cigarettes", name: "Cigarettes (Blue)", category: "junk", stackable: true, weight: 0.05 },
   { id: "gold_chain", name: "Gold Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "gold_earrings", name: "Gold Earrings", category: "junk", stackable: true, weight: 0.05 },
+  {
+    id: "clarks_earrings",
+    name: "Anniversary Earrings",
+    category: "junk",
+    stackable: false,
+    weight: 0.05,
+  },
   { id: "gold_ring", name: "Gold Ring", category: "junk", stackable: true, weight: 0.05 },
   { id: "silver_chain", name: "Silver Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "silver_ring", name: "Silver Ring", category: "junk", stackable: true, weight: 0.05 },
@@ -591,11 +785,24 @@ const ITEM_BY_ID = new Map(INVENTORY_ITEMS.map((item) => [item.id, item]));
 function canonicalItemId(id: string): string {
   if (id === "UI_watch") return WATCH_ITEM_ID;
   if (id === "UI_handheld_radio") return RADIO_ITEM_ID;
+  if (id === LEGACY_BACKPACK_BLACK_ID) return BACKPACK_SMALL_ID;
   return id;
 }
 
 export function getItemDefinition(id: string) {
   return ITEM_BY_ID.get(canonicalItemId(id));
+}
+
+/** Clark's anniversary pair. Not ordinary gold earrings, and not for sale. */
+export const CLARKS_EARRINGS_ITEM_ID = "clarks_earrings";
+
+export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
+  return itemId === CLARKS_EARRINGS_ITEM_ID;
+}
+
+/** True when this furniture type can roll container loot. */
+export function isLootContainerType(objectType: string): boolean {
+  return Object.prototype.hasOwnProperty.call(CONTAINER_CATEGORIES, objectType);
 }
 
 export function isConsumable(itemId: string): boolean {
@@ -604,17 +811,21 @@ export function isConsumable(itemId: string): boolean {
 }
 
 /** Synced on the player while a consume channel is active. */
-export type ConsumeAction = "eat" | "drink" | "bandage" | "use";
+export type ConsumeAction = "eat" | "drink" | "bandage" | "use" | "learn" | "read";
 
 export const CONSUME_ACTION_LABELS: Record<ConsumeAction, string> = {
   eat: "Eating",
   drink: "Drinking",
   bandage: "Bandaging",
   use: "Using",
+  learn: "Learning",
+  read: "Reading",
 };
 
 /** Caption kind shown above the player while consuming this item. */
 export function getConsumeAction(itemId: string): ConsumeAction {
+  if (isSkillMagazine(itemId)) return "read";
+  if (isWeaponBlueprint(itemId)) return "learn";
   if (itemId === "bandages" || itemId === "rags") return "bandage";
   if (itemId === "alcohol") return "use";
   if (itemId === "antibiotics") return "use";
@@ -640,6 +851,7 @@ export function canUseConsumable(
 ): boolean {
   const def = ITEM_BY_ID.get(itemId);
   if (!def?.consumeDurationMs) return false;
+  if (isWeaponBlueprint(itemId) || isSkillMagazine(itemId)) return true;
 
   if (def.treatsInfection) return true;
 
@@ -664,6 +876,7 @@ export function maxStackForItem(itemId: string): number {
   if (def.category === "weapons") return 1;
   if (def.category === "clothing") return 1;
   if (def.category === "equipment") return 1;
+  if (def.category === "backpack") return 1;
   if (itemId === "wood") return 1;
   // Use-count durable items are always unique instances.
   if ((def.maxDurability ?? 0) > 0) return 1;
@@ -775,7 +988,7 @@ export function setEntryWetness(entry: InventoryEntry, wetness: number): void {
 
 export type InventoryEntryMeta = Pick<
   InventoryEntry,
-  "rarity" | "condition" | "durability" | "wetness" | "radioFreq"
+  "rarity" | "condition" | "durability" | "wetness" | "radioFreq" | "contents"
 >;
 
 export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
@@ -788,6 +1001,7 @@ export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
   if (wet > 0) meta.wetness = wet;
   const freq = getEntryRadioFreq(entry);
   if (freq > 0) meta.radioFreq = freq;
+  if (entry.contents?.length) meta.contents = entry.contents;
   return meta;
 }
 
@@ -830,6 +1044,45 @@ export function isRadioItem(itemId: string): boolean {
 
 export function isMapItem(itemId: string): boolean {
   return canonicalItemId(itemId) === MAP_ITEM_ID;
+}
+
+/** Storage cells granted while this backpack is worn. 0 if it is not a pack. */
+export function backpackStorageCount(itemId: string | null | undefined): number {
+  switch (canonicalItemId(itemId ?? "")) {
+    case BACKPACK_FANNY_ID:
+      return BACKPACK_FANNY_SLOTS;
+    case BACKPACK_UTILITY_ID:
+      return BACKPACK_UTILITY_SLOTS;
+    case BACKPACK_SMALL_ID:
+      return BACKPACK_SMALL_SLOTS;
+    case BACKPACK_HUNTING_ID:
+      return BACKPACK_HUNTING_SLOTS;
+    case BACKPACK_LEATHER_ID:
+      return BACKPACK_LEATHER_SLOTS;
+    case BACKPACK_HIKING_ID:
+      return BACKPACK_HIKING_SLOTS;
+    default:
+      return 0;
+  }
+}
+
+export function isBackpackItem(itemId: string): boolean {
+  return backpackStorageCount(itemId) > 0;
+}
+
+export function equippedBackpackStorageCount(inventory: Inventory): number {
+  const worn = inventory[BACKPACK_SLOT_INDEX];
+  if (!worn || !isBackpackItem(worn.id)) return 0;
+  return backpackStorageCount(worn.id);
+}
+
+/** Array length that includes the backpack slot and the worn pack's storage. */
+export function playerInventoryLength(backpackSlots: number): number {
+  const pack = Math.max(
+    0,
+    Math.min(MAX_BACKPACK_STORAGE_SLOTS, Math.floor(backpackSlots) || 0),
+  );
+  return BACKPACK_STORAGE_START + pack;
 }
 
 /** Channel duration for Wear / Remove clothing. */
@@ -875,26 +1128,479 @@ export function isMapSlot(slotIndex: number): boolean {
   return slotIndex === MAP_SLOT_INDEX;
 }
 
-export function isPocketSlot(slotIndex: number): boolean {
+export function isBackpackSlot(slotIndex: number): boolean {
+  return slotIndex === BACKPACK_SLOT_INDEX;
+}
+
+export function isBackpackStorageIndex(slotIndex: number): boolean {
   return (
-    (slotIndex >= WEAPON_SLOT_COUNT && slotIndex < CLOTHING_SLOT_INDEX) ||
-    (slotIndex >= BASE_INVENTORY_SLOTS && slotIndex < MAX_INVENTORY_SLOTS)
+    slotIndex >= BACKPACK_STORAGE_START &&
+    slotIndex < BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS
   );
 }
 
-export function itemFitsInSlot(itemId: string, slotIndex: number): boolean {
-  if (slotIndex < 0 || slotIndex >= MAX_INVENTORY_SLOTS) return false;
-  if (slotIndex >= BASE_INVENTORY_SLOTS) {
-    if (isHotbarOnlyItem(itemId)) return false;
-    return true;
+/** Indices 10-13. Old 12-pocket saves may still hold items here until they are moved. */
+export function isRetiredPocketSlot(slotIndex: number): boolean {
+  return (
+    slotIndex >= WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT &&
+    slotIndex < CLOTHING_SLOT_INDEX
+  );
+}
+
+export function isPocketSlot(slotIndex: number): boolean {
+  return (
+    (slotIndex >= WEAPON_SLOT_COUNT &&
+      slotIndex < WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT) ||
+    isRetiredPocketSlot(slotIndex) ||
+    (slotIndex >= BASE_INVENTORY_SLOTS && slotIndex < BACKPACK_SLOT_INDEX)
+  );
+}
+
+/** Occupied retired pocket cells, so those items stay visible. */
+export function retiredPocketIndices(inventory: Inventory): number[] {
+  const indices: number[] = [];
+  for (
+    let i = WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT;
+    i < CLOTHING_SLOT_INDEX;
+    i++
+  ) {
+    if (inventory[i]) indices.push(i);
   }
+  return indices;
+}
+
+export type SlotAccess = {
+  extraPockets: number;
+  backpackSlots: number;
+};
+
+const extraPocketTag = new WeakMap<Inventory, number>();
+
+function clampExtraPockets(extraPockets: number): number {
+  if (!Number.isFinite(extraPockets)) return 0;
+  return Math.max(0, Math.min(MAX_EXTRA_POCKET_SLOTS, Math.floor(extraPockets)));
+}
+
+/** Remember how many carrying-skill pockets this array may use. JSON drops the tag. */
+export function rememberExtraPockets(inventory: Inventory, extraPockets: number): Inventory {
+  extraPocketTag.set(inventory, clampExtraPockets(extraPockets));
+  return inventory;
+}
+
+/** Deep copy, including items sealed inside a backpack. */
+export function cloneInventoryEntry(entry: InventoryEntry, depth = 0): InventoryEntry {
+  return makeInventoryEntry(
+    entry.id,
+    entry.quantity,
+    entry.magazineRounds,
+    inventoryEntryMeta(entry),
+    depth,
+  );
+}
+
+export function cloneInventory(inventory: Inventory): Inventory {
+  const next = inventory.map((slot) => (slot ? cloneInventoryEntry(slot) : null));
+  const extra = extraPocketTag.get(inventory);
+  if (extra != null) extraPocketTag.set(next, extra);
+  return next;
+}
+
+function inferExtraPockets(inventory: Inventory): number {
+  const tagged = extraPocketTag.get(inventory);
+  if (tagged != null) return tagged;
+  if (inventory.length <= BACKPACK_SLOT_INDEX) {
+    return clampExtraPockets(inventory.length - BASE_INVENTORY_SLOTS);
+  }
+  return 0;
+}
+
+export function inventorySlotAccess(
+  inventory: Inventory,
+  extraPockets?: number,
+): SlotAccess {
+  return {
+    extraPockets: clampExtraPockets(extraPockets ?? inferExtraPockets(inventory)),
+    backpackSlots: equippedBackpackStorageCount(inventory),
+  };
+}
+
+function slotUnlocked(slotIndex: number, access: SlotAccess): boolean {
+  if (isRetiredPocketSlot(slotIndex)) return false;
+  if (slotIndex < BASE_INVENTORY_SLOTS) return true;
+  if (slotIndex < BACKPACK_SLOT_INDEX) {
+    return slotIndex < BASE_INVENTORY_SLOTS + access.extraPockets;
+  }
+  if (slotIndex === BACKPACK_SLOT_INDEX) return true;
+  return (
+    slotIndex >= BACKPACK_STORAGE_START &&
+    slotIndex < BACKPACK_STORAGE_START + access.backpackSlots
+  );
+}
+
+export function itemFitsInSlot(
+  itemId: string,
+  slotIndex: number,
+  access?: SlotAccess,
+): boolean {
+  if (slotIndex < 0 || slotIndex >= MAX_INVENTORY_SLOTS) return false;
+  const limits = access ?? {
+    extraPockets: MAX_EXTRA_POCKET_SLOTS,
+    backpackSlots: 0,
+  };
+  if (!slotUnlocked(slotIndex, limits)) return false;
   if (isWeaponSlot(slotIndex)) return isWeaponItem(itemId);
   if (isClothingSlot(slotIndex)) return isClothingItem(itemId);
   if (isWatchSlot(slotIndex)) return isWatchItem(itemId);
   if (isRadioSlot(slotIndex)) return isRadioItem(itemId);
   if (isMapSlot(slotIndex)) return isMapItem(itemId);
-  if (isHotbarOnlyItem(itemId) && isPocketSlot(slotIndex)) return false;
+  if (isBackpackSlot(slotIndex)) return isBackpackItem(itemId);
+  if (isHotbarOnlyItem(itemId)) return false;
   return true;
+}
+
+/** Pockets, unlocked extra pockets, and open backpack storage. */
+export function isStowSlot(
+  slotIndex: number,
+  inventory: Inventory,
+  extraPockets?: number,
+): boolean {
+  const access = inventorySlotAccess(inventory, extraPockets);
+  if (
+    slotIndex >= WEAPON_SLOT_COUNT &&
+    slotIndex < WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT
+  ) {
+    return true;
+  }
+  if (isRetiredPocketSlot(slotIndex)) return !!inventory[slotIndex];
+  if (slotIndex >= BASE_INVENTORY_SLOTS && slotIndex < BACKPACK_SLOT_INDEX) {
+    if (slotIndex < BASE_INVENTORY_SLOTS + access.extraPockets) return true;
+    // Carrying no longer unlocks these. Items already here stay movable.
+    return !!inventory[slotIndex];
+  }
+  return (
+    slotIndex >= BACKPACK_STORAGE_START &&
+    slotIndex < BACKPACK_STORAGE_START + access.backpackSlots
+  );
+}
+
+export function firstEmptyStowSlot(
+  inventory: Inventory,
+  extraPockets?: number,
+): number {
+  const access = inventorySlotAccess(inventory, extraPockets);
+  for (
+    let i = WEAPON_SLOT_COUNT;
+    i < WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT;
+    i++
+  ) {
+    if (!inventory[i]) return i;
+  }
+  for (let i = 0; i < access.extraPockets; i++) {
+    const idx = BASE_INVENTORY_SLOTS + i;
+    if (!inventory[idx]) return idx;
+  }
+  for (let i = 0; i < access.backpackSlots; i++) {
+    const idx = BACKPACK_STORAGE_START + i;
+    if (!inventory[idx]) return idx;
+  }
+  return -1;
+}
+
+export function backpackStorageHasItems(inventory: Inventory): boolean {
+  const end = Math.min(
+    inventory.length,
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START; i < end; i++) {
+    if (inventory[i]) return true;
+  }
+  return false;
+}
+
+/** True when a backpack entry already has sealed items inside it. */
+export function backpackContentsHaveItems(
+  entry: InventoryEntry | null | undefined,
+): boolean {
+  return !!entry?.contents?.some((cell) => !!cell && cell.quantity > 0);
+}
+
+/** How many stacks are sealed inside this backpack entry. */
+export function sealedBackpackStackCount(
+  entry: InventoryEntry | null | undefined,
+): number {
+  if (!entry?.contents) return 0;
+  let count = 0;
+  for (const cell of entry.contents) {
+    if (cell && cell.quantity > 0) count += 1;
+  }
+  return count;
+}
+
+/**
+ * True when this backpack still holds items, either in the worn storage
+ * slots or sealed on the entry itself.
+ */
+export function backpackHoldsItems(inventory: Inventory, slotIndex: number): boolean {
+  const slot = inventory[slotIndex];
+  if (!slot || !isBackpackItem(slot.id)) return false;
+  if (slotIndex === BACKPACK_SLOT_INDEX && backpackStorageHasItems(inventory)) {
+    return true;
+  }
+  return backpackContentsHaveItems(slot);
+}
+
+function replaceMagazines(target: WeaponMagazines, next: WeaponMagazines): void {
+  for (const key of Object.keys(target)) delete target[key];
+  for (const [key, value] of Object.entries(next)) target[key] = value;
+}
+
+/**
+ * Copy worn-pack storage onto the backpack entry and clear those slots.
+ * Chambered rounds move onto the packed guns and leave the magazine map.
+ * Mutates both arguments. No-op when storage is already empty.
+ */
+function sealWornPack(inventory: Inventory, magazines: WeaponMagazines): void {
+  const pack = inventory[BACKPACK_SLOT_INDEX];
+  if (!pack || !isBackpackItem(pack.id) || !backpackStorageHasItems(inventory)) return;
+  const contents: (InventoryEntry | null)[] = [];
+  const end = Math.min(
+    inventory.length,
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START; i < end; i++) {
+    const rel = i - BACKPACK_STORAGE_START;
+    const slot = inventory[i];
+    if (!slot) {
+      contents[rel] = null;
+      continue;
+    }
+    const copy = cloneInventoryEntry(slot);
+    if (getAmmoTypeForWeapon(copy.id)) {
+      const rounds = normalizedMagazineRounds(
+        copy.id,
+        magazines[String(i)] ?? copy.magazineRounds,
+      );
+      if (rounds != null) copy.magazineRounds = rounds;
+      else delete copy.magazineRounds;
+      delete magazines[String(i)];
+    }
+    contents[rel] = copy;
+    inventory[i] = null;
+  }
+  while (contents.length > 0 && !contents[contents.length - 1]) contents.pop();
+  if (contents.some((cell) => cell)) pack.contents = contents;
+}
+
+/**
+ * If the worn pack has sealed items and the storage slots are empty, pour
+ * them back into those slots. Live storage wins when both are occupied.
+ */
+function unpackWornPack(
+  inventory: Inventory,
+  magazines: WeaponMagazines,
+  keepEntryRounds: boolean,
+): void {
+  const pack = inventory[BACKPACK_SLOT_INDEX];
+  if (!pack || !isBackpackItem(pack.id) || !pack.contents?.length) return;
+  if (backpackStorageHasItems(inventory)) {
+    delete pack.contents;
+    return;
+  }
+  const contents = pack.contents;
+  delete pack.contents;
+  for (let i = 0; i < contents.length && i < MAX_BACKPACK_STORAGE_SLOTS; i++) {
+    const cell = contents[i];
+    if (!cell) continue;
+    const idx = BACKPACK_STORAGE_START + i;
+    while (inventory.length <= idx) inventory.push(null);
+    const copy = cloneInventoryEntry(cell);
+    const rounds = normalizedMagazineRounds(copy.id, copy.magazineRounds);
+    if (keepEntryRounds) {
+      if (rounds != null) copy.magazineRounds = rounds;
+      else delete copy.magazineRounds;
+    } else {
+      delete copy.magazineRounds;
+      if (rounds != null) magazines[String(idx)] = rounds;
+      else if (getAmmoTypeForWeapon(copy.id)) delete magazines[String(idx)];
+    }
+    inventory[idx] = copy;
+  }
+}
+
+function packMoveBlocked(fromSlot: number, toSlot: number): boolean {
+  if (fromSlot === toSlot) return false;
+  const touchesWorn =
+    fromSlot === BACKPACK_SLOT_INDEX || toSlot === BACKPACK_SLOT_INDEX;
+  const touchesStorage =
+    isBackpackStorageIndex(fromSlot) || isBackpackStorageIndex(toSlot);
+  return touchesWorn && touchesStorage;
+}
+
+/**
+ * Open a worn backpack that was saved with sealed contents. Storage slots
+ * stay authoritative when they already hold items. Chambered rounds stay on
+ * the storage entries until `pullStorageMagazineRounds` copies them.
+ */
+export function releaseWornBackpack(inventory: Inventory): Inventory {
+  const worn = inventory[BACKPACK_SLOT_INDEX];
+  if (!worn || !isBackpackItem(worn.id) || !worn.contents?.length) return inventory;
+  if (backpackStorageHasItems(inventory)) {
+    delete worn.contents;
+    return inventory;
+  }
+  const next = inventory.slice();
+  const extra = extraPocketTag.get(inventory);
+  const pack = cloneInventoryEntry(worn);
+  delete pack.contents;
+  next[BACKPACK_SLOT_INDEX] = pack;
+  for (let i = 0; i < worn.contents.length && i < MAX_BACKPACK_STORAGE_SLOTS; i++) {
+    const cell = worn.contents[i];
+    if (!cell) continue;
+    const idx = BACKPACK_STORAGE_START + i;
+    while (next.length <= idx) next.push(null);
+    next[idx] = cloneInventoryEntry(cell);
+  }
+  if (extra != null) extraPocketTag.set(next, extra);
+  return next;
+}
+
+/**
+ * Seal the worn backpack so a drop or a corpse keeps its items.
+ * Mutates `magazines` (storage guns leave that map and ride on the entry).
+ */
+export function packWornBackpack(
+  inventory: Inventory,
+  magazines: WeaponMagazines,
+): Inventory {
+  const next = cloneInventory(inventory);
+  sealWornPack(next, magazines);
+  return next;
+}
+
+/**
+ * Move chambered rounds off backpack storage entries into the magazine map.
+ * Player saves keep those rounds in `weaponMagazinesJson`, not on the slot.
+ */
+export function pullStorageMagazineRounds(
+  inventory: Inventory,
+  magazines: WeaponMagazines,
+): { magazines: WeaponMagazines; changed: boolean } {
+  let changed = false;
+  const next: WeaponMagazines = { ...magazines };
+  const end = Math.min(
+    inventory.length,
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START; i < end; i++) {
+    const slot = inventory[i];
+    if (!slot || typeof slot.magazineRounds !== "number") continue;
+    const rounds = normalizedMagazineRounds(slot.id, slot.magazineRounds);
+    delete slot.magazineRounds;
+    changed = true;
+    const key = String(i);
+    if (rounds != null) next[key] = rounds;
+    else delete next[key];
+  }
+  return { magazines: changed ? next : magazines, changed };
+}
+
+function commitPlayerPack(
+  original: Inventory,
+  next: Inventory,
+  magWork: WeaponMagazines,
+  magazines: WeaponMagazines | undefined,
+): Inventory | null {
+  unpackWornPack(next, magWork, magazines == null);
+  if (backpackOverflowWorsened(original, next)) return null;
+  if (magazines) replaceMagazines(magazines, magWork);
+  return next;
+}
+
+function finishPackMove(
+  original: Inventory,
+  next: Inventory,
+  magWork: WeaponMagazines,
+  magazines: WeaponMagazines | undefined,
+): Inventory {
+  return commitPlayerPack(original, next, magWork, magazines) ?? original;
+}
+
+/** True when every stored item sits inside the worn pack's capacity. */
+export function backpackStorageContained(inventory: Inventory): boolean {
+  const cap = equippedBackpackStorageCount(inventory);
+  const end = Math.min(
+    inventory.length,
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START + cap; i < end; i++) {
+    if (inventory[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Cells to draw under Pockets. Official capacity, plus any older cells that
+ * still hold items after a pack was reduced.
+ */
+export function shownBackpackStorageCount(inventory: Inventory): number {
+  const cap = equippedBackpackStorageCount(inventory);
+  let n = cap;
+  const end = Math.min(
+    inventory.length,
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START + cap; i < end; i++) {
+    if (inventory[i]) n = i - BACKPACK_STORAGE_START + 1;
+  }
+  return n;
+}
+
+/**
+ * True when `after` strands items the worn pack no longer covers.
+ * Pulling an already-stranded item out is allowed.
+ */
+export function backpackOverflowWorsened(before: Inventory, after: Inventory): boolean {
+  const newCap = equippedBackpackStorageCount(after);
+  const oldCap = equippedBackpackStorageCount(before);
+  const end = Math.min(
+    Math.max(before.length, after.length),
+    BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS,
+  );
+  for (let i = BACKPACK_STORAGE_START + newCap; i < end; i++) {
+    const next = after[i];
+    if (!next) continue;
+    if (i < BACKPACK_STORAGE_START + oldCap) return true;
+    const prev = before[i];
+    if (!prev || prev.id !== next.id || next.quantity > prev.quantity) return true;
+  }
+  return false;
+}
+
+/** How many extra pocket cells to draw. Occupied cells stay visible. */
+export function shownExtraPockets(inventory: Inventory, unlocked: number): number {
+  let n = clampExtraPockets(unlocked);
+  for (let i = 0; i < MAX_EXTRA_POCKET_SLOTS; i++) {
+    if (inventory[BASE_INVENTORY_SLOTS + i]) n = Math.max(n, i + 1);
+  }
+  return n;
+}
+
+export function fitPlayerInventoryLength(inventory: Inventory): Inventory {
+  const want = playerInventoryLength(equippedBackpackStorageCount(inventory));
+  if (inventory.length === want) return inventory;
+  const extra = extraPocketTag.get(inventory);
+  if (inventory.length > want) {
+    for (let i = want; i < inventory.length; i++) {
+      if (inventory[i]) return inventory;
+    }
+    const next = inventory.slice(0, want);
+    if (extra != null) extraPocketTag.set(next, extra);
+    return next;
+  }
+  const next = inventory.slice();
+  while (next.length < want) next.push(null);
+  if (extra != null) extraPocketTag.set(next, extra);
+  return next;
 }
 
 export function createEmptyInventory(slotCount = BASE_INVENTORY_SLOTS): Inventory {
@@ -932,7 +1638,7 @@ function inventoryRemovalIndices(
     const pockets: number[] = [];
     const rest: number[] = [];
     for (const i of indices) {
-      if (isPocketSlot(i)) pockets.push(i);
+      if (isPocketSlot(i) || isBackpackStorageIndex(i)) pockets.push(i);
       else rest.push(i);
     }
     ordered = pockets.concat(rest);
@@ -959,7 +1665,7 @@ export function removeItemFromInventory(
   if (quantity <= 0) return inventory;
   if (countItemInInventory(inventory, itemId) < quantity) return inventory;
 
-  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const next = cloneInventory(inventory);
   let remaining = quantity;
 
   for (const i of inventoryRemovalIndices(next.length, order, deferSlots)) {
@@ -981,13 +1687,18 @@ export function inventoryAddRoom(inventory: Inventory, itemId: string): number {
   return remainingAddCapacity(inventory, itemId);
 }
 
-function remainingAddCapacity(inventory: Inventory, itemId: string): number {
+function remainingAddCapacity(
+  inventory: Inventory,
+  itemId: string,
+  extraPockets?: number,
+): number {
   const maxStack = maxStackForItem(itemId);
   if (maxStack <= 0) return 0;
+  const access = inventorySlotAccess(inventory, extraPockets);
 
   let capacity = 0;
   for (let i = 0; i < inventory.length; i++) {
-    if (!itemFitsInSlot(itemId, i)) continue;
+    if (!itemFitsInSlot(itemId, i, access)) continue;
     const slot = inventory[i];
     if (slot?.id === itemId) {
       capacity += maxStack - slot.quantity;
@@ -1002,9 +1713,10 @@ export function canAddToInventory(
   inventory: Inventory,
   itemId: string,
   quantity = 1,
+  extraPockets?: number,
 ) {
   if (!getItemDefinition(itemId)) return false;
-  return remainingAddCapacity(inventory, itemId) >= quantity;
+  return remainingAddCapacity(inventory, itemId, extraPockets) >= quantity;
 }
 
 /**
@@ -1026,18 +1738,20 @@ export function addToInventory(
   inventory: Inventory,
   itemId: string,
   quantity: number,
+  extraPockets?: number,
 ): Inventory {
   if (quantity <= 0 || !getItemDefinition(itemId)) return inventory;
   itemId = canonicalItemId(itemId);
 
   const maxStack = maxStackForItem(itemId);
   if (maxStack <= 0) return inventory;
+  const access = inventorySlotAccess(inventory, extraPockets);
 
-  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const next = cloneInventory(inventory);
   let remaining = quantity;
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
-    if (!itemFitsInSlot(itemId, i)) continue;
+    if (!itemFitsInSlot(itemId, i, access)) continue;
     const slot = next[i];
     if (!slot || slot.id !== itemId) continue;
     const room = maxStack - slot.quantity;
@@ -1048,7 +1762,7 @@ export function addToInventory(
   }
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
-    if (!itemFitsInSlot(itemId, i)) continue;
+    if (!itemFitsInSlot(itemId, i, access)) continue;
     if (next[i]) continue;
     const add = Math.min(maxStack, remaining);
     next[i] = { id: itemId, quantity: add };
@@ -1108,18 +1822,55 @@ export function normalizedMagazineRounds(
   return n > 0 ? n : undefined;
 }
 
+/** Nested packs stop here so a corrupt save cannot recurse forever. */
+const PACK_CONTENTS_MAX_DEPTH = 4;
+
+function normalizePackContents(
+  raw: unknown,
+  depth: number,
+): (InventoryEntry | null)[] | undefined {
+  if (!Array.isArray(raw) || depth >= PACK_CONTENTS_MAX_DEPTH) return undefined;
+  const limit = Math.min(raw.length, MAX_BACKPACK_STORAGE_SLOTS);
+  const out: (InventoryEntry | null)[] = [];
+  let any = false;
+  for (let i = 0; i < limit; i++) {
+    const cell = raw[i];
+    if (!cell || typeof cell !== "object") {
+      out.push(null);
+      continue;
+    }
+    const src = cell as InventoryEntry;
+    if (
+      typeof src.id !== "string" ||
+      typeof src.quantity !== "number" ||
+      src.quantity <= 0 ||
+      !getItemDefinition(src.id)
+    ) {
+      out.push(null);
+      continue;
+    }
+    out.push(
+      makeInventoryEntry(
+        src.id,
+        src.quantity,
+        src.magazineRounds,
+        inventoryEntryMeta(src),
+        depth + 1,
+      ),
+    );
+    any = true;
+  }
+  while (out.length > 0 && !out[out.length - 1]) out.pop();
+  return any ? out : undefined;
+}
+
 /** Build a slot entry, optionally carrying chambered magazine rounds + meta. */
 export function makeInventoryEntry(
   id: string,
   quantity: number,
   magazineRounds?: number,
-  meta?: {
-    rarity?: ItemRarity;
-    condition?: number;
-    durability?: number;
-    wetness?: number;
-    radioFreq?: number;
-  },
+  meta?: InventoryEntryMeta,
+  depth = 0,
 ): InventoryEntry {
   const { rarity, condition } = normalizeItemMeta(meta ?? {});
   const itemId = canonicalItemId(id);
@@ -1152,6 +1903,10 @@ export function makeInventoryEntry(
   if (isRadioItem(itemId)) {
     const freq = normalizeRadioFreq(meta?.radioFreq);
     if (freq != null) entry.radioFreq = freq;
+  }
+  if (isBackpackItem(itemId) && depth < PACK_CONTENTS_MAX_DEPTH) {
+    const packed = normalizePackContents(meta?.contents, depth);
+    if (packed) entry.contents = packed;
   }
   return entry;
 }
@@ -1197,7 +1952,7 @@ export function removeFromInventorySlot(
     return inventory;
   }
 
-  const next = inventory.map((s) => (s ? { ...s } : null));
+  const next = cloneInventory(inventory);
   const target = next[slotIndex]!;
   if (target.quantity <= quantity) {
     next[slotIndex] = null;
@@ -1212,6 +1967,8 @@ export function moveInventorySlot(
   inventory: Inventory,
   fromSlot: number,
   toSlot: number,
+  extraPockets?: number,
+  magazines?: WeaponMagazines,
 ): Inventory {
   if (fromSlot === toSlot) return inventory;
   const slotCount = Math.min(MAX_INVENTORY_SLOTS, inventory.length);
@@ -1223,21 +1980,28 @@ export function moveInventorySlot(
   ) {
     return inventory;
   }
+  // The worn pack cannot be dropped into its own storage grid.
+  if (packMoveBlocked(fromSlot, toSlot)) return inventory;
 
-  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const access = inventorySlotAccess(inventory, extraPockets);
+  const magWork: WeaponMagazines = { ...(magazines ?? {}) };
+  const next = cloneInventory(inventory);
+  const wornLeaves =
+    fromSlot === BACKPACK_SLOT_INDEX || toSlot === BACKPACK_SLOT_INDEX;
+  if (wornLeaves) sealWornPack(next, magWork);
   const from = next[fromSlot];
   if (!from || !getItemDefinition(from.id)) return inventory;
-  if (!itemFitsInSlot(from.id, toSlot)) return inventory;
+  if (!itemFitsInSlot(from.id, toSlot, access)) return inventory;
 
   const to = next[toSlot];
   if (!to) {
     next[toSlot] = from;
     next[fromSlot] = null;
-    return next;
+    return finishPackMove(inventory, next, magWork, magazines);
   }
 
   // Swaps must also respect weapon-slot / pocket size rules for both items.
-  if (!itemFitsInSlot(to.id, fromSlot)) return inventory;
+  if (!itemFitsInSlot(to.id, fromSlot, access)) return inventory;
 
   if (from.id === to.id && maxStackForItem(from.id) > 1) {
     const maxStack = maxStackForItem(from.id);
@@ -1247,13 +2011,13 @@ export function moveInventorySlot(
       to.quantity += moveQty;
       from.quantity -= moveQty;
       if (from.quantity <= 0) next[fromSlot] = null;
-      return next;
+      return finishPackMove(inventory, next, magWork, magazines);
     }
   }
 
   next[fromSlot] = to;
   next[toSlot] = from;
-  return next;
+  return finishPackMove(inventory, next, magWork, magazines);
 }
 
 /** Items moved by a shift-drag. Odd piles round down. Stacks of 1 cannot split. */
@@ -1267,6 +2031,7 @@ export function canSplitInventoryStackHalf(
   inventory: Inventory,
   fromSlot: number,
   toSlot: number,
+  extraPockets?: number,
 ): boolean {
   if (fromSlot === toSlot) return false;
   const slotCount = Math.min(MAX_INVENTORY_SLOTS, inventory.length);
@@ -1284,7 +2049,9 @@ export function canSplitInventoryStackHalf(
   if (!from || !to || from.id !== to.id || !getItemDefinition(from.id)) {
     return false;
   }
-  if (!itemFitsInSlot(from.id, toSlot)) return false;
+  if (!itemFitsInSlot(from.id, toSlot, inventorySlotAccess(inventory, extraPockets))) {
+    return false;
+  }
 
   const half = shiftSplitQuantity(from.quantity);
   const maxStack = maxStackForItem(from.id);
@@ -1300,10 +2067,13 @@ export function splitInventoryStackHalf(
   inventory: Inventory,
   fromSlot: number,
   toSlot: number,
+  extraPockets?: number,
 ): Inventory {
-  if (!canSplitInventoryStackHalf(inventory, fromSlot, toSlot)) return inventory;
+  if (!canSplitInventoryStackHalf(inventory, fromSlot, toSlot, extraPockets)) {
+    return inventory;
+  }
   const half = shiftSplitQuantity(inventory[fromSlot]!.quantity);
-  const next = inventory.map((slot) => (slot ? { ...slot } : null));
+  const next = cloneInventory(inventory);
   const source = next[fromSlot]!;
   const dest = next[toSlot]!;
   source.quantity -= half;
@@ -1477,6 +2247,24 @@ const CATEGORY_ITEMS: Record<string, string[]> = {
   ],
   /** Hardware springs in warehouses. Not a military receiver. */
   parts_springs: ["small_spring", "large_spring"],
+  /**
+   * Lost in sofa and armchair cushions. Cash, jewellery, springs, and other
+   * small pieces. No clothes, bags, food, or weapons.
+   */
+  cushion: [
+    "banknote",
+    "lighter",
+    "blue_cigarettes",
+    "gold_chain",
+    "gold_earrings",
+    "gold_ring",
+    "silver_chain",
+    "silver_ring",
+    "small_spring",
+    "large_spring",
+    "screws",
+    "bolts",
+  ],
   junk: [
     "banknote",
     "lighter",
@@ -1608,6 +2396,22 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "parts_pistol",
     "parts_shotgun",
   ],
+  /** Office bullpen desk. */
+  desk3: [
+    "ammo_lite",
+    "medical_lite",
+    "medical_heavy",
+    "guns_lite",
+    "crafting_lite",
+    "junk",
+    "consumables",
+    "parts_pistol",
+    "parts_shotgun",
+  ],
+  /** Office meeting table. Chairs are part of the art. */
+  conferencetable: ["junk", "consumables", "crafting_lite", "medical_lite"],
+  /** Office copier. */
+  copier: ["crafting_lite", "junk"],
   bookshelf2: ["ammo_lite", "junk"],
   deadofficer: [
     "guns_lite",
@@ -1625,6 +2429,10 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "junk",
     "consumables",
   ],
+  /** House Armchair1. Cushion finds only. */
+  armchair: ["cushion"],
+  /** House Sofa1. Cushion finds only. */
+  sofa: ["cushion"],
   suitcase: [
     "ammo_lite",
     "medical_lite",
@@ -1786,6 +2594,12 @@ const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: 
   blue_cigarettes: { chance: 0.1, minQty: 1, maxQty: 1 },
   white_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
   black_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
+  [BACKPACK_FANNY_ID]: { chance: 0.08, minQty: 1, maxQty: 1 },
+  [BACKPACK_UTILITY_ID]: { chance: 0.05, minQty: 1, maxQty: 1 },
+  [BACKPACK_SMALL_ID]: { chance: 0.03, minQty: 1, maxQty: 1 },
+  [BACKPACK_HUNTING_ID]: { chance: 0.018, minQty: 1, maxQty: 1 },
+  [BACKPACK_LEATHER_ID]: { chance: 0.01, minQty: 1, maxQty: 1 },
+  [BACKPACK_HIKING_ID]: { chance: 0.006, minQty: 1, maxQty: 1 },
   gold_chain: { chance: 0.005, minQty: 1, maxQty: 1 },
   gold_earrings: { chance: 0.005, minQty: 1, maxQty: 1 },
   gold_ring: { chance: 0.0075, minQty: 1, maxQty: 1 },
@@ -1858,12 +2672,77 @@ function rollLootFromCategories(
   return results;
 }
 
+/** Packs that can appear in this building. Empty outside those sites. */
+function backpackIdsForBuilding(buildingX: number, buildingY: number): string[] {
+  const bld = getBuildingAt(buildingX, buildingY);
+  if (!bld) return [];
+  if (bld.buildingType === "motel") {
+    return [
+      BACKPACK_FANNY_ID,
+      BACKPACK_SMALL_ID,
+      BACKPACK_HUNTING_ID,
+      BACKPACK_LEATHER_ID,
+      BACKPACK_HIKING_ID,
+    ];
+  }
+  if (bld.buildingType === "warehouse") return [BACKPACK_UTILITY_ID];
+  if (bld.buildingType === "police_station") return [BACKPACK_HIKING_ID];
+  if (bld.buildingType === "house" || bld.buildingType === "apartment") {
+    const cx = Math.floor(bld.ox / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
+    const cy = Math.floor(bld.oy / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
+    if (getSettlementType(cx, cy) === "rural") {
+      return [BACKPACK_HUNTING_ID, BACKPACK_LEATHER_ID];
+    }
+    return [BACKPACK_FANNY_ID, BACKPACK_SMALL_ID];
+  }
+  return [];
+}
+
+/**
+ * One skill magazine in about 4% of searches. Town loot scale still applies.
+ * Beds, seats, desks, shelves, and the other household containers below.
+ */
+const MAGAZINE_LOOT_CHANCE = 0.06;
+
+const MAGAZINE_CONTAINERS = new Set([
+  "bed",
+  "motelbed",
+  "hospitalbed",
+  "militarybed",
+  "sofa",
+  "armchair",
+  "desk",
+  "desk2",
+  "desk3",
+  "bookshelf",
+  "bookshelf2",
+  "drawers",
+  "medicaldrawers",
+  "cabinet",
+  "counter",
+  "bagchair",
+  "suitcase",
+  "trashcan",
+  "lockers",
+  "footlocker",
+  "nightstand",
+  "dresser",
+]);
+
+/** Clothing tables, plus warehouse shelves that do not roll shirts. */
+function containerRollsBackpacks(objectType: string): boolean {
+  const categories = CONTAINER_CATEGORIES[objectType];
+  if (!categories || categories.length === 0) return false;
+  if (categories.includes("junk")) return true;
+  return objectType === "bigshelf" || objectType === "bigbox";
+}
+
 /** Roll container loot — non-deterministic (fresh `Math.random` each call). */
 export function generateSearchLoot(
   objectType: string,
   _searchSeed: string,
-  _buildingX?: number,
-  _buildingY?: number,
+  buildingX?: number,
+  buildingY?: number,
   chanceScale = 1,
 ): InventoryEntry[] {
   const possibleItems = eligibleLootItems(objectType);
@@ -1871,12 +2750,45 @@ export function generateSearchLoot(
   const scale =
     Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
 
+  const cushion =
+    objectType === "armchair" || objectType === "sofa";
   for (const id of possibleItems) {
     const data = ITEM_SPAWN_DATA[id];
-    if (!data || Math.random() >= Math.min(1, data.chance * scale)) continue;
+    if (!data) continue;
+    // Cash, jewellery, and springs are the point of searching a seat.
+    const cushionBoost =
+      cushion &&
+      (id === "banknote" ||
+        id.startsWith("gold_") ||
+        id.startsWith("silver_") ||
+        id === "small_spring" ||
+        id === "large_spring")
+        ? 4
+        : 1;
+    if (Math.random() >= Math.min(1, data.chance * scale * cushionBoost)) continue;
     const quantity =
       Math.floor(Math.random() * (data.maxQty - data.minQty + 1)) + data.minQty;
     results.push({ id, quantity });
+  }
+
+  if (
+    containerRollsBackpacks(objectType) &&
+    buildingX != null &&
+    buildingY != null
+  ) {
+    for (const id of backpackIdsForBuilding(buildingX, buildingY)) {
+      const data = ITEM_SPAWN_DATA[id];
+      if (!data || Math.random() >= Math.min(1, data.chance * scale)) continue;
+      results.push({ id, quantity: 1 });
+    }
+  }
+
+  if (
+    MAGAZINE_CONTAINERS.has(objectType) &&
+    Math.random() < Math.min(1, MAGAZINE_LOOT_CHANCE * scale)
+  ) {
+    const pick = SKILL_MAGAZINES[Math.floor(Math.random() * SKILL_MAGAZINES.length)];
+    if (pick) results.push({ id: pick.itemId, quantity: 1 });
   }
 
   // Checkout1: cash drawer + rare sidearm (+ matching ammo) on top of loot.
@@ -2260,12 +3172,22 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
       // Drop removed backpack items from older saves.
       if (entry.id === "backpack1") continue;
       const normalized = makeInventoryEntry(
-        entry.id,
+        canonicalItemId(entry.id),
         entry.quantity,
         entry.magazineRounds,
         inventoryEntryMeta(entry),
       );
-      if (!itemFitsInSlot(normalized.id, i)) {
+      // Keep leftovers from the old 12-pocket row in place. Compacting runs later.
+      if (isRetiredPocketSlot(i)) {
+        slots[i] = normalized;
+        continue;
+      }
+      if (
+        !itemFitsInSlot(normalized.id, i, {
+          extraPockets: MAX_EXTRA_POCKET_SLOTS,
+          backpackSlots: equippedBackpackStorageCount(slots),
+        })
+      ) {
         overflow.push(normalized);
         continue;
       }
@@ -2273,7 +3195,7 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
     }
   }
   for (const entry of overflow) {
-    slots = addToInventory(slots, entry.id, entry.quantity);
+    slots = addToInventory(slots, entry.id, entry.quantity, MAX_EXTRA_POCKET_SLOTS);
   }
   return slots;
 }
@@ -2295,6 +3217,34 @@ function migrateLegacyInventory(entries: InventoryEntry[]): Inventory {
   return inventory;
 }
 
+/** Slide leftover 12-pocket items into the 8 pockets when one is empty. */
+function compactRetiredPockets(inventory: Inventory): Inventory {
+  let next = inventory;
+  const pocketStart = WEAPON_SLOT_COUNT;
+  const pocketEnd = WEAPON_SLOT_COUNT + POCKET_SLOT_COUNT;
+  for (let i = pocketEnd; i < CLOTHING_SLOT_INDEX; i++) {
+    if (!next[i]) continue;
+    let dest = -1;
+    for (let p = pocketStart; p < pocketEnd; p++) {
+      if (!next[p]) {
+        dest = p;
+        break;
+      }
+    }
+    if (dest < 0) break;
+    const moved = moveInventorySlot(next, i, dest, 0);
+    if (moved === next) continue;
+    next = moved;
+  }
+  return next;
+}
+
+function finishPlayerInventory(inventory: Inventory): Inventory {
+  return compactRetiredPockets(
+    fitPlayerInventoryLength(releaseWornBackpack(inventory)),
+  );
+}
+
 function migrateMapIntoDedicatedSlot(inventory: Inventory): Inventory {
   const equipped = inventory[MAP_SLOT_INDEX];
   if (equipped) return inventory;
@@ -2312,18 +3262,18 @@ function migrateMapIntoDedicatedSlot(inventory: Inventory): Inventory {
 export function parseInventory(json: string): Inventory {
   try {
     if (typeof json !== "string" || json.length === 0) {
-      return createEmptyInventory();
+      return finishPlayerInventory(createEmptyInventory());
     }
     const parsed = JSON.parse(json);
-    if (!Array.isArray(parsed)) return createEmptyInventory();
-    if (parsed.length === 0) return createEmptyInventory();
+    if (!Array.isArray(parsed)) return finishPlayerInventory(createEmptyInventory());
+    if (parsed.length === 0) return finishPlayerInventory(createEmptyInventory());
 
     // Always treat array payloads as a slot grid first. One bad/unknown cell
     // must not wipe the rest of the bag (legacy `every(isValidSlot)` did that
     // when it fell through and then failed to salvage).
     const asSlots = normalizeInventorySlots(parsed);
     if (asSlots.some(Boolean) || parsed.every((s) => s == null)) {
-      return migrateMapIntoDedicatedSlot(asSlots);
+      return finishPlayerInventory(migrateMapIntoDedicatedSlot(asSlots));
     }
 
     const legacyEntries = parsed.filter(
@@ -2335,12 +3285,14 @@ export function parseInventory(json: string): Inventory {
     ) as InventoryEntry[];
 
     if (legacyEntries.length > 0) {
-      return migrateMapIntoDedicatedSlot(migrateLegacyInventory(legacyEntries));
+      return finishPlayerInventory(
+        migrateMapIntoDedicatedSlot(migrateLegacyInventory(legacyEntries)),
+      );
     }
 
-    return createEmptyInventory();
+    return finishPlayerInventory(createEmptyInventory());
   } catch {
-    return createEmptyInventory();
+    return finishPlayerInventory(createEmptyInventory());
   }
 }
 
@@ -2373,6 +3325,15 @@ export function serializeInventory(inventory: Inventory) {
     if (wet > 0) serialized.wetness = wet;
     const freq = getEntryRadioFreq(slot);
     if (freq > 0) serialized.radioFreq = freq;
+    // Worn storage is the live copy. Sealed contents belong on every other pack.
+    if (isBackpackItem(slot.id)) {
+      const wornOpen =
+        i === BACKPACK_SLOT_INDEX && backpackStorageHasItems(inventory);
+      if (!wornOpen && slot.contents?.length) {
+        const packed = normalizePackContents(slot.contents, 0);
+        if (packed) serialized.contents = packed;
+      }
+    }
     slots[i] = serialized;
   }
   return JSON.stringify(slots);
@@ -2451,6 +3412,7 @@ export function putIntoStorageBoxSlot(
   container: Inventory,
   toSlot: number,
   slotCount: number,
+  magazines?: WeaponMagazines,
 ): { container: Inventory; playerInventory: Inventory } | null {
   const limit = storageBoxSlotLimit(slotCount);
   if (
@@ -2463,20 +3425,28 @@ export function putIntoStorageBoxSlot(
     return null;
   }
 
-  const nextPlayer = playerInventory.map((slot) => (slot ? { ...slot } : null));
+  const access = inventorySlotAccess(playerInventory);
+  const magWork: WeaponMagazines = { ...(magazines ?? {}) };
+  const nextPlayer = cloneInventory(playerInventory);
+  if (fromSlot === BACKPACK_SLOT_INDEX) sealWornPack(nextPlayer, magWork);
   const nextContainer = createEmptyStorageBoxInventory(limit);
   for (let i = 0; i < limit; i++) {
     const slot = container[i];
-    nextContainer[i] = slot ? { ...slot } : null;
+    nextContainer[i] = slot ? cloneInventoryEntry(slot) : null;
   }
   const from = nextPlayer[fromSlot];
   if (!from || !getItemDefinition(from.id)) return null;
 
   const to = nextContainer[toSlot];
+  const packed = (playerInv: Inventory) => {
+    const committed = commitPlayerPack(playerInventory, playerInv, magWork, magazines);
+    if (!committed) return null;
+    return { container: nextContainer, playerInventory: committed };
+  };
   if (!to) {
     nextContainer[toSlot] = from;
     nextPlayer[fromSlot] = null;
-    return { container: nextContainer, playerInventory: nextPlayer };
+    return packed(nextPlayer);
   }
 
   if (from.id === to.id && maxStackForItem(from.id) > 1) {
@@ -2487,14 +3457,14 @@ export function putIntoStorageBoxSlot(
       to.quantity += moveQty;
       from.quantity -= moveQty;
       if (from.quantity <= 0) nextPlayer[fromSlot] = null;
-      return { container: nextContainer, playerInventory: nextPlayer };
+      return packed(nextPlayer);
     }
   }
 
-  if (!itemFitsInSlot(to.id, fromSlot)) return null;
+  if (!itemFitsInSlot(to.id, fromSlot, access)) return null;
   nextPlayer[fromSlot] = to;
   nextContainer[toSlot] = from;
-  return { container: nextContainer, playerInventory: nextPlayer };
+  return packed(nextPlayer);
 }
 
 export function moveStorageBoxSlot(
@@ -2582,13 +3552,7 @@ export function addToContainerInventory(
   itemId: string,
   quantity: number,
   magazineRounds = 0,
-  meta?: {
-    rarity?: ItemRarity;
-    condition?: number;
-    durability?: number;
-    wetness?: number;
-    radioFreq?: number;
-  },
+  meta?: InventoryEntryMeta,
 ): Inventory {
   if (quantity <= 0 || !getItemDefinition(itemId)) return inventory;
   const maxStack = maxStackForItem(itemId);
@@ -2733,7 +3697,12 @@ export function playerInventoryToCorpseLoot(
       return;
     }
     entries.push(
-      makeInventoryEntry(entry.id, qty, entry.magazineRounds, inventoryEntryMeta(entry)),
+      makeInventoryEntry(
+        canonicalItemId(entry.id),
+        qty,
+        entry.magazineRounds,
+        inventoryEntryMeta(entry),
+      ),
     );
   };
 
@@ -2752,6 +3721,17 @@ export function playerInventoryToCorpseLoot(
   }
 
   return entries;
+}
+
+/** Backpacks go in first so a full corpse still keeps the pack and its contents. */
+export function orderCorpseLoot(entries: InventoryEntry[]): InventoryEntry[] {
+  const packs: InventoryEntry[] = [];
+  const rest: InventoryEntry[] = [];
+  for (const entry of entries) {
+    if (isBackpackItem(entry.id)) packs.push(entry);
+    else rest.push(entry);
+  }
+  return [...packs, ...rest];
 }
 
 export function parseContainerInventory(json: string): Inventory {
@@ -2814,6 +3794,7 @@ export function takeFromContainerSlot(
   playerInventory: Inventory,
   toSlot: number,
   containerSlotCount = CONTAINER_INVENTORY_SLOTS,
+  magazines?: WeaponMagazines,
 ): { container: Inventory; playerInventory: Inventory } | null {
   if (
     fromSlot < 0 ||
@@ -2825,17 +3806,32 @@ export function takeFromContainerSlot(
     return null;
   }
 
-  const nextContainer = container.map((slot) => (slot ? { ...slot } : null));
-  const nextPlayer = playerInventory.map((slot) => (slot ? { ...slot } : null));
+  const access = inventorySlotAccess(playerInventory);
+  const magWork: WeaponMagazines = { ...(magazines ?? {}) };
+  const nextContainer = container.map((slot) =>
+    slot ? cloneInventoryEntry(slot) : null,
+  );
+  const nextPlayer = cloneInventory(playerInventory);
+  if (toSlot === BACKPACK_SLOT_INDEX) sealWornPack(nextPlayer, magWork);
   const from = nextContainer[fromSlot];
   if (!from || !getItemDefinition(from.id)) return null;
-  if (!itemFitsInSlot(from.id, toSlot)) return null;
+  if (!itemFitsInSlot(from.id, toSlot, access)) return null;
 
   const to = nextPlayer[toSlot];
+  const packed = (playerInv: Inventory) => {
+    const committed = commitPlayerPack(
+      playerInventory,
+      playerInv,
+      magWork,
+      magazines,
+    );
+    if (!committed) return null;
+    return { container: nextContainer, playerInventory: committed };
+  };
   if (!to) {
     nextPlayer[toSlot] = from;
     nextContainer[fromSlot] = null;
-    return { container: nextContainer, playerInventory: nextPlayer };
+    return packed(nextPlayer);
   }
 
   // Swap only when the player item could go back into this container slot (always true).
@@ -2847,13 +3843,13 @@ export function takeFromContainerSlot(
       to.quantity += moveQty;
       from.quantity -= moveQty;
       if (from.quantity <= 0) nextContainer[fromSlot] = null;
-      return { container: nextContainer, playerInventory: nextPlayer };
+      return packed(nextPlayer);
     }
   }
 
   nextContainer[fromSlot] = to;
   nextPlayer[toSlot] = from;
-  return { container: nextContainer, playerInventory: nextPlayer };
+  return packed(nextPlayer);
 }
 
 /** Reorder items inside a container (no pocket/weapon slot rules). */

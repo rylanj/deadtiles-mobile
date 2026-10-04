@@ -13,6 +13,7 @@ export const INTERIOR_TEXTURE_KEYS = {
   furniture: {
     desk: "furniture-desk",
     desk2: "furniture-desk2-sw",
+    desk3: "furniture-desk3-sw",
     bigshelf: "furniture-bigshelf",
     bigbox: "furniture-bigbox",
     watercontainer: "furniture-watercontainer",
@@ -31,6 +32,8 @@ export const INTERIOR_TEXTURE_KEYS = {
     nightstand: "furniture-nightstand-se",
     deadofficer: "furniture-deadofficer-sw",
     bagchair: "furniture-bagchair-sw",
+    armchair: "furniture-armchair-se",
+    sofa: "furniture-sofa-se",
     suitcase: "furniture-suitcase-sw",
     watercooler: "furniture-watercooler-sw",
     trashcan: "furniture-trashcan-se",

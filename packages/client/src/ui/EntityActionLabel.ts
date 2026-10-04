@@ -10,6 +10,8 @@ export type EntityActionKind =
   | "eat"
   | "drink"
   | "use"
+  | "learn"
+  | "read"
   | "craft"
   | "build"
   | "wear"
@@ -23,6 +25,8 @@ const ACTION_TEXT: Record<EntityActionKind, string> = {
   eat: "Eating",
   drink: "Drinking",
   use: "Using",
+  learn: "Learning",
+  read: "Reading",
   craft: "Crafting",
   build: "Building",
   wear: "Wearing",

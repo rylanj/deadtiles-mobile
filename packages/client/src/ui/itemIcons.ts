@@ -2,11 +2,18 @@ import {
   getEntryDurability,
   getEntryWetness,
   getMaxDurability,
+  isQuestKeepsakeItem,
   type InventoryEntry,
 } from "@zombie/shared";
 
 const ITEM_ICON_PATHS: Record<string, string> = {
   weapon_pistol: "/assets/UI/UI_Pistol.png",
+  blueprint_pistol: "/assets/UI/UI_Pistol.png",
+  blueprint_revolver: "/assets/UI/UI_Revolver.png",
+  blueprint_shotgun: "/assets/UI/UI_Shotgun.png",
+  blueprint_hunting_rifle: "/assets/UI/UI_HuntingRifle.png",
+  blueprint_ak: "/assets/UI/UI_AK.png",
+  blueprint_m4: "/assets/UI/UI_M4A1.png",
   pistol_frame: "/assets/UI/UI_PistolFrame.png",
   pistol_slide: "/assets/UI/UI_PistolSlide.png",
   small_spring: "/assets/UI/UI_SmallSpring.png",
@@ -62,6 +69,7 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   blue_cigarettes: "/assets/UI/UI_blue_cigarettes.png",
   gold_chain: "/assets/UI/UI_gold_chain.png",
   gold_earrings: "/assets/UI/UI_gold_earrings.png",
+  clarks_earrings: "/assets/UI/UI_gold_earrings.png",
   gold_ring: "/assets/UI/UI_gold_ring.png",
   silver_chain: "/assets/UI/UI_silver_chain.png",
   silver_ring: "/assets/UI/UI_silver_ring.png",
@@ -70,6 +78,13 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   map: "/assets/UI/UI_map.png",
   watch: "/assets/UI/UI_watch.png",
   handheld_radio: "/assets/UI/UI_handheld_radio.png",
+  backpack_fanny: "/assets/UI/UI_fanny_pack.png",
+  backpack_utility: "/assets/UI/UI_utility_pouch.png",
+  backpack_small: "/assets/UI/UI_small_backpack.png",
+  backpack_black: "/assets/UI/UI_small_backpack.png",
+  backpack_hunting: "/assets/UI/UI_hunting_backpack.png",
+  backpack_leather: "/assets/UI/UI_leather_backpack.png",
+  backpack_hiking: "/assets/UI/UI_hiking_backpack.png",
   backpack: "/assets/UI/UI_backpack.png",
   chat: "/assets/UI/UI_chat.png",
   journal: "/assets/UI/UI_journal.png",
@@ -100,6 +115,22 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   lemonada: "/assets/UI/UI_lemonade.png",
   cola: "/assets/UI/UI_cola.png",
   water: "/assets/UI/UI_water.png",
+  magazine_melee: "/assets/UI/UI_magazine_melee.png",
+  magazine_harvesting: "/assets/UI/UI_magazine_harvesting.png",
+  magazine_carrying: "/assets/UI/UI_magazine_carrying.png",
+  magazine_construction: "/assets/UI/UI_magazine_construction.png",
+  magazine_fitness: "/assets/UI/UI_magazine_fitness.png",
+  magazine_immunity: "/assets/UI/UI_magazine_immunity.png",
+  magazine_recovery: "/assets/UI/UI_magazine_recovery.png",
+  magazine_accuracy: "/assets/UI/UI_magazine_accuracy.png",
+  magazine_crafting: "/assets/UI/UI_magazine_crafting.png",
+  magazine_scavenging: "/assets/UI/UI_magazine_scavenging.png",
+  magazine_stealth: "/assets/UI/UI_magazine_stealth.png",
+  magazine_cooking: "/assets/UI/UI_magazine_cooking.png",
+  magazine_medicine: "/assets/UI/UI_magazine_medicine.png",
+  magazine_reading: "/assets/UI/UI_magazine_reading.png",
+  magazine_persuasion: "/assets/UI/UI_magazine_persuasion.png",
+  magazine_bartering: "/assets/UI/UI_magazine_bartering.png",
 };
 
 export function getItemIconPath(itemId: string): string | undefined {
@@ -121,6 +152,25 @@ export function appendItemIcon(
   img.draggable = false;
   parent.appendChild(img);
   return true;
+}
+
+/** Gold outline for Clark's anniversary earrings in inventory menus. */
+export function markQuestKeepsake(cell: HTMLElement, itemId: string | undefined) {
+  if (isQuestKeepsakeItem(itemId)) cell.classList.add("inventory-cell--keepsake");
+}
+
+/** Speech option. Icon marks a prompt that opens trade, the player board, jobs, or treatment. */
+export function fillSpeechButton(
+  button: HTMLButtonElement,
+  label: string,
+  iconItemId?: string,
+): void {
+  button.replaceChildren();
+  if (iconItemId) appendItemIcon(button, iconItemId, "red-dialog-speech-icon");
+  const text = document.createElement("span");
+  text.className = "red-dialog-speech-label";
+  text.textContent = label;
+  button.append(text);
 }
 
 /** Thin green fill bar along the bottom of an inventory cell. */

@@ -53,6 +53,10 @@ export type LootBearMessage = {
   bearId: string;
 };
 
+export type LootCrowMessage = {
+  crowId: string;
+};
+
 export type LootGuardMessage = {
   guardId: string;
 };
@@ -184,6 +188,8 @@ export type MarketStatePayload = {
   boardQuery?: string;
   /** Close the market dialog after this snapshot. */
   close?: boolean;
+  /** This snapshot settles a payout collect for this listing id. */
+  settledListingId?: number;
 };
 
 /** Open a talk dialog with a Red Order NPC. */
@@ -383,10 +389,12 @@ export type ClientMessage =
   | { type: "unloadStart"; payload: ConsumeStartMessage }
   | { type: "unloadCancel" }
   | { type: "searchStart"; payload: SearchMessage }
+  | { type: "useStairs"; payload: SearchMessage }
   | { type: "searchCancel" }
   | { type: "lootZombieStart"; payload: LootZombieMessage }
   | { type: "lootCoyoteStart"; payload: LootCoyoteMessage }
   | { type: "lootBearStart"; payload: LootBearMessage }
+  | { type: "lootCrowStart"; payload: LootCrowMessage }
   | { type: "lootGuardStart"; payload: LootGuardMessage }
   | { type: "lootPlayerStart"; payload: LootPlayerMessage }
   | { type: "equipWeapon"; payload: EquipWeaponMessage }
@@ -549,7 +557,8 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isIdString(p.targetId)) return null;
       return { type, payload: { targetId: p.targetId } };
     }
-    case "searchStart": {
+    case "searchStart":
+    case "useStairs": {
       if (!isIdString(p.searchableId)) return null;
       return { type, payload: { searchableId: p.searchableId } };
     }
@@ -564,6 +573,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     case "lootBearStart": {
       if (!isIdString(p.bearId)) return null;
       return { type, payload: { bearId: p.bearId } };
+    }
+    case "lootCrowStart": {
+      if (!isIdString(p.crowId)) return null;
+      return { type, payload: { crowId: p.crowId } };
     }
     case "lootGuardStart": {
       if (!isIdString(p.guardId)) return null;
@@ -1207,6 +1220,10 @@ export type ServerMessage =
   | {
       type: "questSync";
       payload: { questsJson: string };
+    }
+  | {
+      type: "blueprintSync";
+      payload: { learnedBlueprintsJson: string };
     }
   | {
       type: "worldClockSync";

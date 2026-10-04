@@ -21,6 +21,7 @@ import {
   CELL_BOUNDARY_PRELOAD,
   preWarmCellsNearPlayer,
   evictDistantCells,
+  WORLDGEN_QUERY_REACH,
   type BuildingInfo,
   type BuildingType,
   type FenceInfo,
@@ -52,9 +53,11 @@ import {
 import {
   bakeZoomTierForZoom,
   evictIdleBuildingTextures,
+  getBakeZoomTier,
   lodScale,
   purgeIdleBuildingTextures,
   setBakeZoomTier,
+  type BakeZoomTier,
   type BuildingLod,
 } from "./buildingTextureCache";
 import {
@@ -205,6 +208,27 @@ const CULL_HYSTERESIS_TILES = 12;
 const PRIORITY_FILL_RADIUS = 14;
 
 /**
+ * Already-drawn visits are cheap, but each one still builds a tile key.
+ * Cap them per frame so a zoom-out can skip the painted interior without
+ * allocating the whole view in one go. The time deadline stops the scan too.
+ */
+const CHEAP_SKIP_CAP = 6000;
+const CHEAP_SKIP_STRIDE = 48;
+
+/**
+ * Coarser building bakes wait until the wheel has settled. Applying the tier
+ * mid-zoom rebakes the city on the same frames that are trying to fill ground.
+ */
+const BAKE_ZOOM_SETTLE_MS = 180;
+
+/**
+ * Flat cuboids placed while a textured bake waits. Cheap enough to keep
+ * footprints from sitting empty, few enough that a zoomed-out city cannot
+ * allocate a graphics object for every building in one frame.
+ */
+const SOLID_BUILDINGS_PER_SYNC = IS_MOBILE ? 4 : 12;
+
+/**
  * Buildings re-tiered per sync. Each change destroys and re-creates a cuboid,
  * so it is budgeted like cold bakes rather than done for the whole view at once.
  */
@@ -280,7 +304,13 @@ type ViewRect = { minX: number; maxX: number; minY: number; maxY: number };
  */
 function cacheKeepBoundaryDist(viewHalf: number): number {
   if (IS_MOBILE) return CLIENT_RENDER_RADIUS + 48;
-  return Math.max(CELL_BOUNDARY_PRELOAD, viewHalf + 96);
+  // Keep every cell a render-edge tile can query. Evicting sooner makes the
+  // next zoom-out rebuild those layouts inside the paint budget.
+  return Math.max(
+    CELL_BOUNDARY_PRELOAD,
+    viewHalf + 96,
+    RENDER_RADIUS + WORLDGEN_QUERY_REACH,
+  );
 }
 
 /**
@@ -368,6 +398,133 @@ function clampRegionToPlayerRadius(
     };
   }
   return { minX, maxX, minY, maxY };
+}
+
+type SyncCursor = { x: number; y: number; regionKey: string };
+
+type FillBudget = {
+  tiles: number;
+  buildings: number;
+  /** Flat stand-ins still allowed this frame. */
+  solids: number;
+  deadline: number;
+  cheapSkips: number;
+};
+
+function placeholderCuboid(cuboid: BuildingCuboidObject): boolean {
+  return cuboid.lod === "far" || cuboid.fallback;
+}
+
+/** One-tile strip of a newly exposed view edge, scanned inside-out. */
+type EdgeBand = ViewRect & { cursor: SyncCursor };
+
+function intersectView(a: ViewRect, b: ViewRect): ViewRect | null {
+  const minX = Math.max(a.minX, b.minX);
+  const maxX = Math.min(a.maxX, b.maxX);
+  const minY = Math.max(a.minY, b.minY);
+  const maxY = Math.min(a.maxY, b.maxY);
+  if (minX > maxX || minY > maxY) return null;
+  return { minX, maxX, minY, maxY };
+}
+
+function viewContains(outer: ViewRect, inner: ViewRect): boolean {
+  return (
+    outer.minX <= inner.minX &&
+    outer.maxX >= inner.maxX &&
+    outer.minY <= inner.minY &&
+    outer.maxY >= inner.maxY
+  );
+}
+
+/** Parts of `outer` that are not inside `inner`, as up to four rectangles. */
+function subtractView(inner: ViewRect, outer: ViewRect): ViewRect[] {
+  const ix0 = Math.max(inner.minX, outer.minX);
+  const iy0 = Math.max(inner.minY, outer.minY);
+  const ix1 = Math.min(inner.maxX, outer.maxX);
+  const iy1 = Math.min(inner.maxY, outer.maxY);
+  if (ix0 > ix1 || iy0 > iy1) return [];
+  const out: ViewRect[] = [];
+  if (outer.minY <= iy0 - 1) {
+    out.push({
+      minX: outer.minX,
+      maxX: outer.maxX,
+      minY: outer.minY,
+      maxY: iy0 - 1,
+    });
+  }
+  if (outer.maxY >= iy1 + 1) {
+    out.push({
+      minX: outer.minX,
+      maxX: outer.maxX,
+      minY: iy1 + 1,
+      maxY: outer.maxY,
+    });
+  }
+  if (outer.minX <= ix0 - 1) {
+    out.push({
+      minX: outer.minX,
+      maxX: ix0 - 1,
+      minY: iy0,
+      maxY: iy1,
+    });
+  }
+  if (outer.maxX >= ix1 + 1) {
+    out.push({
+      minX: ix1 + 1,
+      maxX: outer.maxX,
+      minY: iy0,
+      maxY: iy1,
+    });
+  }
+  return out;
+}
+
+/**
+ * New tiles between the previous view and the next one, one row or column at
+ * a time, starting at the edge that already touches painted ground.
+ */
+function inwardEdgeBands(prev: ViewRect, next: ViewRect): EdgeBand[] {
+  if (!intersectView(prev, next)) return [];
+  const make = (rect: ViewRect): EdgeBand => ({
+    ...rect,
+    cursor: { x: rect.minX, y: rect.minY, regionKey: "" },
+  });
+  const sides: EdgeBand[][] = [];
+  for (const strip of subtractView(prev, next)) {
+    const north = strip.maxY < prev.minY;
+    const south = strip.minY > prev.maxY;
+    const west = strip.maxX < prev.minX;
+    const side: EdgeBand[] = [];
+    if (north) {
+      for (let y = strip.maxY; y >= strip.minY; y--) {
+        side.push(make({ ...strip, minY: y, maxY: y }));
+      }
+    } else if (south) {
+      for (let y = strip.minY; y <= strip.maxY; y++) {
+        side.push(make({ ...strip, minY: y, maxY: y }));
+      }
+    } else if (west) {
+      for (let x = strip.maxX; x >= strip.minX; x--) {
+        side.push(make({ ...strip, minX: x, maxX: x }));
+      }
+    } else {
+      for (let x = strip.minX; x <= strip.maxX; x++) {
+        side.push(make({ ...strip, minX: x, maxX: x }));
+      }
+    }
+    if (side.length > 0) sides.push(side);
+  }
+  // One row from each side before the next row, so the hole closes evenly
+  // instead of finishing the north edge before the south edge starts.
+  const bands: EdgeBand[] = [];
+  const depth = sides.reduce((max, side) => Math.max(max, side.length), 0);
+  for (let i = 0; i < depth; i++) {
+    for (const side of sides) {
+      const band = side[i];
+      if (band) bands.push(band);
+    }
+  }
+  return bands;
 }
 
 export function createGroundTile(
@@ -1136,7 +1293,18 @@ export class WorldTileManager {
   /** True while the render square still has undrawn tile keys. */
   private tilesRemainingInRegion = true;
   /** Resume point for incremental full-region sync. */
-  private syncCursor = { x: 0, y: 0, regionKey: "" };
+  private syncCursor: SyncCursor = { x: 0, y: 0, regionKey: "" };
+  /**
+   * Newly exposed rows and columns. Painted before a finished view is walked
+   * again, from the inner edge outward, so a zoom-out fills the hole the
+   * player can see first.
+   */
+  private edgeBands: EdgeBand[] = [];
+  private edgeBandIndex = 0;
+  /** Buildings discovered while ground was filling. Baked nearest first. */
+  private deferredBuildings = new Map<string, BuildingInfo>();
+  /** Coarser bake tier waiting for the wheel to settle. */
+  private pendingCoarserBake: { tier: BakeZoomTier; since: number } | null = null;
 
   constructor(private scene: Phaser.Scene) {
     this.groundLayer = scene.add.container(0, 0);
@@ -1199,6 +1367,10 @@ export class WorldTileManager {
     this.lodTile = { x: NaN, y: NaN };
     this.tilesRemainingInRegion = true;
     this.syncCursor = { x: 0, y: 0, regionKey: "" };
+    this.edgeBands = [];
+    this.edgeBandIndex = 0;
+    this.deferredBuildings.clear();
+    this.pendingCoarserBake = null;
     purgeIdleBuildingTextures(this.scene);
   }
 
@@ -1570,6 +1742,10 @@ export class WorldTileManager {
       preferY?: number;
       timeBudgetMs?: number;
       tileBudget?: number;
+      cursor?: SyncCursor;
+      budget?: FillBudget;
+      /** Queue cold building bakes instead of stopping the ground scan. */
+      deferBuildings?: boolean;
     },
   ): boolean {
     if (minX > maxX || minY > maxY) return false;
@@ -1577,13 +1753,28 @@ export class WorldTileManager {
     const persistCursor = opts?.persistCursor !== false;
     const skipDrawnCheap = opts?.skipDrawnCheap === true;
     const regionKey = `${minX},${maxX},${minY},${maxY}`;
+    const cursor = opts?.cursor ?? this.syncCursor;
+    const budget = opts?.budget ?? {
+      tiles: opts?.tileBudget ?? TILES_PER_SYNC,
+      buildings: BUILDINGS_PER_SYNC,
+      solids: SOLID_BUILDINGS_PER_SYNC,
+      deadline:
+        performance.now() + (opts?.timeBudgetMs ?? (IS_MOBILE ? 6 : 10)),
+      cheapSkips: 0,
+    };
+    const saveCursor = (x: number, y: number) => {
+      if (!persistCursor) return;
+      cursor.x = x;
+      cursor.y = y;
+      cursor.regionKey = regionKey;
+    };
 
     let startX: number;
     let startY: number;
     if (persistCursor) {
-      if (this.syncCursor.regionKey !== regionKey) {
-        let x = this.syncCursor.x;
-        let y = this.syncCursor.y;
+      if (cursor.regionKey !== regionKey) {
+        let x = cursor.x;
+        let y = cursor.y;
         const inside = x >= minX && x <= maxX && y >= minY && y <= maxY;
         // View AABB changed: keep the resume tile when still inside so sprinting
         // does not restart at the NW corner every few tiles (that left void
@@ -1602,37 +1793,41 @@ export class WorldTileManager {
             y = minY;
           }
         }
-        this.syncCursor = { x, y, regionKey };
+        cursor.x = x;
+        cursor.y = y;
+        cursor.regionKey = regionKey;
       }
-      startX = this.syncCursor.x;
-      startY = this.syncCursor.y;
+      startX = cursor.x;
+      startY = cursor.y;
     } else {
       startX = minX;
       startY = minY;
     }
 
-    let remaining = opts?.tileBudget ?? TILES_PER_SYNC;
-    let buildingsRemaining = BUILDINGS_PER_SYNC;
-    const deadline =
-      performance.now() + (opts?.timeBudgetMs ?? (IS_MOBILE ? 6 : 10));
-
     for (let y = startY; y <= maxY; y++) {
       for (let x = y === startY ? startX : minX; x <= maxX; x++) {
-        // Charge every visit — skipping drawn / deferred tiles used to leave
-        // remaining untouched and scan the whole AABB every frame (multi-minute freeze).
-        // Priority rings may skip the charge for already-drawn tiles (small AABB).
+        // Undrawn visits always count against the tile cap and the deadline.
+        // Drawn visits can be skipped cheaply, but a cap and a sampled clock
+        // stop a full-view walk from allocating every key in one frame.
         const key = tileKey(x, y);
         const alreadyDrawn = this.drawn.has(key);
-        if (!alreadyDrawn || !skipDrawnCheap) {
-          if (remaining <= 0 || performance.now() >= deadline) {
-            if (persistCursor) this.syncCursor = { x, y, regionKey };
+        if (alreadyDrawn && skipDrawnCheap) {
+          budget.cheapSkips++;
+          if (
+            budget.cheapSkips >= CHEAP_SKIP_CAP ||
+            (budget.cheapSkips % CHEAP_SKIP_STRIDE === 0 &&
+              performance.now() >= budget.deadline)
+          ) {
+            saveCursor(x, y);
             return true;
           }
-          remaining--;
-        } else if (performance.now() >= deadline) {
-          if (persistCursor) this.syncCursor = { x, y, regionKey };
+          continue;
+        }
+        if (budget.tiles <= 0 || performance.now() >= budget.deadline) {
+          saveCursor(x, y);
           return true;
         }
+        budget.tiles--;
 
         if (alreadyDrawn) continue;
 
@@ -1641,63 +1836,40 @@ export class WorldTileManager {
           if (ttype === TileType.Wall) {
             const bld = getBuildingAt(x, y);
             if (bld) {
-              const bMaxX = bld.ox + bld.w - 1;
-              const bMaxY = bld.oy + bld.h - 1;
               const bldKey = tileKey(bld.ox, bld.oy);
-              // Heal footprints marked drawn after a failed bake (no live/cached cuboid).
-              if (
+              const resident =
                 this.drawnBuildings.has(bldKey) &&
-                !this.buildingObjects.has(bldKey) &&
-                !this.buildingCache.has(bldKey)
-              ) {
-                this.drawnBuildings.delete(bldKey);
-              }
-              if (!this.drawnBuildings.has(bldKey)) {
-                // Defer cold cuboid bakes across frames.
-                if (buildingsRemaining <= 0) {
-                  if (persistCursor) this.syncCursor = { x, y, regionKey };
+                (this.buildingObjects.has(bldKey) ||
+                  this.buildingCache.has(bldKey));
+              if (!resident) {
+                // Textured bakes are queued. A flat cuboid goes up immediately
+                // so the lot is not an empty footprint while that bake waits.
+                // Past the solid cap, stop and resume here next frame.
+                if (opts?.deferBuildings) {
+                  const hasShape =
+                    this.buildingObjects.has(bldKey) ||
+                    this.buildingCache.has(bldKey);
+                  if (!hasShape) {
+                    if (
+                      budget.solids <= 0 ||
+                      performance.now() >= budget.deadline
+                    ) {
+                      saveCursor(x, y);
+                      return true;
+                    }
+                    budget.solids--;
+                    this.placeSolidBuilding(bld);
+                  }
+                  this.deferredBuildings.set(bldKey, bld);
+                  this.drawn.add(key);
+                  continue;
+                }
+                if (budget.buildings <= 0) {
+                  saveCursor(x, y);
                   return true;
                 }
-                buildingsRemaining--;
-                const depth = buildingWallDepth(bld);
-                const wantLod = this.lodForBuilding(bld);
-                const cached = this.takeCachedBuilding(bldKey);
-                let placed = false;
-                if (cached) {
-                  cached.cuboid.display.setDepth(depth);
-                  this.buildingObjects.set(bldKey, cached);
-                  placed = true;
-                } else {
-                  try {
-                    this.buildingObjects.set(bldKey, {
-                      cuboid: createBuildingCuboid(
-                        this.scene,
-                        bld,
-                        depth,
-                        wantLod,
-                      ),
-                      ox: bld.ox,
-                      oy: bld.oy,
-                      w: bld.w,
-                      h: bld.h,
-                    });
-                    placed = true;
-                  } catch (err) {
-                    // Do NOT mark drawnBuildings — a throw used to leave the
-                    // whole footprint stuck as a flat empty shell forever.
-                    console.error(`Failed to bake building ${bldKey}`, err);
-                  }
-                }
-                if (placed) {
-                  this.drawnBuildings.add(bldKey);
-                  this.ensureBuildingEdgeDecals(bld, bldKey);
-                  this.refreshTreeDepthsNearBuilding(bld);
-                  for (let by = bld.oy; by <= bMaxY; by++) {
-                    for (let bx = bld.ox; bx <= bMaxX; bx++) {
-                      this.minimapKinds.set(tileKey(bx, by), "building");
-                    }
-                  }
-                }
+                budget.buildings--;
+                this.placeBuilding(bld);
               }
             } else {
               const light = getStreetlightAt(x, y);
@@ -1841,7 +2013,9 @@ export class WorldTileManager {
     }
 
     if (persistCursor) {
-      this.syncCursor = { x: minX, y: minY, regionKey: "" };
+      cursor.x = minX;
+      cursor.y = minY;
+      cursor.regionKey = "";
     }
     return false;
   }
@@ -1856,11 +2030,244 @@ export class WorldTileManager {
   }
 
   /**
+   * Hold a coarser bake tier until zoom has sat still. Sharper tiers apply
+   * immediately so zooming back in does not leave the city blurry.
+   */
+  private noteCameraZoom(zoom: number) {
+    const tier = bakeZoomTierForZoom(zoom);
+    const current = getBakeZoomTier();
+    if (tier === current) {
+      this.pendingCoarserBake = null;
+      return;
+    }
+    if (tier > current) {
+      this.pendingCoarserBake = null;
+      setBakeZoomTier(tier);
+      return;
+    }
+    const now = performance.now();
+    if (!this.pendingCoarserBake || this.pendingCoarserBake.tier !== tier) {
+      this.pendingCoarserBake = { tier, since: now };
+      return;
+    }
+    if (now - this.pendingCoarserBake.since >= BAKE_ZOOM_SETTLE_MS) {
+      setBakeZoomTier(tier);
+      this.pendingCoarserBake = null;
+    }
+  }
+
+  private footprintOutsideView(bld: BuildingInfo): boolean {
+    const h = CULL_HYSTERESIS_TILES;
+    const maxX = bld.ox + bld.w - 1;
+    const maxY = bld.oy + bld.h - 1;
+    return (
+      maxX < this.view.minX - h ||
+      bld.ox > this.view.maxX + h ||
+      maxY < this.view.minY - h ||
+      bld.oy > this.view.maxY + h
+    );
+  }
+
+  /** Drop a queued building and allow its tiles to be drawn again later. */
+  private forgetDeferredBuilding(bld: BuildingInfo) {
+    this.deferredBuildings.delete(tileKey(bld.ox, bld.oy));
+    if (
+      this.buildingObjects.has(tileKey(bld.ox, bld.oy)) ||
+      this.buildingCache.has(tileKey(bld.ox, bld.oy))
+    ) {
+      return;
+    }
+    this.drawnBuildings.delete(tileKey(bld.ox, bld.oy));
+    const maxX = bld.ox + bld.w - 1;
+    const maxY = bld.oy + bld.h - 1;
+    for (let ty = bld.oy; ty <= maxY; ty++) {
+      for (let tx = bld.ox; tx <= maxX; tx++) {
+        const key = tileKey(tx, ty);
+        this.drawn.delete(key);
+        this.minimapKinds.delete(key);
+      }
+    }
+  }
+
+  private markBuildingFootprintDrawn(bld: BuildingInfo) {
+    const maxX = bld.ox + bld.w - 1;
+    const maxY = bld.oy + bld.h - 1;
+    for (let ty = bld.oy; ty <= maxY; ty++) {
+      for (let tx = bld.ox; tx <= maxX; tx++) {
+        const key = tileKey(tx, ty);
+        this.drawn.add(key);
+        this.minimapKinds.set(key, "building");
+      }
+    }
+  }
+
+  /**
+   * Flat cuboid so a queued building still has a shape. Edge decals and the
+   * textured bake land in placeBuilding.
+   */
+  private placeSolidBuilding(bld: BuildingInfo): boolean {
+    const bldKey = tileKey(bld.ox, bld.oy);
+    if (this.buildingObjects.has(bldKey) || this.buildingCache.has(bldKey)) {
+      this.markBuildingFootprintDrawn(bld);
+      return true;
+    }
+    const depth = buildingWallDepth(bld);
+    try {
+      this.buildingObjects.set(bldKey, {
+        cuboid: createBuildingCuboid(this.scene, bld, depth, "far"),
+        ox: bld.ox,
+        oy: bld.oy,
+        w: bld.w,
+        h: bld.h,
+      });
+    } catch (err) {
+      console.error(`Failed to place solid building ${bldKey}`, err);
+      return false;
+    }
+    this.drawnBuildings.add(bldKey);
+    this.markBuildingFootprintDrawn(bld);
+    return true;
+  }
+
+  /**
+   * Create or restore a textured cuboid. A flat stand-in already on the lot
+   * is replaced. Returns false only when nothing could be shown.
+   */
+  private placeBuilding(bld: BuildingInfo): boolean {
+    const bldKey = tileKey(bld.ox, bld.oy);
+    const live = this.buildingObjects.get(bldKey);
+    if (live && !placeholderCuboid(live.cuboid)) {
+      this.markBuildingFootprintDrawn(bld);
+      return true;
+    }
+    if (
+      this.drawnBuildings.has(bldKey) &&
+      !live &&
+      !this.buildingCache.has(bldKey)
+    ) {
+      this.drawnBuildings.delete(bldKey);
+    }
+    const depth = buildingWallDepth(bld);
+    const wantLod = this.lodForBuilding(bld);
+    const cached = this.takeCachedBuilding(bldKey);
+    let placed: TrackedBuilding | null = null;
+    if (cached) {
+      cached.cuboid.display.setDepth(depth);
+      placed = cached;
+    } else {
+      try {
+        const cuboid = createBuildingCuboid(this.scene, bld, depth, wantLod);
+        // Keep the stand-in when the textured bake is refused. Retrying a
+        // refusal every frame would spend the bake slots on the same lot.
+        if (placeholderCuboid(cuboid) && live) {
+          destroyBuildingCuboid(this.scene, cuboid);
+          this.markBuildingFootprintDrawn(bld);
+          return true;
+        }
+        placed = {
+          cuboid,
+          ox: bld.ox,
+          oy: bld.oy,
+          w: bld.w,
+          h: bld.h,
+        };
+      } catch (err) {
+        // A throw must not erase a visible stand-in.
+        console.error(`Failed to bake building ${bldKey}`, err);
+        if (live) {
+          this.markBuildingFootprintDrawn(bld);
+          return true;
+        }
+        return false;
+      }
+    }
+    if (!placed) return false;
+    if (live) {
+      destroyBuildingCuboid(this.scene, live.cuboid);
+      this.buildingObjects.delete(bldKey);
+    }
+    this.buildingObjects.set(bldKey, placed);
+    this.drawnBuildings.add(bldKey);
+    this.ensureBuildingEdgeDecals(bld, bldKey);
+    this.refreshTreeDepthsNearBuilding(bld);
+    this.markBuildingFootprintDrawn(bld);
+    return true;
+  }
+
+  private edgeWorkPending(): boolean {
+    return this.edgeBandIndex < this.edgeBands.length;
+  }
+
+  /** Paint queued view-edge strips until the shared frame budget runs out. */
+  private drainEdgeBands(budget: FillBudget) {
+    if (this.edgeBandIndex > 48) {
+      this.edgeBands.splice(0, this.edgeBandIndex);
+      this.edgeBandIndex = 0;
+    }
+    while (this.edgeBandIndex < this.edgeBands.length) {
+      if (budget.tiles <= 0 || performance.now() >= budget.deadline) return;
+      const band = this.edgeBands[this.edgeBandIndex]!;
+      const clipped = intersectView(band, this.view);
+      if (!clipped) {
+        this.edgeBandIndex++;
+        continue;
+      }
+      const more = this.syncTileRegion(
+        clipped.minX,
+        clipped.maxX,
+        clipped.minY,
+        clipped.maxY,
+        {
+          persistCursor: true,
+          skipDrawnCheap: true,
+          cursor: band.cursor,
+          budget,
+          deferBuildings: true,
+        },
+      );
+      if (more) return;
+      this.edgeBandIndex++;
+    }
+    this.edgeBands = [];
+    this.edgeBandIndex = 0;
+  }
+
+  /**
+   * Bake queued buildings, nearest to the player first.
+   * Buildings that have left the cull ring are forgotten so a later visit
+   * can draw them again.
+   */
+  private dropOutsideDeferredBuildings() {
+    if (this.deferredBuildings.size === 0) return;
+    for (const bld of [...this.deferredBuildings.values()]) {
+      if (this.footprintOutsideView(bld)) this.forgetDeferredBuilding(bld);
+    }
+  }
+
+  private drainDeferredBuildings(budget: FillBudget) {
+    if (this.deferredBuildings.size === 0 || budget.buildings <= 0) return;
+    const pending = [...this.deferredBuildings.values()];
+    pending.sort(
+      (a, b) =>
+        this.buildingDistance(a.ox, a.oy, a.w, a.h) -
+        this.buildingDistance(b.ox, b.oy, b.w, b.h),
+    );
+    for (const bld of pending) {
+      if (budget.buildings <= 0 || performance.now() >= budget.deadline) return;
+      const key = tileKey(bld.ox, bld.oy);
+      if (!this.deferredBuildings.has(key)) continue;
+      this.deferredBuildings.delete(key);
+      budget.buildings--;
+      if (!this.placeBuilding(bld)) this.markBuildingFootprintDrawn(bld);
+    }
+  }
+
+  /**
    * Draw/cull tiles visible to the camera (desktop) or a fixed radius (mobile).
    * Desktop region = camera frustum + draw margin, capped by RENDER_RADIUS.
    * Cull uses an extra hysteresis ring so chunks aren't destroyed at the edge.
-   * @param force bypass move/view hysteresis (e.g. after zoom) so soft-hidden
-   *   entities can restore against the live frustum.
+   * @param force treat a 1-tile view change as real (zoom / resize) without
+   *   restarting the fill cursor.
    */
   syncAroundPlayer(
     playerTileX: number,
@@ -1877,8 +2284,7 @@ export class WorldTileManager {
     // LOD must follow the player every frame. lastSyncTile stays throttled so
     // cull/fill do not restart on sub-tile camera noise.
     this.lodTile = { x: cx, y: cy };
-
-    if (camera) setBakeZoomTier(bakeZoomTierForZoom(camera.zoom));
+    if (camera) this.noteCameraZoom(camera.zoom);
 
     let region: ViewRect;
     if (!IS_MOBILE && camera) {
@@ -1904,33 +2310,38 @@ export class WorldTileManager {
       };
     }
 
-    const moved =
-      force ||
-      !Number.isFinite(this.lastSyncTile.x) ||
-      Math.abs(cx - this.lastSyncTile.x) >= SYNC_MOVE_THRESHOLD ||
-      Math.abs(cy - this.lastSyncTile.y) >= SYNC_MOVE_THRESHOLD;
-
-    // Larger threshold than move — camera float noise must not retrigger cull every frame.
-    const VIEW_CHANGE_THRESHOLD = 4;
-    const viewChanged =
-      force ||
-      !Number.isFinite(this.lastView.minX) ||
-      Math.abs(region.minX - this.lastView.minX) >= VIEW_CHANGE_THRESHOLD ||
-      Math.abs(region.maxX - this.lastView.maxX) >= VIEW_CHANGE_THRESHOLD ||
-      Math.abs(region.minY - this.lastView.minY) >= VIEW_CHANGE_THRESHOLD ||
-      Math.abs(region.maxY - this.lastView.maxY) >= VIEW_CHANGE_THRESHOLD;
-
-    // Pin after the move check (which uses NaN to detect the first sync) and
-    // before any create. Distance 0 while lastSyncTile is unset bakes every
+    const hadSync =
+      Number.isFinite(this.lastSyncTile.x) && Number.isFinite(this.lastSyncTile.y);
+    const prevX = this.lastSyncTile.x;
+    const prevY = this.lastSyncTile.y;
+    const hadView = Number.isFinite(this.lastView.minX);
+    const prevView = this.lastView;
+    // Pin before any create. Distance 0 while lastSyncTile is unset bakes every
     // building at near, then the refresh wave flattens the ones that are not.
-    if (!Number.isFinite(this.lastSyncTile.x) || !Number.isFinite(this.lastSyncTile.y)) {
-      this.lastSyncTile = { x: cx, y: cy };
-    }
+    if (!hadSync) this.lastSyncTile = { x: cx, y: cy };
 
-    // Stable view: only finish an in-progress incremental fill — no prewarm/evict/cull.
-    // Still refresh the near-player ring so a deferred bake cannot leave a hole
-    // underfoot after sprinting stops.
-    if (!moved && !viewChanged && !this.tilesRemainingInRegion) {
+    const playerMoved =
+      !hadSync ||
+      Math.abs(cx - prevX) >= SYNC_MOVE_THRESHOLD ||
+      Math.abs(cy - prevY) >= SYNC_MOVE_THRESHOLD;
+    // Camera float must not retrigger cull. Zoom passes force so a 1-tile
+    // growth still opens an edge strip.
+    const viewSlack = force ? 1 : 4;
+    const rectChanged =
+      !hadView ||
+      Math.abs(region.minX - prevView.minX) >= viewSlack ||
+      Math.abs(region.maxX - prevView.maxX) >= viewSlack ||
+      Math.abs(region.minY - prevView.minY) >= viewSlack ||
+      Math.abs(region.maxY - prevView.maxY) >= viewSlack;
+    const viewStale = playerMoved || rectChanged;
+    const fillPending =
+      this.tilesRemainingInRegion ||
+      this.edgeWorkPending() ||
+      this.deferredBuildings.size > 0;
+
+    // Stable view with nothing queued: a short underfoot pass, then warm
+    // worldgen while the paint budget is free.
+    if (!viewStale && !fillPending) {
       this.syncTileRegion(
         Math.max(this.view.minX, cx - PRIORITY_FILL_RADIUS),
         Math.min(this.view.maxX, cx + PRIORITY_FILL_RADIUS),
@@ -1943,8 +2354,19 @@ export class WorldTileManager {
           tileBudget: IS_MOBILE ? 40 : 200,
         },
       );
-      // Standing still is when the texture budget is most likely to free up,
-      // so flat fallbacks must still get their retry here.
+      if (!IS_MOBILE) {
+        const idleHalf = Math.max(
+          Math.ceil((this.view.maxX - this.view.minX) / 2),
+          Math.ceil((this.view.maxY - this.view.minY) / 2),
+          1,
+        );
+        preWarmCellsNearPlayer(
+          cx,
+          cy,
+          cacheKeepBoundaryDist(idleHalf),
+          1,
+        );
+      }
       this.refreshBuildingLods();
       return;
     }
@@ -1956,54 +2378,69 @@ export class WorldTileManager {
     );
     const keepDist = cacheKeepBoundaryDist(viewHalf);
 
-    if (moved || viewChanged) {
-      const prevX = this.lastSyncTile.x;
-      const prevY = this.lastSyncTile.y;
-      const prevView = this.lastView;
-      preWarmCellsNearPlayer(cx, cy, keepDist, PREWARM_CELLS_PER_FRAME);
+    if (viewStale) {
+      // Cull reads this.view, so publish the new rect before destroying
+      // anything that fell outside it.
       this.view = region;
-      this.cullFarObjects();
-
-      // Continuous sprint used to reset the regional cursor to the NW corner on
-      // every 2-tile step. The fill never reached the leading edge until the
-      // player stopped. Keep the resume point; only hard-restart on teleports or
-      // when the view grows toward -x/-y (new strips sit before the cursor).
       const jump =
-        force ||
-        !Number.isFinite(prevX) ||
-        Math.abs(cx - prevX) > 24 ||
-        Math.abs(cy - prevY) > 24;
-      const grewBackward =
-        Number.isFinite(prevView.minX) &&
-        (region.minX < prevView.minX || region.minY < prevView.minY);
-      if (jump || grewBackward) {
-        this.syncCursor = {
-          x: region.minX,
-          y: region.minY,
-          regionKey: "",
-        };
-      } else if (
-        this.syncCursor.x < region.minX ||
-        this.syncCursor.x > region.maxX ||
-        this.syncCursor.y < region.minY ||
-        this.syncCursor.y > region.maxY
-      ) {
-        this.syncCursor = {
-          x: Math.min(Math.max(this.syncCursor.x, region.minX), region.maxX),
-          y: Math.min(Math.max(this.syncCursor.y, region.minY), region.maxY),
-          regionKey: "",
-        };
+        hadSync &&
+        (Math.abs(cx - prevX) > 24 || Math.abs(cy - prevY) > 24);
+      const viewGrew = hadView && viewContains(region, prevView);
+      // Growing the view cannot expose a tile that was inside the old cull
+      // ring, so skip the full sprite walk on zoom-out.
+      if (!viewGrew) this.cullFarObjects();
+
+      let addedBands = 0;
+      if (!hadView || jump) {
+        this.edgeBands = [];
+        this.edgeBandIndex = 0;
+        this.syncCursor = { x: region.minX, y: region.minY, regionKey: "" };
+        this.tilesRemainingInRegion = true;
       } else {
-        // View AABB key changed; rebind without moving the resume tile.
-        this.syncCursor.regionKey = "";
+        const bands = inwardEdgeBands(prevView, region);
+        addedBands = bands.length;
+        if (addedBands > 0) this.edgeBands.push(...bands);
+        if (
+          this.syncCursor.x < region.minX ||
+          this.syncCursor.x > region.maxX ||
+          this.syncCursor.y < region.minY ||
+          this.syncCursor.y > region.maxY
+        ) {
+          this.syncCursor = {
+            x: Math.min(Math.max(this.syncCursor.x, region.minX), region.maxX),
+            y: Math.min(Math.max(this.syncCursor.y, region.minY), region.maxY),
+            regionKey: "",
+          };
+        } else {
+          this.syncCursor.regionKey = "";
+        }
       }
 
-      this.tilesRemainingInRegion = true;
-      this.lastSyncTile = { x: cx, y: cy };
+      // A big zoom already fills the frame with new tiles. Warm layouts on
+      // smaller steps and while standing still instead.
+      if (addedBands <= 8) {
+        preWarmCellsNearPlayer(cx, cy, keepDist, PREWARM_CELLS_PER_FRAME);
+      }
+
+      if (playerMoved || !hadSync) this.lastSyncTile = { x: cx, y: cy };
       this.lastView = { ...region };
     }
 
-    // Paint underfoot / near-player first so sprint never shows void holes.
+    // One budget for underfoot, the open scan, and the new edge. Stacking
+    // those used to spend two time slices on the same frame.
+    const budget: FillBudget = {
+      tiles: TILES_PER_SYNC,
+      buildings: BUILDINGS_PER_SYNC,
+      solids: SOLID_BUILDINGS_PER_SYNC,
+      deadline: performance.now() + (IS_MOBILE ? 6 : 10),
+      cheapSkips: 0,
+    };
+
+    // Nearest textured bakes first, inside the same time slice as the ground.
+    // Waiting until the edge fill finished left every new lot empty.
+    this.dropOutsideDeferredBuildings();
+    this.drainDeferredBuildings(budget);
+
     this.syncTileRegion(
       Math.max(this.view.minX, cx - PRIORITY_FILL_RADIUS),
       Math.min(this.view.maxX, cx + PRIORITY_FILL_RADIUS),
@@ -2012,33 +2449,50 @@ export class WorldTileManager {
       {
         persistCursor: false,
         skipDrawnCheap: true,
-        timeBudgetMs: IS_MOBILE ? 4 : 6,
-        tileBudget: IS_MOBILE ? 80 : 400,
+        budget,
+        deferBuildings: true,
       },
     );
 
     if (this.tilesRemainingInRegion) {
+      const wasRemaining = this.tilesRemainingInRegion;
       this.tilesRemainingInRegion = this.syncTileRegion(
         this.view.minX,
         this.view.maxX,
         this.view.minY,
         this.view.maxY,
-        { preferX: cx, preferY: cy },
+        {
+          preferX: cx,
+          preferY: cy,
+          budget,
+          deferBuildings: true,
+          skipDrawnCheap: true,
+        },
       );
-      if (!this.tilesRemainingInRegion) {
+      if (wasRemaining && !this.tilesRemainingInRegion) {
         this.refreshAllTreeDepths();
       }
     }
 
-    // Runs every sync, not only on movement: budget can free up while standing
-    // still, and that is exactly when a flat fallback should heal.
-    this.refreshBuildingLods();
+    this.drainEdgeBands(budget);
 
-    if (moved || viewChanged) {
+    this.dropOutsideDeferredBuildings();
+    if (performance.now() < budget.deadline) {
+      this.drainDeferredBuildings(budget);
+    }
+
+    const revealing =
+      this.tilesRemainingInRegion ||
+      this.edgeWorkPending() ||
+      this.deferredBuildings.size > 0;
+    if (!revealing) this.refreshBuildingLods();
+
+    if (viewStale) {
       const snapCx = cx;
       const snapCy = cy;
+      const snapKeep = keepDist;
       setTimeout(() => {
-        evictDistantCells(snapCx, snapCy, keepDist);
+        evictDistantCells(snapCx, snapCy, snapKeep);
       }, 0);
     }
   }

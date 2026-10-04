@@ -16,9 +16,13 @@ import {
   ZOMBIE_AGGRO_RANGE,
 } from "./constants.js";
 import { CRAFT_DURATION_MS } from "./crafting.js";
-import { ANTIBIOTIC_DURATION_MS, ZOMBIE_INFECTION_CHANCE } from "./infection.js";
+import {
+  ANTIBIOTIC_DURATION_MAX_MS,
+  ANTIBIOTIC_DURATION_MS,
+  ZOMBIE_INFECTION_CHANCE,
+} from "./infection.js";
 import { SEARCH_DURATION_MS } from "./interior.js";
-import { BASE_INVENTORY_SLOTS } from "./items.js";
+import { BASE_INVENTORY_SLOTS, MAGAZINE_READ_MS } from "./items.js";
 import {
   awardSubSkillXp,
   effectiveSubLevel,
@@ -34,10 +38,12 @@ import {
 
 export const TREE_CHOP_SWINGS_BASE = 10;
 export const TREE_CHOP_SWINGS_MIN = 6;
+/** Wood per felled tree. Harvesting does not change this. */
 export const HARVEST_WOOD_MIN_BASE = 2;
 export const HARVEST_WOOD_MAX_BASE = 4;
-export const HARVEST_WOOD_MIN_MAX = 3;
-export const HARVEST_WOOD_MAX_MAX = 6;
+/** Unenforced until carry weight is implemented. Level 0 to 100. */
+export const CARRY_WEIGHT_KG_BASE = 16;
+export const CARRY_WEIGHT_KG_MAX = 32;
 
 /** XP granted per completed action. Tune here, not at call sites. */
 export const SKILL_XP = {
@@ -68,28 +74,57 @@ export const SKILL_XP = {
   fitnessSprint: 5,
   recoveryHealHp: 5,
   recoveryHeal: 3,
+  /** Reading XP from finishing a skill magazine, before the Reading bonus. */
+  readMagazine: 200,
+  /** Cover-skill XP from finishing a skill magazine, before the Reading bonus. */
+  readMagazineSkill: 500,
+  /** XP each extra skill on a magazine receives, before the Reading bonus. */
+  readMagazineBonus: 250,
+  /** Reading XP from finishing a crafting recipe. */
+  readCraft: 12,
 } as const;
 
-export const SUB_SKILL_BENEFIT: Record<SubSkillId, string> = {
-  melee: "Melee hits deal more damage.",
-  harvesting: "Trees fall in fewer swings and drop more wood.",
-  carrying: "Unlock extra pocket slots at 25 / 50 / 75 / 100.",
-  construction: "Build and deconstruct faster, with a better material refund.",
-  fitness: "More stamina, slower sprint drain, slightly faster walk.",
-  immunity: "Zombie bites infect less often and infection climbs slower.",
-  recovery:
-    "Bandage HoT and fire warmth heal more. Hunger and thirst drain slower.",
-  accuracy: "Guns miss less, spray tighter, and reload faster.",
-  crafting: "Workbench recipes finish faster.",
-  scavenging: "Searches finish faster and containers roll loot more often.",
-  stealth: "Zombies notice you from closer, and your gunshots carry less.",
-  cooking: "Food restores more hunger and thirst.",
-  medicine:
-    "Meds heal more. Antibiotics last longer. Doctor Clark costs less.",
-  reading: "Not trainable yet. Find books to study later.",
-  bartering: "Ashen Traders charge less and pay more, on top of standing.",
-  persuasion: "Turned-in jobs pay more notes and reputation.",
-  leadership: "Not trainable yet. Lead other survivors later.",
+export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
+  melee: ["Melee damage increases from 100% to 120%."],
+  harvesting: ["Trees fall in fewer swings, from 10 down to 6."],
+  carrying: ["Max carry weight increases from 16kg to 32kg."],
+  construction: [
+    "Building and deconstructing take less time, from 30 seconds down to 20 seconds.",
+    "Hammer wear falls from 10 down to 5.",
+    "Materials refunded increase from 50% to 100%.",
+  ],
+  fitness: ["Stamina increases from 50 to 100."],
+  immunity: [
+    "A bite's infection chance falls from 10% to 2.5%.",
+    "Infection rises slower, from 1 point per minute to 0.5.",
+  ],
+  recovery: [
+    "Hunger and thirst drain slower, from 100% down to 75%.",
+    "Bandage healing and fireplace warmth increase from 100% to 150%.",
+  ],
+  accuracy: ["Aim cone shrinks from 100% down to 50%."],
+  crafting: ["Recipe time decreases from 10 seconds to 5 seconds."],
+  scavenging: ["Searches finish faster, from 5 seconds down to 3 seconds."],
+  stealth: ["Zombies notice you from closer, from 12 tiles down to 8 tiles."],
+  cooking: [
+    "Food and drink restore more hunger and thirst, from 100% to 120%.",
+  ],
+  medicine: [
+    "Health from medicine increases from 100% to 120%.",
+    "Antibiotics last up to twice as long.",
+  ],
+  reading: [
+    "Skill magazine XP increases from 100% to 150%.",
+    "Reading a magazine takes less time, from 30 seconds down to 20 seconds.",
+    "Gain Reading XP from crafting recipes and skill magazines.",
+  ],
+  bartering: [
+    "Buy and sell prices improve by up to 10%, on top of reputation.",
+  ],
+  persuasion: [
+    "Quest banknotes increase from 100% to 150%.",
+    "Quest reputation increases from 100% to 150%.",
+  ],
 };
 
 export type PlayerSkillMods = {
@@ -99,6 +134,8 @@ export type PlayerSkillMods = {
   harvestWoodMin: number;
   harvestWoodMax: number;
   extraPockets: number;
+  /** Planned carry limit in kg. Not enforced yet. */
+  maxCarryKg: number;
   buildDurationMs: number;
   deconstructDurationMs: number;
   hammerWear: number;
@@ -115,11 +152,14 @@ export type PlayerSkillMods = {
   reloadMs: number;
   craftDurationScale: number;
   searchDurationMs: number;
-  lootChanceScale: number;
   stealthAggroRange: number;
   gunshotNoiseScale: number;
   foodRestoreScale: number;
   medicineHealScale: number;
+  /** Multiplier on XP granted by a finished skill magazine. */
+  magazineXpScale: number;
+  /** Time to read a skill magazine. */
+  magazineReadMs: number;
   antibioticDurationMs: number;
   doctorHealCost: number;
   barterT: number;
@@ -149,11 +189,8 @@ export function lerpSkill(
   return at0 + (at100 - at0) * t;
 }
 
-export function extraPocketSlotsForCarrying(level: number): number {
-  if (level >= 100) return 4;
-  if (level >= 75) return 3;
-  if (level >= 50) return 2;
-  if (level >= 25) return 1;
+/** Carrying used to unlock pockets. It no longer does. */
+export function extraPocketSlotsForCarrying(_level: number): number {
   return 0;
 }
 
@@ -169,67 +206,64 @@ export function computePlayerSkillMods(
   const carryingLevel = effectiveSubLevel(state, "carrying");
   return {
     json,
-    meleeDamageScale: lerpSkill(state, "melee", 1, 1.35),
+    meleeDamageScale: lerpSkill(state, "melee", 1, 1.2),
     harvestSwings: Math.round(
       lerpSkill(state, "harvesting", TREE_CHOP_SWINGS_BASE, TREE_CHOP_SWINGS_MIN),
     ),
-    harvestWoodMin: Math.round(
-      lerpSkill(state, "harvesting", HARVEST_WOOD_MIN_BASE, HARVEST_WOOD_MIN_MAX),
-    ),
-    harvestWoodMax: Math.round(
-      lerpSkill(state, "harvesting", HARVEST_WOOD_MAX_BASE, HARVEST_WOOD_MAX_MAX),
-    ),
+    harvestWoodMin: HARVEST_WOOD_MIN_BASE,
+    harvestWoodMax: HARVEST_WOOD_MAX_BASE,
     extraPockets: extraPocketSlotsForCarrying(carryingLevel),
+    maxCarryKg: lerpSkill(
+      state,
+      "carrying",
+      CARRY_WEIGHT_KG_BASE,
+      CARRY_WEIGHT_KG_MAX,
+    ),
     buildDurationMs: Math.round(
-      lerpSkill(
-        state,
-        "construction",
-        PREFAB_BUILD_DURATION_MS,
-        PREFAB_BUILD_DURATION_MS * 0.5,
-      ),
+      lerpSkill(state, "construction", PREFAB_BUILD_DURATION_MS, 20_000),
     ),
     deconstructDurationMs: Math.round(
-      lerpSkill(
-        state,
-        "construction",
-        STRUCTURE_DECONSTRUCT_DURATION_MS,
-        STRUCTURE_DECONSTRUCT_DURATION_MS * 0.5,
-      ),
+      lerpSkill(state, "construction", STRUCTURE_DECONSTRUCT_DURATION_MS, 20_000),
     ),
     hammerWear: Math.max(
       1,
       Math.round(lerpSkill(state, "construction", PREFAB_BUILD_HAMMER_WEAR, 5)),
     ),
-    deconstructRefundScale: lerpSkill(state, "construction", 0.5, 0.7),
-    staminaMax: lerpSkill(state, "fitness", STAMINA_MAX, 90),
-    staminaDrainScale: lerpSkill(state, "fitness", 1, 0.7),
-    walkSpeed: lerpSkill(state, "fitness", PLAYER_SPEED, PLAYER_SPEED * 1.1),
-    infectionChance: lerpSkill(state, "immunity", ZOMBIE_INFECTION_CHANCE, 0.03),
+    deconstructRefundScale: lerpSkill(state, "construction", 0.5, 1),
+    staminaMax: lerpSkill(state, "fitness", STAMINA_MAX, 100),
+    staminaDrainScale: 1,
+    walkSpeed: PLAYER_SPEED,
+    infectionChance: lerpSkill(state, "immunity", ZOMBIE_INFECTION_CHANCE, 0.025),
     infectionTickUp: lerpSkill(state, "immunity", 1, 0.5),
     healScale: lerpSkill(state, "recovery", 1, 1.5),
-    hungerDrainScale: lerpSkill(state, "recovery", 1, 0.85),
-    missScale: lerpSkill(state, "accuracy", 1, 0.5),
-    spreadScale: lerpSkill(state, "accuracy", 1, 0.6),
-    reloadMs: Math.round(lerpSkill(state, "accuracy", RELOAD_DURATION_MS, 2000)),
+    hungerDrainScale: lerpSkill(state, "recovery", 1, 0.75),
+    missScale: 1,
+    spreadScale: lerpSkill(state, "accuracy", 1, 0.5),
+    reloadMs: RELOAD_DURATION_MS,
     craftDurationScale: lerpSkill(state, "crafting", 1, 0.5),
     searchDurationMs: Math.round(
-      lerpSkill(state, "scavenging", SEARCH_DURATION_MS, SEARCH_DURATION_MS * 0.5),
+      lerpSkill(state, "scavenging", SEARCH_DURATION_MS, 3_000),
     ),
-    lootChanceScale: lerpSkill(state, "scavenging", 1, 1.45),
     stealthAggroRange: lerpSkill(state, "stealth", ZOMBIE_AGGRO_RANGE, 8),
-    gunshotNoiseScale: lerpSkill(state, "stealth", 1, 0.7),
-    foodRestoreScale: lerpSkill(state, "cooking", 1, 1.4),
-    medicineHealScale: lerpSkill(state, "medicine", 1, 1.4),
+    gunshotNoiseScale: 1,
+    foodRestoreScale: lerpSkill(state, "cooking", 1, 1.2),
+    medicineHealScale: lerpSkill(state, "medicine", 1, 1.2),
     antibioticDurationMs: Math.round(
-      lerpSkill(state, "medicine", ANTIBIOTIC_DURATION_MS, ANTIBIOTIC_DURATION_MS * 0.6),
+      lerpSkill(
+        state,
+        "medicine",
+        ANTIBIOTIC_DURATION_MS,
+        ANTIBIOTIC_DURATION_MAX_MS,
+      ),
     ),
-    doctorHealCost: Math.max(
-      20,
-      Math.round(lerpSkill(state, "medicine", ASHEN_MILITIA_DOCTOR_HEAL_COST, 30)),
+    doctorHealCost: ASHEN_MILITIA_DOCTOR_HEAL_COST,
+    magazineXpScale: lerpSkill(state, "reading", 1, 1.5),
+    magazineReadMs: Math.round(
+      lerpSkill(state, "reading", MAGAZINE_READ_MS, 20_000),
     ),
     barterT: skillT(state, "bartering"),
-    questRewardScale: lerpSkill(state, "persuasion", 1, 1.25),
-    questRepScale: lerpSkill(state, "persuasion", 1, 1.2),
+    questRewardScale: lerpSkill(state, "persuasion", 1, 1.5),
+    questRepScale: lerpSkill(state, "persuasion", 1, 1.5),
     carryingLevel,
   };
 }
@@ -249,8 +283,8 @@ export function barterAdjustedRates(
 ): { buyRate: number; sellRate: number } {
   const t = clamp01(barterT);
   return {
-    buyRate: Math.max(0.65, buyRate * (1 - 0.15 * t)),
-    sellRate: Math.min(0.5, sellRate * (1 + 0.15 * t)),
+    buyRate: Math.max(0.65, buyRate * (1 - 0.1 * t)),
+    sellRate: Math.min(0.5, sellRate * (1 + 0.1 * t)),
   };
 }
 

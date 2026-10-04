@@ -100,9 +100,11 @@ export function entityScreenBox(
   feetX: number,
   feetY: number,
   renderHeight = ENTITY_RENDER_HEIGHT,
+  /** Screen pixels to raise the box. Flying crows pass their current lift. */
+  liftPx = 0,
 ): ScreenBox {
   const iso = cartesianToIso(feetX, feetY);
-  const groundY = iso.y + ENTITY_FEET_Y_PADDING_PX;
+  const groundY = iso.y + ENTITY_FEET_Y_PADDING_PX - liftPx;
   const halfW = ENTITY_BODY_HALF_WIDTH_PX * (renderHeight / ENTITY_RENDER_HEIGHT);
   return {
     left: iso.x - halfW,

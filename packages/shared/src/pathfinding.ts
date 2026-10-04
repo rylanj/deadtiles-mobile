@@ -443,20 +443,23 @@ export function interiorWalkable(
   iH = INTERIOR_HEIGHT,
   exit?: InteriorExit,
   walls?: InteriorWallTile[],
+  sealExit = false,
 ): (tx: number, ty: number) => boolean {
   return (tx, ty) => {
-    if (exit) {
-      if (exit.face === "SE") {
-        if (tx === exit.outsideX && ty >= exit.alongMin && ty <= exit.alongMax) {
+    if (!sealExit) {
+      if (exit) {
+        if (exit.face === "SE") {
+          if (tx === exit.outsideX && ty >= exit.alongMin && ty <= exit.alongMax) {
+            return true;
+          }
+        } else if (ty === exit.outsideY && tx >= exit.alongMin && tx <= exit.alongMax) {
           return true;
         }
-      } else if (ty === exit.outsideY && tx >= exit.alongMin && tx <= exit.alongMax) {
+      } else if (tx === iW && ty === 1) {
         return true;
       }
-    } else if (tx === iW && ty === 1) {
-      return true;
     }
     return tx >= 0 && ty >= 0 && tx < iW && ty < iH &&
-      canMoveInInterior(tx + 0.5, ty + 0.5, furnitures, iW, iH, exit, walls);
+      canMoveInInterior(tx + 0.5, ty + 0.5, furnitures, iW, iH, exit, walls, sealExit);
   };
 }

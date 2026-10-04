@@ -69,8 +69,8 @@ export function playerSprintSpeed(godMode = false): number {
   return godMode ? SPRINT_SPEED * GODMODE_SPEED_MULT : SPRINT_SPEED;
 }
 
-/** ~60s of continuous sprint at 1 stamina/sec drain. */
-export const STAMINA_MAX = 60;
+/** ~50s of continuous sprint at 1 stamina/sec drain. Fitness raises the cap to 100. */
+export const STAMINA_MAX = 50;
 export const STAMINA_DRAIN_PER_SEC = 1;
 export const STAMINA_REGEN_PER_SEC = 1;
 /** Delay after hitting 0 stamina before regen begins. */

@@ -18,6 +18,7 @@ import {
   syncFelledTrees,
   INITIAL_WORLD_BOUNDS,
   isInWeaponRange,
+  closestMeleeSwingTarget,
   isWallTile,
   isoToCartesian,
   aimPointCartesian,
@@ -52,7 +53,6 @@ import {
   parseInventory,
   countItemInInventory,
   PLAYER_MAX_HEALTH,
-  STAMINA_MAX,
   HUNGER_MAX,
   THIRST_MAX,
   getItemDefinition,
@@ -60,6 +60,7 @@ import {
   getConsumeAction,
   playerMaxHealthFromInfection,
   CONSUME_ACTION_LABELS,
+  parseLearnedBlueprints,
   CLOTHING_CHANGE_DURATION_MS,
   CLOTHING_CHANGE_ACTION_LABELS,
   CLOTHING_SLOT_INDEX,
@@ -106,6 +107,14 @@ import {
   BEAR_TILES_PER_RUN_FRAME,
   BEAR_TILES_PER_WALK_FRAME,
   BEAR_WALK_FRAMES,
+  CROW_DIE_ANIM_MS,
+  CROW_DIE_FRAMES,
+  CROW_FLY_RENDER_HEIGHT,
+  CROW_RENDER_HEIGHT,
+  crowFlightLiftPx,
+  crowIsOutOfMeleeReach,
+  aimPointForScreenLift,
+  hasEntityLineOfSight,
   worldCenter,
   GUARD_WEAPON_INDEX,
   GUARD_NPC_TRADER_MAN,
@@ -129,6 +138,7 @@ import {
   militiaGuardDieAnimMs,
   playerAdjacentToSearchable,
   furnitureIsSearchable,
+  furnitureIsStairs,
   furnitureIsCraftStation,
   furnitureIsFurnace,
   searchableOccupiesTile,
@@ -181,8 +191,7 @@ import {
   worldChainlinkOccupiesTile,
   fireplaceIsActive,
   temperatureHudLook,
-  computeFeltAmbient,
-  wornClothingStats,
+  ambientAirTemperatureC,
   buildingInteriorIsPowered,
   fireplaceAirHeatFromOffset,
   isStorageBoxKind,
@@ -299,6 +308,7 @@ import {
   zombieIdleKey,
   coywolfIdleKey,
   bearIdleKey,
+  crowIdleKey,
 } from "../sprites/EntitySprites";
 import { DamageOverlay } from "../ui/DamageOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
@@ -376,6 +386,7 @@ import {
   traderManPackReady,
   coywolfPackReady,
   bearPackReady,
+  crowPackReady,
 } from "../sprites/EntityAssetLoader";
 import {
   hideWorldEntering,
@@ -434,7 +445,7 @@ const MAX_FRAME_DELTA_MS = TICK_MS;
 /** Tiles around an entity searched for placed walls when resolving depth. */
 const OVERWORLD_STRUCTURE_DEPTH_REACH = 3;
 /** How often the "Air x°C" readout is recomputed (it is shown to 0.1 °C). */
-const FELT_AIR_REFRESH_MS = 250;
+const AIR_READ_REFRESH_MS = 250;
 
 type BloodConfig = {
   count: number;
@@ -602,7 +613,7 @@ const MISS_DUST_BY_WEAPON: Record<number, MissDustConfig> = {
   },
 };
 
-type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear";
+type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "crow";
 
 /** Un-built prefab tile — mirrors a server StructureRecord with status "prefab". */
 type StorageBoxTile = {
@@ -640,6 +651,7 @@ export class WorldScene extends Phaser.Scene {
   private zombieSprites = new Map<string, EntitySprite>();
   private coywolfSprites = new Map<string, EntitySprite>();
   private bearSprites = new Map<string, EntitySprite>();
+  private crowSprites = new Map<string, EntitySprite>();
   private guardSprites = new Map<string, EntitySprite>();
   /** Local /godmode — sprite AABB + id overlay. */
   private godModeDebug = false;
@@ -820,6 +832,17 @@ export class WorldScene extends Phaser.Scene {
   };
   /** True while WASD/arrows are driving movement (release → stop). */
   private keyboardMoveActive = false;
+  /**
+   * Set when the player uses stairs. Held movement must not continue into the
+   * street door on the new floor. Clears once every move key is released.
+   */
+  private pauseMoveAfterStairs = false;
+  /**
+   * Floor the client just changed to, until the server schema catches up.
+   * Without this, WASD still aims at the upstairs exit strip and the server
+   * (already downstairs) walks them out.
+   */
+  private interiorLevelLatch: number | null = null;
   private lastKeyboardMoveSentAt = 0;
   private lastKeyboardMoveTargetKey = "";
   /** Last locked 8-way facing while keyboard-moving (-1 = none). */
@@ -844,6 +867,11 @@ export class WorldScene extends Phaser.Scene {
   private dragStart = { x: 0, y: 0 };
   private cameraStart = { x: 0, y: 0 };
   private cameraZoom = getDefaultCameraZoom();
+  /**
+   * Wheel or pinch changed the camera. The tile fill runs once from update
+   * so a notch cannot paint twice or restart the scan.
+   */
+  private cameraViewDirty = false;
   /** Two-finger pinch zoom (mobile). */
   private pinchActive = false;
   private pinchStartDistance = 0;
@@ -892,6 +920,8 @@ export class WorldScene extends Phaser.Scene {
   private mobileChatBtn?: HTMLButtonElement;
   /** Last ammo icon id shown on the mobile reload button (avoids DOM thrash). */
   private mobileReloadAmmoIconId = "";
+  /** Last icon on the mobile aim button: crosshair, or the equipped melee item. */
+  private mobileAimIconId = "";
   private containerLootUI?: ContainerLootUI;
   private craftUI?: CraftUI;
   private traderUI?: TraderUI;
@@ -967,8 +997,8 @@ export class WorldScene extends Phaser.Scene {
     clockHidden: null as boolean | null,
     timeHidden: null as boolean | null,
   };
-  /** Next time (ms) the felt-air readout is recomputed. */
-  private nextFeltAirAt = 0;
+  /** Next time (ms) the air readout is recomputed. */
+  private nextAirReadAt = 0;
   private lastQuestUiKey = "";
   /**
    * Quests and skills are owner-only: the server pushes them over questSync /
@@ -977,6 +1007,8 @@ export class WorldScene extends Phaser.Scene {
    */
   private cachedQuestsJson = "";
   private localSkillsJson = "";
+  /** Craft recipe ids unlocked by weapon blueprints. Owner-only. */
+  private learnedRecipeIds = new Set<string>();
   /** Cached settlement labels for the open M map (recomputed when tile center moves). */
   private mapSettlementCache: {
     tx: number;
@@ -1014,7 +1046,7 @@ export class WorldScene extends Phaser.Scene {
   private hoveredSearchableId: string | null = null;
   /** Dead unlooted entity under the cursor (zombie, guard, or player corpse). */
   private hoveredLootableId: string | null = null;
-  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
+  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | null = null;
   private searchProgressEl?: HTMLElement;
   private searchProgressLabel?: HTMLElement;
   private searchProgressFill?: HTMLElement;
@@ -1054,7 +1086,7 @@ export class WorldScene extends Phaser.Scene {
   private interactSprint = false;
   /** Double-click lootable — approach then auto-start search (no E required). */
   private lootTargetId: string | null = null;
-  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
+  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow" | null = null;
   private lootSprint = false;
   private lastPursuitMoveSentAt = 0;
   /** Double-click sprint detection (time-only — tiles shift under cursor while moving). */
@@ -1378,6 +1410,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.isZombieDead(z)) return;
       if (me.inInterior) {
         if (!z.inInterior) return;
+        if ((me.interiorLevel ?? 0) !== 0) return;
         if (z.buildingX !== me.buildingX || z.buildingY !== me.buildingY) return;
       } else if (z.inInterior) {
         return;
@@ -1564,8 +1597,9 @@ export class WorldScene extends Phaser.Scene {
       }
       this.fireAnims.delete(entityId);
     }
-    // Local CTRL aim — raise firearm immediately (before server stance sync).
-    if (entityId === this.sessionId && this.aimHeld) {
+    // Local CTRL aim — raise a firearm immediately (before server stance sync).
+    // Melee stays on its idle pose until the swing; Hit frame 0 would look mid-swing.
+    if (entityId === this.sessionId && this.aimHeld && !this.localEquippedIsMelee()) {
       return 0;
     }
     if (serverStanceUntil > now) {
@@ -1584,10 +1618,20 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || (me.equippedWeaponIndex ?? -1) < 0) return false;
     if (this.isBusyWithTimedAction(me)) return false;
     const weapon = WEAPONS[me.equippedWeaponIndex];
-    return !!weapon && !isMeleeWeapon(weapon);
+    return !!weapon;
   }
 
-  /** CTRL held (or the mobile aim button latched) with a firearm → aim stance. */
+  private localEquippedIsMelee(): boolean {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const idx =
+      this.localInventorySync?.equippedWeaponIndex ??
+      me?.equippedWeaponIndex ??
+      -1;
+    const weapon = idx >= 0 ? WEAPONS[idx] : undefined;
+    return !!weapon && isMeleeWeapon(weapon);
+  }
+
+  /** CTRL held (or the mobile aim button latched) with a weapon → aim stance. */
   private handleAimInput() {
     if (this.mobileAimLatched && !this.canHoldAimStance()) {
       this.mobileAimLatched = false;
@@ -1654,7 +1698,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * While CTRL-aiming a firearm, face the 8-way octant toward the cursor.
+   * While CTRL-aiming, face the 8-way octant toward the cursor.
    * Local sprite updates immediately; server is told only when the octant changes.
    */
   private updateAimLookFromPointer(pointer?: Phaser.Input.Pointer) {
@@ -2354,6 +2398,8 @@ export class WorldScene extends Phaser.Scene {
           this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "skillSync") {
           this.applySkillSync(msg.payload.skillsJson);
+        } else if (msg.type === "blueprintSync") {
+          this.applyBlueprintSync(msg.payload.learnedBlueprintsJson);
         } else if (msg.type === "dialogTaskDenied") {
           this.ashenMilitiaDialogUI?.noteDenied(
             msg.payload.taskId,
@@ -2856,7 +2902,7 @@ export class WorldScene extends Phaser.Scene {
       clockHidden: null,
       timeHidden: null,
     };
-    this.nextFeltAirAt = 0;
+    this.nextAirReadAt = 0;
     this.clearGroundBackpackSprites();
     try {
       this.interiorView?.hide();
@@ -2986,6 +3032,7 @@ export class WorldScene extends Phaser.Scene {
       this.zombieSprites,
       this.coywolfSprites,
       this.bearSprites,
+      this.crowSprites,
       this.guardSprites,
     ]) {
       for (const sprite of map.values()) {
@@ -3246,7 +3293,7 @@ export class WorldScene extends Phaser.Scene {
     return { screenDx: step[0], screenDy: step[1] };
   }
 
-  /** Mobile stand-in for holding CTRL: shown for firearms, lit while aiming. */
+  /** Mobile stand-in for holding CTRL. Melee shows the weapon icon instead of a crosshair. */
   private refreshMobileAimButton() {
     const btn = this.mobileAimBtn;
     if (!btn) return;
@@ -3260,9 +3307,29 @@ export class WorldScene extends Phaser.Scene {
       me?.equippedWeaponIndex ??
       -1;
     const weapon = equippedIndex >= 0 ? WEAPONS[equippedIndex] : undefined;
-    btn.hidden = !weapon || isMeleeWeapon(weapon);
+    const melee = !!weapon && isMeleeWeapon(weapon);
+    btn.hidden = !weapon;
     btn.classList.toggle("mobile-hud-btn--active", this.aimHeld);
     btn.setAttribute("aria-pressed", this.aimHeld ? "true" : "false");
+    if (!weapon) {
+      this.mobileAimIconId = "";
+      btn.replaceChildren();
+      return;
+    }
+    const iconId = melee ? weapon.itemId : "crosshair";
+    const label = melee ? `Aim ${weapon.name}` : "Toggle aim";
+    btn.setAttribute("aria-label", label);
+    if (iconId === this.mobileAimIconId && btn.querySelector("img")) return;
+    this.mobileAimIconId = iconId;
+    const path = getItemIconPath(iconId);
+    btn.replaceChildren();
+    if (!path) return;
+    const img = document.createElement("img");
+    img.className = "mobile-hud-btn-icon";
+    img.src = path;
+    img.alt = "";
+    img.draggable = false;
+    btn.appendChild(img);
   }
 
   /** Show reload for ranged weapons, build while a hammer is equipped, map when inventory has a map. */
@@ -3926,7 +3993,11 @@ export class WorldScene extends Phaser.Scene {
               ? "bandage"
               : player.consumeAction === "use"
                 ? "use"
-                : "eat";
+                : player.consumeAction === "learn"
+                  ? "learn"
+                  : player.consumeAction === "read"
+                    ? "read"
+                    : "eat";
         const consuming =
           alive && player.isConsuming && player.consumeEndTime > now;
 
@@ -3955,6 +4026,20 @@ export class WorldScene extends Phaser.Scene {
           id,
           "use",
           consuming && consumeKind === "use",
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "learn",
+          consuming && consumeKind === "learn",
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "read",
+          consuming && consumeKind === "read",
           labelSprite,
           stackBelowPx,
         );
@@ -4744,7 +4829,10 @@ export class WorldScene extends Phaser.Scene {
     }
     this.refreshInventoryUI();
     this.refreshHotbar();
-    this.containerLootUI?.syncPlayerInventory(msg.inventoryJson);
+    this.containerLootUI?.syncPlayerInventory(
+      msg.inventoryJson,
+      this.localExtraPockets(),
+    );
     this.syncRedOrderDialogState();
     this.syncAshenMilitiaDialogState();
   }
@@ -4783,7 +4871,8 @@ export class WorldScene extends Phaser.Scene {
     // temperature every 0.1 °C) and only feed the detail panel, so rebuilding
     // every slot cell for them was wasted work.
     const vitalsKey = `${health}|${hunger}|${thirst}|${temperature}|${infected}|${infection}`;
-    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}`;
+    const extraPockets = this.localExtraPockets();
+    const key = `${inventoryJson}|${equippedSlot}|${equippedClothingSlot}|${magazinesJson}|${magazineRounds}|${extraPockets}`;
     if (key === this.lastInventoryRenderKey) {
       if (vitalsKey !== this.lastInventoryVitalsKey) {
         this.lastInventoryVitalsKey = vitalsKey;
@@ -4800,6 +4889,7 @@ export class WorldScene extends Phaser.Scene {
       equippedClothingSlot,
       magazinesJson,
       magazineRounds,
+      extraPockets,
     );
   }
 
@@ -4817,11 +4907,32 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private localExtraPockets(): number {
+    return computePlayerSkillMods(this.localSkillsJson).extraPockets;
+  }
+
   /** Owner-only skill tree, pushed by the server (never in the schema). */
   private applySkillSync(skillsJson: string) {
     this.localSkillsJson = skillsJson;
     this.lastQuestUiKey = "";
+    this.lastInventoryRenderKey = "";
     this.refreshQuestPanels();
+    this.refreshInventoryUI();
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me?.inventoryJson;
+    if (inventoryJson) {
+      this.containerLootUI?.syncPlayerInventory(
+        inventoryJson,
+        this.localExtraPockets(),
+      );
+    }
+  }
+
+  /** Weapon recipes unlocked by blueprints. Owner-only, never in the schema. */
+  private applyBlueprintSync(learnedBlueprintsJson: string) {
+    this.learnedRecipeIds = parseLearnedBlueprints(learnedBlueprintsJson);
+    this.craftUI?.setLearnedRecipes(this.learnedRecipeIds);
   }
 
   private refreshQuestPanels() {
@@ -4842,8 +4953,11 @@ export class WorldScene extends Phaser.Scene {
     const me = this.room?.state?.players?.get(this.sessionId);
     this.redOrderDialogUI.sync({
       dogtagCount: this.localDogtagCount(),
+      inventoryJson:
+        this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]",
       redOrderReputation: me?.redOrderReputation ?? RED_ORDER_REP_START,
       questsJson,
+      extraPockets: this.localExtraPockets(),
     });
   }
 
@@ -4857,6 +4971,7 @@ export class WorldScene extends Phaser.Scene {
       playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
       playerInfected: !!me?.infected,
       questsJson,
+      extraPockets: this.localExtraPockets(),
     });
   }
 
@@ -4902,6 +5017,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private syncWorldTiles(force = false) {
+    const viewDirty = this.cameraViewDirty;
+    this.cameraViewDirty = false;
     if (!this.tileManager || !this.room?.state?.players) return;
     const me = this.room.state.players.get(this.sessionId);
     if (!me) return;
@@ -4931,7 +5048,7 @@ export class WorldScene extends Phaser.Scene {
       Math.floor(me.y),
       bounds,
       this.cameras.main,
-      force,
+      force || viewDirty,
     );
   }
 
@@ -4963,12 +5080,14 @@ export class WorldScene extends Phaser.Scene {
             this.furnitureArtRebuildArmed = false;
             this.refreshFurnitureDependentSprites();
             if (this.lastInteriorKey) {
-              this.interiorView?.syncSearchables(
-                this.searchablesCache,
-                true,
-                this.currentSearchTargetIds(),
-                this.occupiedSitCampchairTiles(),
-              );
+            this.interiorView?.syncSearchables(
+              this.searchablesCache.filter(
+                (s) => (s.level ?? 0) === (me.interiorLevel ?? 0),
+              ),
+              true,
+              this.currentSearchTargetIds(),
+              this.occupiedSitCampchairTiles(),
+            );
             }
           });
         }
@@ -5004,11 +5123,14 @@ export class WorldScene extends Phaser.Scene {
         this.syncGunshotListener();
       }
       this.interiorView.syncSearchables(
-        this.searchablesCache,
+        this.searchablesCache.filter(
+          (s) => (s.level ?? 0) === (me.interiorLevel ?? 0),
+        ),
         false,
         this.currentSearchTargetIds(),
         this.occupiedSitCampchairTiles(),
       );
+      this.interiorView.setFloorLevel(me.interiorLevel ?? 0);
       this.interiorView.updateCubicleWallFade(
         Math.floor(me.x),
         Math.floor(me.y),
@@ -5235,6 +5357,15 @@ export class WorldScene extends Phaser.Scene {
     buildingX: number,
     buildingY: number,
   ): InteriorWallTile[] {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (
+      me?.inInterior &&
+      me.buildingX === buildingX &&
+      me.buildingY === buildingY &&
+      (me.interiorLevel ?? 0) > 0
+    ) {
+      return [];
+    }
     const base = interiorWallsForBuilding(buildingX, buildingY);
     const key = buildingKey(buildingX, buildingY);
     const extras = this.tempInteriorWallsByBuilding.get(key) ?? [];
@@ -6981,11 +7112,18 @@ export class WorldScene extends Phaser.Scene {
 
   /** Find a persistent door at (tx, ty) in the player's current context. */
   private findDoorAt(
-    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    me: {
+      inInterior: boolean;
+      buildingX: number;
+      buildingY: number;
+      interiorLevel?: number;
+    },
     tx: number,
     ty: number,
   ): InteriorDoorTile | undefined {
     if (me.inInterior) {
+      // Upper floors are empty. Ground-floor room doors must not highlight or open.
+      if ((me.interiorLevel ?? 0) > 0) return undefined;
       return this.structureDoorsByBuilding
         .get(buildingKey(me.buildingX, me.buildingY))
         ?.find((d) => d.x === tx && d.y === ty);
@@ -7166,6 +7304,7 @@ export class WorldScene extends Phaser.Scene {
       inInterior?: boolean;
       buildingX?: number;
       buildingY?: number;
+      interiorLevel?: number;
     },
     tx: number,
     ty: number,
@@ -7179,7 +7318,8 @@ export class WorldScene extends Phaser.Scene {
           (s) =>
             s.kind === "furniture" &&
             s.buildingX === me.buildingX &&
-            s.buildingY === me.buildingY,
+            s.buildingY === me.buildingY &&
+            (s.level ?? 0) === (me.interiorLevel ?? 0),
         )
         .map((s) => ({
           id: s.id,
@@ -7203,6 +7343,7 @@ export class WorldScene extends Phaser.Scene {
         iH,
         exit,
         this.mergedInteriorWalls(me.buildingX, me.buildingY),
+        (me.interiorLevel ?? 0) > 0,
       );
 
       const room = roomAtInteriorDoor(me.buildingX, me.buildingY, tx, ty);
@@ -7896,7 +8037,12 @@ export class WorldScene extends Phaser.Scene {
 
   /** One-tile occupancy check used by placement (and expanded for 3×1 fences). */
   private isFreeBuildCell(
-    me: { inInterior: boolean; buildingX: number; buildingY: number },
+    me: {
+      inInterior: boolean;
+      buildingX: number;
+      buildingY: number;
+      interiorLevel?: number;
+    },
     tx: number,
     ty: number,
   ): boolean {
@@ -7924,6 +8070,7 @@ export class WorldScene extends Phaser.Scene {
       for (const s of this.searchablesCache) {
         if (s.buildingX !== bx || s.buildingY !== by) continue;
         if (s.kind !== "furniture") continue;
+        if ((s.level ?? 0) !== (me.interiorLevel ?? 0)) continue;
         if (s.objectType === "groundbackpack") continue;
         if (searchableOccupiesTile(s, tx, ty)) return false;
       }
@@ -8722,13 +8869,14 @@ export class WorldScene extends Phaser.Scene {
   ) {
     const pos = { x: screenX, y: screenY };
 
-    // Aiming a firearm: every click is a shot down the cursor line. Nothing
-    // else (interact, loot, move) may steal the click while aiming.
+    // Aiming: every click is a shot or a melee swing down the cursor line.
+    // Nothing else (interact, loot, move) may steal the click while aiming.
     if (this.aimHeld) {
       // Keeps the target tint under the tap on touch, where there is no move
       // event. It no longer feeds the aim point.
       this.updateEntityHover(pos);
-      this.fireFreeAimAt(screenX, screenY);
+      if (this.localEquippedIsMelee()) this.swingMeleeAt(screenX, screenY);
+      else this.fireFreeAimAt(screenX, screenY);
       return;
     }
 
@@ -8871,7 +9019,8 @@ export class WorldScene extends Phaser.Scene {
           (s) =>
             s.kind === "furniture" &&
             s.buildingX === me.buildingX &&
-            s.buildingY === me.buildingY,
+            s.buildingY === me.buildingY &&
+            (s.level ?? 0) === (me.interiorLevel ?? 0),
         )
         .map((s) => ({
           id: s.id,
@@ -8895,6 +9044,7 @@ export class WorldScene extends Phaser.Scene {
         iH,
         exit,
         this.mergedInteriorWalls(me.buildingX, me.buildingY),
+        (me.interiorLevel ?? 0) > 0,
       );
       if (
         !isInteriorExitTile(clickTX, clickTY, exit) &&
@@ -9163,6 +9313,24 @@ export class WorldScene extends Phaser.Scene {
           sprite?.getData("server") as { isDead?: boolean; alive?: boolean } | undefined,
         );
       }
+      for (const [id, sprite] of this.crowSprites) {
+        const data = sprite?.getData("server") as
+          | { isDead?: boolean; alive?: boolean; altitude?: number }
+          | undefined;
+        if (
+          equippedWeapon &&
+          isMeleeWeapon(equippedWeapon) &&
+          crowIsOutOfMeleeReach(data?.altitude ?? 0)
+        ) {
+          continue;
+        }
+        considerSprite(
+          id,
+          sprite as unknown as Phaser.GameObjects.Sprite,
+          "crow",
+          data,
+        );
+      }
     } else if (!equippedWeapon) {
       // Hands empty — talkable NPCs (Traders / MilitiaGuard / Red Order).
       for (const [id, sprite] of this.guardSprites) {
@@ -9246,6 +9414,7 @@ export class WorldScene extends Phaser.Scene {
     if (kind === "zombie") return this.zombieSprites;
     if (kind === "coywolf") return this.coywolfSprites;
     if (kind === "bear") return this.bearSprites;
+    if (kind === "crow") return this.crowSprites;
     return this.guardSprites;
   }
 
@@ -9254,6 +9423,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.zombieSprites.has(id)) return "zombie";
     if (this.coywolfSprites.has(id)) return "coywolf";
     if (this.bearSprites.has(id)) return "bear";
+    if (this.crowSprites.has(id)) return "crow";
     if (this.guardSprites.has(id)) return "guard";
     return null;
   }
@@ -9264,6 +9434,7 @@ export class WorldScene extends Phaser.Scene {
       this.zombieSprites.get(id) ??
       this.coywolfSprites.get(id) ??
       this.bearSprites.get(id) ??
+      this.crowSprites.get(id) ??
       this.guardSprites.get(id)
     );
   }
@@ -9504,10 +9675,27 @@ export class WorldScene extends Phaser.Scene {
    *   "armed" reserved for pairing (unused — both clicks start pursuit),
    *   "miss" when the click was not on a lootable.
    */
+  /** Schema floor, or the floor a stair use just switched to. */
+  private effectiveInteriorLevel(me: { interiorLevel?: number }): number {
+    const schema = me.interiorLevel ?? 0;
+    if (this.interiorLevelLatch === null) return schema;
+    if (schema === this.interiorLevelLatch) {
+      this.interiorLevelLatch = null;
+      return schema;
+    }
+    return this.interiorLevelLatch;
+  }
+
+  /** Remember the new floor and do not keep walking out the street door. */
+  private noteStairsUsed(currentLevel: number) {
+    this.interiorLevelLatch = currentLevel === 0 ? 1 : 0;
+    this.pauseMoveAfterStairs = true;
+  }
+
   /** True when the cursor is on the interior's outside exit corridor. */
   private pointerIsInteriorExit(screenX: number, screenY: number): boolean {
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (!me?.inInterior) return false;
+    if (!me?.inInterior || this.effectiveInteriorLevel(me) !== 0) return false;
     const world = this.cameras.main.getWorldPoint(screenX, screenY);
     const cart = isoToCartesian(world.x, world.y);
     const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
@@ -9519,7 +9707,7 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || !this.room) return "miss";
 
     let targetId: string | null = null;
-    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
+    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow" | null = null;
 
     const searchable = this.nearestSearchable();
     if (searchable) {
@@ -9612,6 +9800,7 @@ export class WorldScene extends Phaser.Scene {
     inInterior?: boolean;
     buildingX?: number;
     buildingY?: number;
+    interiorLevel?: number;
     isReloading?: boolean;
     searchTargetId?: string;
     isConsuming?: boolean;
@@ -9629,8 +9818,9 @@ export class WorldScene extends Phaser.Scene {
       }
       const craftStation = furnitureIsCraftStation(target.objectType);
       const furnace = furnitureIsFurnace(target.objectType);
-      if (craftStation || furnace) {
-        // Stations stay usable even if previously flagged searched/depleted.
+      const stairs = furnitureIsStairs(target.objectType);
+      if (craftStation || furnace || stairs) {
+        // Stations and stairs stay usable even if previously flagged searched/depleted.
       } else if (target.depleted || !furnitureIsSearchable(target.objectType)) {
         this.clearLootTarget();
         return false;
@@ -9644,7 +9834,8 @@ export class WorldScene extends Phaser.Scene {
       } else if (
         !me.inInterior ||
         target.buildingX !== me.buildingX ||
-        target.buildingY !== me.buildingY
+        target.buildingY !== me.buildingY ||
+        (target.level ?? 0) !== (me.interiorLevel ?? 0)
       ) {
         this.clearLootTarget();
         return false;
@@ -9666,6 +9857,15 @@ export class WorldScene extends Phaser.Scene {
         const message: ClientMessage = {
           type: "fireplaceOpen",
           payload: { x: target.x, y: target.y },
+        };
+        this.room.send("action", message);
+        return true;
+      }
+      if (stairs) {
+        this.noteStairsUsed(me.interiorLevel ?? 0);
+        const message: ClientMessage = {
+          type: "useStairs",
+          payload: { searchableId: target.id },
         };
         this.room.send("action", message);
         return true;
@@ -9769,6 +9969,28 @@ export class WorldScene extends Phaser.Scene {
       return true;
     }
 
+    if (this.lootTargetKind === "crow") {
+      const entitySprite = this.crowSprites.get(this.lootTargetId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined;
+      if (!entityData?.isDead || entityData.looted || me.inInterior) {
+        this.clearLootTarget();
+        return false;
+      }
+      if (!playerNearEntity(me.x, me.y, entityData.x, entityData.y)) return false;
+      this.stopPlayerMovement();
+      const crowId = this.lootTargetId;
+      this.clearLootTarget();
+      const message: ClientMessage = {
+        type: "lootCrowStart",
+        payload: { crowId },
+      };
+      this.beginOptimisticSearch();
+      this.room.send("action", message);
+      return true;
+    }
+
     if (this.lootTargetKind === "player") {
       const entitySprite = this.corpseSprites.get(this.lootTargetId);
       const entityData = entitySprite?.getData("server") as
@@ -9852,16 +10074,17 @@ export class WorldScene extends Phaser.Scene {
       inInterior?: boolean;
       buildingX?: number;
       buildingY?: number;
+      interiorLevel?: number;
     },
     targetId: string,
-    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear",
+    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow",
   ): { x: number; y: number } | null {
     if (targetKind === "searchable") {
       const target = this.searchablesCache.find((item) => {
         if (item.id !== targetId) return false;
         // Furnaces are stations, not loot piles, so a depleted flag must not
         // cancel the walk-up that opens the fuel dialog.
-        if (furnitureIsFurnace(item.objectType)) return true;
+        if (furnitureIsFurnace(item.objectType) || furnitureIsStairs(item.objectType)) return true;
         return !item.depleted;
       });
       if (!target) return null;
@@ -9890,7 +10113,8 @@ export class WorldScene extends Phaser.Scene {
           (s) =>
             s.kind === "furniture" &&
             s.buildingX === me.buildingX &&
-            s.buildingY === me.buildingY,
+            s.buildingY === me.buildingY &&
+            (s.level ?? 0) === (me.interiorLevel ?? 0),
         )
         .map((s) => ({
           id: s.id,
@@ -9914,6 +10138,7 @@ export class WorldScene extends Phaser.Scene {
         iH,
         exit,
         this.mergedInteriorWalls(me.buildingX!, me.buildingY!),
+        (me.interiorLevel ?? 0) > 0,
       );
       return furnitureApproachGoal(me.x, me.y, target, walkable);
     }
@@ -9925,6 +10150,8 @@ export class WorldScene extends Phaser.Scene {
           ? this.coywolfSprites.get(targetId)
           : targetKind === "bear"
             ? this.bearSprites.get(targetId)
+          : targetKind === "crow"
+            ? this.crowSprites.get(targetId)
           : targetKind === "guard"
             ? this.guardSprites.get(targetId)
             : this.corpseSprites.get(targetId);
@@ -10174,6 +10401,7 @@ export class WorldScene extends Phaser.Scene {
       isDead?: boolean;
       alive?: boolean;
       npcKind?: number;
+      altitude?: number;
     } | undefined;
     return data ?? null;
   }
@@ -10193,6 +10421,26 @@ export class WorldScene extends Phaser.Scene {
     if (!data || data.isDead || data.alive === false) return false;
 
     const zombie = kind === "zombie" ? this.room?.state?.zombies?.get(targetId) : undefined;
+    const crowLift = kind === "crow" ? crowFlightLiftPx(data.altitude ?? 0) : 0;
+    const crowAirborne = kind === "crow" && crowIsOutOfMeleeReach(data.altitude ?? 0);
+    if (isMeleeWeapon(weapon) && crowAirborne) return false;
+    if (!isMeleeWeapon(weapon) && crowLift > 0) {
+      if (!isInWeaponRange(me.x, me.y, data.x, data.y, weapon)) return false;
+      return hasEntityLineOfSight({
+        fromX: me.x,
+        fromY: me.y,
+        toX: data.x,
+        toY: data.y,
+        inInterior: me.inInterior ?? false,
+        walls:
+          me.inInterior && me.buildingX != null && me.buildingY != null
+            ? this.mergedInteriorSightWalls(me.buildingX, me.buildingY)
+            : undefined,
+        blocksSightAt: me.inInterior
+          ? undefined
+          : (tx, ty) => this.overworldSightBlockedAt(tx, ty),
+      });
+    }
     const target: RaycastTarget = {
       id: targetId,
       x: data.x,
@@ -10204,9 +10452,15 @@ export class WorldScene extends Phaser.Scene {
           ? COYWOLF_RENDER_HEIGHT
           : kind === "bear"
             ? BEAR_RENDER_HEIGHT
+          : kind === "crow"
+            ? crowAirborne
+              ? CROW_FLY_RENDER_HEIGHT
+              : CROW_RENDER_HEIGHT
           : zombie
             ? zombieRenderHeight(zombie.skin, isZombieCrawler(targetId, zombie.skin))
             : undefined,
+      screenLiftPx: crowLift,
+      meleeImmune: crowAirborne,
     };
 
     return shotHitsTarget({
@@ -10529,6 +10783,150 @@ export class WorldScene extends Phaser.Scene {
     return aimPointCartesian(world.x, world.y);
   }
 
+  /** Living bodies the local player can reach with a melee swing. */
+  private meleeSwingTargets(): RaycastTarget[] {
+    const targets: RaycastTarget[] = [];
+    const push = (
+      id: string,
+      sprite: { getData(key: string): unknown } | undefined,
+      meleeImmune = false,
+    ) => {
+      if (!sprite) return;
+      const data = sprite.getData("server") as
+        | {
+            x?: number;
+            y?: number;
+            health?: number;
+            isDead?: boolean;
+            alive?: boolean;
+          }
+        | undefined;
+      if (!data || data.isDead || data.alive === false) return;
+      if (typeof data.x !== "number" || typeof data.y !== "number") return;
+      targets.push({
+        id,
+        x: data.x,
+        y: data.y,
+        health: data.health ?? 1,
+        isDead: false,
+        meleeImmune,
+      });
+    };
+    for (const [id, sprite] of this.playerSprites) {
+      if (id === this.sessionId) continue;
+      push(id, sprite);
+    }
+    for (const [id, sprite] of this.zombieSprites) push(id, sprite);
+    for (const [id, sprite] of this.guardSprites) push(id, sprite);
+    for (const [id, sprite] of this.coywolfSprites) push(id, sprite);
+    for (const [id, sprite] of this.bearSprites) push(id, sprite);
+    for (const [id, sprite] of this.crowSprites) {
+      const data = sprite?.getData("server") as { altitude?: number } | undefined;
+      push(id, sprite, crowIsOutOfMeleeReach(data?.altitude ?? 0));
+    }
+    return targets;
+  }
+
+  /**
+   * CTRL-aim click with a melee weapon: swing toward the cursor. The server
+   * damages the closest target in range along that swing.
+   */
+  private swingMeleeAt(screenX: number, screenY: number) {
+    if (!this.room) return;
+    const me = this.room.state?.players?.get(this.sessionId);
+    if (!me?.alive || me.equippedWeaponIndex < 0) return;
+    if (this.isBusyWithTimedAction(me)) return;
+
+    const weapon = WEAPONS[me.equippedWeaponIndex];
+    if (!weapon || !isMeleeWeapon(weapon)) return;
+    if (this.isEntityFiring(this.sessionId)) return;
+    if (!this.canFireAtRate(weapon, me.lastFireTime ?? 0)) return;
+
+    const aim = this.resolveAimPoint(screenX, screenY);
+    if (Math.hypot(aim.x - me.x, aim.y - me.y) < 0.05) return;
+
+    const inInterior = me.inInterior ?? false;
+    const furnitures =
+      inInterior && me.buildingX != null && me.buildingY != null
+        ? this.searchablesCache
+            .filter(
+              (s) =>
+                s.kind === "furniture" &&
+                s.buildingX === me.buildingX &&
+                s.buildingY === me.buildingY &&
+                (s.level ?? 0) === (me.interiorLevel ?? 0),
+            )
+            .map((s) => ({
+              id: s.id,
+              kind: "furniture" as const,
+              objectType: s.objectType,
+              x: s.x,
+              y: s.y,
+              searched: s.searched,
+              buildingX: s.buildingX,
+              buildingY: s.buildingY,
+              facing: (s.facing || undefined) as
+                | "NE"
+                | "NW"
+                | "SE"
+                | "SW"
+                | undefined,
+            }))
+        : undefined;
+    const hit = closestMeleeSwingTarget({
+      originX: me.x,
+      originY: me.y,
+      aimX: aim.x,
+      aimY: aim.y,
+      weapon,
+      targets: this.meleeSwingTargets(),
+      inInterior,
+      furnitures,
+      walls:
+        inInterior && me.buildingX != null && me.buildingY != null
+          ? this.mergedInteriorSightWalls(me.buildingX, me.buildingY)
+          : undefined,
+      blocksSightAt: inInterior
+        ? undefined
+        : (tx, ty) => this.overworldSightBlockedAt(tx, ty),
+    });
+    if (hit) {
+      const kind = this.resolveEntityKind(hit.id);
+      const data = kind ? this.getEntityData(hit.id, kind) : null;
+      if (
+        kind &&
+        data &&
+        this.maybeWarnFactionAttack(
+          kind,
+          data,
+          me.ashenReputation ?? ASHEN_REP_START,
+          me.ashenMilitiaReputation ?? ASHEN_REP_START,
+          me.redOrderReputation ?? RED_ORDER_REP_START,
+        )
+      ) {
+        return;
+      }
+    }
+
+    this.stopPlayerMovement();
+    const facing = directionFromWorldDelta(aim.x - me.x, aim.y - me.y);
+    this.localAimFacing = facing;
+    this.lastSentAimLookFacing = facing;
+    this.localLastFireTimeSec = Date.now() / 1000;
+    this.startEntityFireAnim(
+      this.sessionId,
+      me.equippedWeaponIndex,
+      false,
+      Date.now(),
+      "player",
+    );
+    this.room.send("action", {
+      type: "fire",
+      payload: { targetX: aim.x, targetY: aim.y },
+    } satisfies ClientMessage);
+    this.notifyTutorial("aim_fire");
+  }
+
   /**
    * CTRL-aim click: fire down the cursor line. The server traces the round and
    * reports what it struck, so nothing is target-locked here.
@@ -10602,6 +11000,18 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const melee = isMeleeWeapon(weapon);
+    let aimX = tx;
+    let aimY = ty;
+    if (!melee && targetId) {
+      const aimKind = this.resolveEntityKind(targetId);
+      const aimData = aimKind ? this.getEntityData(targetId, aimKind) : null;
+      const lift = aimKind === "crow" ? crowFlightLiftPx(aimData?.altitude ?? 0) : 0;
+      if (lift > 0 && aimData) {
+        const lifted = aimPointForScreenLift(aimData.x, aimData.y, lift);
+        aimX = lifted.x;
+        aimY = lifted.y;
+      }
+    }
     const sfxVariant = melee ? undefined : resolveGunshotVariant();
     this.localLastFireTimeSec = Date.now() / 1000;
     this.startEntityFireAnim(
@@ -10613,10 +11023,9 @@ export class WorldScene extends Phaser.Scene {
     );
     this.room.send("action", {
       type: "fire",
-      payload: { targetX: tx, targetY: ty, targetId, sfxVariant },
+      payload: { targetX: aimX, targetY: aimY, targetId, sfxVariant },
     } satisfies ClientMessage);
-    if (melee) AudioManager.get().playMelee(undefined, weapon.itemId);
-    else this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
+    if (!melee) this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
     this.notifyTutorial("aim_fire");
   }
 
@@ -10687,7 +11096,11 @@ export class WorldScene extends Phaser.Scene {
       if (wasActive) this.stopPlayerMovement();
     };
 
-    const blocked = this.isOverlayOpen() || this.chatOpen;
+    // Melee aim locks movement (WASD, arrows, and the thumb stick).
+    const blocked =
+      this.isOverlayOpen() ||
+      this.chatOpen ||
+      (this.aimHeld && this.localEquippedIsMelee());
     this.moveStickEl?.classList.toggle("move-stick--blocked", blocked);
     if (blocked) {
       if (this.moveStickPointerId !== null) this.releaseMoveStick();
@@ -10714,6 +11127,11 @@ export class WorldScene extends Phaser.Scene {
 
     const { screenDx, screenDy } = this.readKeyboardMoveVector();
     if (screenDx === 0 && screenDy === 0) {
+      this.pauseMoveAfterStairs = false;
+      stopKeyboardMove();
+      return;
+    }
+    if (this.pauseMoveAfterStairs) {
       stopKeyboardMove();
       return;
     }
@@ -10765,9 +11183,12 @@ export class WorldScene extends Phaser.Scene {
 
       let farTX = stepX > 0 ? iW - 1 : stepX < 0 ? 0 : baseTX;
       let farTY = stepY > 0 ? iH - 1 : stepY < 0 ? 0 : baseTY;
-      // The doorway strip sits one tile past the floor grid — extend onto it
+      // The doorway strip sits one tile past the floor grid. Extend onto it
       // when heading toward the door so WASD can still walk out the exit.
+      // Upper floors have no street door.
+      const onGroundFloor = this.effectiveInteriorLevel(me) === 0;
       if (
+        onGroundFloor &&
         exit.face === "SE" &&
         stepX > 0 &&
         farTY >= exit.alongMin &&
@@ -10775,6 +11196,7 @@ export class WorldScene extends Phaser.Scene {
       ) {
         farTX = exit.outsideX;
       } else if (
+        onGroundFloor &&
         exit.face === "SW" &&
         stepY > 0 &&
         farTX >= exit.alongMin &&
@@ -10955,7 +11377,8 @@ export class WorldScene extends Phaser.Scene {
         if (item.id !== this.hoveredSearchableId) return false;
         if (
           furnitureIsCraftStation(item.objectType) ||
-          furnitureIsFurnace(item.objectType)
+          furnitureIsFurnace(item.objectType) ||
+          furnitureIsStairs(item.objectType)
         ) {
           return true;
         }
@@ -10989,15 +11412,17 @@ export class WorldScene extends Phaser.Scene {
       this.searchablesCache.find((item) => {
         const craftStation = furnitureIsCraftStation(item.objectType);
         const furnace = furnitureIsFurnace(item.objectType);
-        if (craftStation || furnace) {
-          // Stations stay interactable even if previously marked searched.
+        const stairs = furnitureIsStairs(item.objectType);
+        if (craftStation || furnace || stairs) {
+          // Stations and stairs stay interactable even if previously marked searched.
         } else if (item.depleted || !furnitureIsSearchable(item.objectType)) {
           return false;
         }
         if (me.inInterior) {
           if (
             item.buildingX !== me.buildingX ||
-            item.buildingY !== me.buildingY
+            item.buildingY !== me.buildingY ||
+            (item.level ?? 0) !== (me.interiorLevel ?? 0)
           ) {
             return false;
           }
@@ -11068,7 +11493,7 @@ export class WorldScene extends Phaser.Scene {
     const cursorTY = Math.floor(cart.y);
 
     let bestId: string | null = null;
-    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | null = null;
+    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | null = null;
     let bestTX = 0;
     let bestTY = 0;
     let bestEntityX = 0;
@@ -11140,6 +11565,25 @@ export class WorldScene extends Phaser.Scene {
         bestKind = "bear";
         bestTX = bTX;
         bestTY = bTY;
+        bestEntityX = data.x;
+        bestEntityY = data.y;
+        break;
+      }
+    }
+
+    if (!bestId && !me.inInterior) {
+      for (const [id, sprite] of this.crowSprites) {
+        const data = sprite?.getData("server") as
+          | { x: number; y: number; isDead?: boolean; looted?: boolean }
+          | undefined;
+        if (!data?.isDead || data.looted) continue;
+        const cTX = Math.floor(data.x);
+        const cTY = Math.floor(data.y);
+        if (cursorTX !== cTX || cursorTY !== cTY) continue;
+        bestId = id;
+        bestKind = "crow";
+        bestTX = cTX;
+        bestTY = cTY;
         bestEntityX = data.x;
         bestEntityY = data.y;
         break;
@@ -11275,6 +11719,14 @@ export class WorldScene extends Phaser.Scene {
             payload: { x: target.x, y: target.y },
           };
           this.room.send("action", message);
+        } else if (furnitureIsStairs(target.objectType)) {
+          this.stopPlayerMovement();
+          this.noteStairsUsed(me.interiorLevel ?? 0);
+          const message: ClientMessage = {
+            type: "useStairs",
+            payload: { searchableId: target.id },
+          };
+          this.room.send("action", message);
         } else if (furnitureIsCraftStation(target.objectType)) {
           const message: ClientMessage = {
             type: "craftOpen",
@@ -11385,6 +11837,30 @@ export class WorldScene extends Phaser.Scene {
         const message: ClientMessage = {
           type: "lootBearStart",
           payload: { bearId: this.hoveredLootableId },
+        };
+        this.beginOptimisticSearch();
+        this.room.send("action", message);
+        started = true;
+      }
+    }
+
+    if (
+      !started &&
+      this.hoveredLootableId &&
+      this.hoveredLootableKind === "crow"
+    ) {
+      const entitySprite = this.crowSprites.get(this.hoveredLootableId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number }
+        | undefined;
+      if (
+        entityData &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, entityData.x, entityData.y)
+      ) {
+        const message: ClientMessage = {
+          type: "lootCrowStart",
+          payload: { crowId: this.hoveredLootableId },
         };
         this.beginOptimisticSearch();
         this.room.send("action", message);
@@ -11561,20 +12037,15 @@ export class WorldScene extends Phaser.Scene {
           delete this.worldClockEl.dataset.weather;
         }
       }
-      // Felt air needs the clothing stats, the nearest fire and the shelter
-      // model. It is displayed to 0.1 °C and drifts slowly, so recompute a few
-      // times a second instead of every frame.
+      // Air is the real outdoor or room temperature, plus nearby fire.
+      // Clothing changes core temperature, not this number. It is shown to
+      // 0.1 °C and drifts slowly, so recompute a few times a second.
       const nowMs = Date.now();
       if (me && this.worldClockCoreEl && this.worldClockAirEl) {
-        if (nowMs >= this.nextFeltAirAt) {
-          this.nextFeltAirAt = nowMs + FELT_AIR_REFRESH_MS;
-          const equippedSlot =
-            this.localInventorySync?.equippedClothingSlot ??
-            me.equippedClothingSlot ??
-            -1;
-          const worn = wornClothingStats(inventory, equippedSlot);
+        if (nowMs >= this.nextAirReadAt) {
+          this.nextAirReadAt = nowMs + AIR_READ_REFRESH_MS;
           const fireHeat = this.localPlayerFireHeat(me);
-          const airC = computeFeltAmbient({
+          const airC = ambientAirTemperatureC({
             worldTimeMs,
             sky,
             precip,
@@ -11582,8 +12053,6 @@ export class WorldScene extends Phaser.Scene {
             buildingX: indoor ? me.buildingX : undefined,
             buildingY: indoor ? me.buildingY : undefined,
             fireHeat,
-            insulation: worn.insulation,
-            wornWetness: worn.wetness,
           });
           const coreText = `Core ${(me.temperature ?? TEMPERATURE_CORE_DEFAULT).toFixed(1)}°C`;
           const airText = `Air ${airC.toFixed(1)}°C`;
@@ -11712,7 +12181,8 @@ export class WorldScene extends Phaser.Scene {
     );
     const capPct = Math.max(0, Math.min(100, (maxHp / PLAYER_MAX_HEALTH) * 100));
     const lostPct = Math.max(0, 100 - capPct);
-    const staminaPct = Math.max(0, Math.min(100, (me.stamina / STAMINA_MAX) * 100));
+    const staminaMax = Math.max(1, this.localSkillMods().staminaMax);
+    const staminaPct = Math.max(0, Math.min(100, (me.stamina / staminaMax) * 100));
     const hungerPct = Math.max(0, Math.min(100, (me.hunger / HUNGER_MAX) * 100));
     const thirstPct = Math.max(0, Math.min(100, (me.thirst / THIRST_MAX) * 100));
     const tempLook = temperatureHudLook(
@@ -11972,14 +12442,24 @@ export class WorldScene extends Phaser.Scene {
     worldY: number,
     weaponIndex = -1,
     nearGround = false,
+    /**
+     * Extra screen pixels above a normal chest spray. Flying crows pass
+     * their current lift so the burst sits on the bird, not the tile.
+     */
+    liftPx = 0,
+    /** When set, spray this far above the feet instead of a human chest. */
+    aboveFeetPx = 0,
   ) {
     if (!this.textures.exists("blood-drop")) return;
     const iso = cartesianToIso(worldX, worldY);
     const me = this.room?.state?.players?.get(this.sessionId);
-    const depth =
+    let depth =
       (me?.inInterior
         ? this.interiorEntityDepth(worldX, worldY)
         : overworldEntityRenderDepth(worldX, worldY)) + 1;
+    if (liftPx > 0) {
+      depth += (liftPx / (TILE_HEIGHT / 2)) * 1024;
+    }
 
     // Weapon index matches WEAPONS array: 0=Pistol, 1=Shotgun, 2=Hunting Rifle, 3=Revolver, 4=AK
     const cfg = BLOOD_BY_WEAPON[weaponIndex] ?? BLOOD_BY_WEAPON[-1]!;
@@ -11987,9 +12467,13 @@ export class WorldScene extends Phaser.Scene {
 
     // Standing hits spray from chest height. Crawlers lie on the tile, so
     // the same lift floats above the body. Start just above their feet.
+    // A short bird uses aboveFeetPx so the burst is on the body. liftPx
+    // then raises it with a flying crow.
     const sprayY = nearGround
       ? entityFeetY(iso.y) + ZOMBIE_CRAWL_TILE_DROP_PX - 8
-      : iso.y - cfg.originY;
+      : aboveFeetPx > 0
+        ? entityFeetY(iso.y) - aboveFeetPx - liftPx
+        : iso.y - cfg.originY - liftPx;
     const emitter = this.add.particles(iso.x, sprayY, "blood-drop", {
       speed: cfg.speed,
       angle: cfg.angle,
@@ -12005,6 +12489,33 @@ export class WorldScene extends Phaser.Scene {
     this.time.delayedCall(cfg.destroyAfter, () => emitter.destroy());
   }
 
+  /** Altitude of a crow the player can see. Null when the id is not a crow. */
+  private crowAltitude(targetId: string): number | null {
+    const sprite = this.crowSprites.get(targetId);
+    const fromSprite = sprite?.getData("server") as { altitude?: number } | undefined;
+    if (fromSprite && typeof fromSprite.altitude === "number") return fromSprite.altitude;
+    const schema = this.room?.state?.crows?.get(targetId);
+    if (!schema && !sprite) return null;
+    return schema?.altitude ?? 0;
+  }
+
+  /** Blood on the crow's body, raised by the same flight lift as the sprite. */
+  private spawnCrowHitBlood(
+    worldX: number,
+    worldY: number,
+    altitude: number,
+    weaponIndex = -1,
+  ) {
+    this.spawnBlood(
+      worldX,
+      worldY,
+      weaponIndex,
+      false,
+      crowFlightLiftPx(altitude),
+      Math.round(CROW_RENDER_HEIGHT * 0.45),
+    );
+  }
+
   private handleEntityHit(
     targetId: string,
     worldX: number,
@@ -12013,6 +12524,11 @@ export class WorldScene extends Phaser.Scene {
   ) {
     this.recentGunHits.add(targetId);
     this.time.delayedCall(700, () => this.recentGunHits.delete(targetId));
+    const crowAltitude = this.crowAltitude(targetId);
+    if (crowAltitude != null) {
+      this.spawnCrowHitBlood(worldX, worldY, crowAltitude, weaponIndex);
+      return;
+    }
     const zombie = this.room?.state?.zombies?.get(targetId);
     const crawler =
       !!zombie && isZombieCrawler(targetId, zombie.skin);
@@ -12073,11 +12589,11 @@ export class WorldScene extends Phaser.Scene {
     this.syncGunshotListener();
     this.centerCameraOnLocalPlayer();
     if (!IS_MOBILE) {
-      // Rebuild camera matrix before frustum cull — getWorldPoint is stale until preRender.
+      // Rebuild the camera matrix before the frame's single tile sync.
+      // getWorldPoint is stale until preRender. Filling here as well as in
+      // update painted the new edge twice and restarted the scan per notch.
       this.cameras.main.preRender();
-      this.syncWorldTiles(true);
-      // Restore soft-hidden entities against the new view without waiting for patches.
-      this.refreshAllVisuals(0);
+      this.cameraViewDirty = true;
     }
   }
 
@@ -12536,6 +13052,25 @@ export class WorldScene extends Phaser.Scene {
         onAdd: (cb: (bear: ZombieSchema, id: string) => void) => void;
         onRemove: (cb: (bear: ZombieSchema, id: string) => void) => void;
       };
+      crows?: {
+        onAdd: (
+          cb: (
+            crow: {
+              x: number;
+              y: number;
+              facing: number;
+              anim: string;
+              animFrame: number;
+              health: number;
+              isDead?: boolean;
+              looted?: boolean;
+              altitude?: number;
+            },
+            id: string,
+          ) => void,
+        ) => void;
+        onRemove: (cb: (crow: unknown, id: string) => void) => void;
+      };
       corpses: {
         onAdd: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
         onRemove: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
@@ -12604,32 +13139,8 @@ export class WorldScene extends Phaser.Scene {
       if (prev && data.lastFireTime > (prev.lastFireTime ?? 0)) {
         const weapon = WEAPONS[data.equippedWeaponIndex];
         const melee = !!weapon && isMeleeWeapon(weapon);
-        if (melee) {
-          const chopping =
-            weapon.itemId === "weapon_hatchet" &&
-            (AudioManager.get().isChoppingTreeNear(data.x, data.y) ||
-              (id === this.sessionId && !!this.treeChopTargetTile));
-          // Chop swings reuse lastFireTime for Hit* anim only. The looping
-          // chop bed is the audio; melee hit would stack on top of it.
-          const alreadySwinging = this.isEntityFiring(id);
-          const skipLocalOptimistic =
-            id === this.sessionId && alreadySwinging;
-          if (!chopping && !skipLocalOptimistic) {
-            AudioManager.get().playMelee(
-              id === this.sessionId
-                ? undefined
-                : {
-                    x: data.x,
-                    y: data.y,
-                    noiseRadius: ACTION_SFX_HEAR_RADIUS,
-                    inInterior: data.inInterior,
-                    buildingX: data.buildingX,
-                    buildingY: data.buildingY,
-                  },
-              weapon.itemId,
-            );
-          }
-        }
+        // Hit audio is a separate worldSfx, sent only when the swing connects.
+        // lastFireTime still drives the Hit* clip, including whiffs and chops.
         if (id !== this.sessionId) {
           this.startEntityFireAnim(
             id,
@@ -12739,6 +13250,12 @@ export class WorldScene extends Phaser.Scene {
       $(bear).onChange(() => this.refreshBear(id, bear));
     });
     state$.bears?.onRemove((_b, id) => this.removeEntity(this.bearSprites, id));
+
+    state$.crows?.onAdd((crow, id) => {
+      this.refreshCrow(id, crow);
+      $(crow).onChange(() => this.refreshCrow(id, crow));
+    });
+    state$.crows?.onRemove((_c, id) => this.removeEntity(this.crowSprites, id));
 
     if (state$.searchables) {
       state$.searchables.onAdd((item, id) => {
@@ -12868,7 +13385,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private entityVisible(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
     data: {
       x?: number;
       y?: number;
@@ -12904,6 +13421,17 @@ export class WorldScene extends Phaser.Scene {
     }
 
     if (kind === "player" && entityId === this.sessionId) return true;
+    if (kind === "zombie" || kind === "guard") {
+      if ((me.interiorLevel ?? 0) !== 0) return false;
+    }
+    if (kind === "player") {
+      const other = this.room?.state?.players?.get(entityId);
+      if ((other?.interiorLevel ?? 0) !== (me.interiorLevel ?? 0)) return false;
+    }
+    if (kind === "corpse") {
+      const corpse = this.room?.state?.corpses?.get(entityId);
+      if ((corpse?.interiorLevel ?? 0) !== (me.interiorLevel ?? 0)) return false;
+    }
     return (
       !!data.inInterior &&
       data.buildingX === me.buildingX &&
@@ -13028,6 +13556,75 @@ export class WorldScene extends Phaser.Scene {
     this.applyCoywolfMotion(sprite, prev, next);
     sprite.setData("server", next);
     this.updateEntityFromState(sprite, "bear", id);
+  }
+
+  private refreshCrow(
+    id: string,
+    data: {
+      x: number;
+      y: number;
+      facing: number;
+      anim: string;
+      animFrame: number;
+      health: number;
+      isDead?: boolean;
+      looted?: boolean;
+      altitude?: number;
+    },
+  ) {
+    if (!this.entityVisible("crow", data, id)) {
+      const existing = this.crowSprites.get(id);
+      if (existing) {
+        existing.setData("server", {
+          ...data,
+          isDead: !!data.isDead,
+          looted: !!data.looted,
+          altitude: data.altitude ?? 0,
+        });
+        this.softHideEntitySprite(existing);
+      }
+      return;
+    }
+
+    const sprite = this.ensureEntity(this.crowSprites, id, "crow");
+    const prev = sprite.getData("server") as {
+      isDead?: boolean;
+      x?: number;
+      y?: number;
+      anim?: string;
+      health?: number;
+    } | undefined;
+    if (
+      prev &&
+      typeof prev.health === "number" &&
+      data.health < prev.health &&
+      !this.recentGunHits.has(id)
+    ) {
+      this.spawnCrowHitBlood(data.x, data.y, data.altitude ?? 0);
+    }
+    const next = {
+      x: data.x,
+      y: data.y,
+      facing: data.facing,
+      anim: data.anim,
+      animFrame: data.animFrame,
+      health: data.health,
+      isDead: !!data.isDead,
+      looted: !!data.looted,
+      altitude: data.altitude ?? 0,
+      alive: !data.isDead,
+    };
+    if (!prev && next.isDead) {
+      this.freezeEntityDieAnim(id);
+    } else if (prev && !prev.isDead && next.isDead) {
+      this.startEntityDieAnim(id);
+      sprite.setData("visualKey", "");
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+    }
+    this.applyCoywolfMotion(sprite, prev, next);
+    sprite.setData("server", next);
+    this.updateEntityFromState(sprite, "crow", id);
   }
 
   private applyCoywolfMotion(
@@ -13787,7 +14384,7 @@ export class WorldScene extends Phaser.Scene {
   private ensureEntity(
     map: Map<string, EntitySprite>,
     id: string,
-    kind: "player" | "zombie" | "guard" | "coywolf" | "bear",
+    kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow",
   ) {
     let sprite = map.get(id);
     // Stale entries after kick/reconnect: GameObject destroyed, scene unset.
@@ -13810,6 +14407,10 @@ export class WorldScene extends Phaser.Scene {
                 : kind === "bear" && this.textures.exists(bearKey)
                   ? bearKey
                   : kind === "bear"
+                    ? "__DEFAULT"
+                : kind === "crow" && this.textures.exists(crowIdleKey("S"))
+                  ? crowIdleKey("S")
+                  : kind === "crow"
                     ? "__DEFAULT"
                 : zombieIdleKey("S");
       sprite = this.add.sprite(0, 0, placeholder, 0) as EntitySprite;
@@ -13899,6 +14500,18 @@ export class WorldScene extends Phaser.Scene {
         continue;
       }
       this.updateEntityFromState(sprite, "bear", sprite.entityId);
+    }
+
+    for (const sprite of this.crowSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; isDead?: boolean }
+        | undefined;
+      if (!data) continue;
+      if (!this.entityVisible("crow", data, sprite.entityId)) {
+        this.softHideEntitySprite(sprite);
+        continue;
+      }
+      this.updateEntityFromState(sprite, "crow", sprite.entityId);
     }
 
     for (const sprite of this.guardSprites.values()) {
@@ -14068,6 +14681,12 @@ export class WorldScene extends Phaser.Scene {
       if (!this.entityVisible("bear", bear, id)) return;
       this.refreshBear(id, bear);
     });
+
+    state.crows?.forEach((crow, id) => {
+      if (this.crowSprites.has(id)) return;
+      if (!this.entityVisible("crow", crow, id)) return;
+      this.refreshCrow(id, crow);
+    });
   }
 
   /** Lazy-load NPC sprite packs for entities near the local player. */
@@ -14139,6 +14758,13 @@ export class WorldScene extends Phaser.Scene {
         const list: { x: number; y: number }[] = [];
         this.room.state.bears?.forEach((bear) => {
           list.push({ x: bear.x, y: bear.y });
+        });
+        return list;
+      })(),
+      crows: (() => {
+        const list: { x: number; y: number }[] = [];
+        this.room.state.crows?.forEach((crow) => {
+          list.push({ x: crow.x, y: crow.y });
         });
         return list;
       })(),
@@ -14250,7 +14876,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildEntityVisualKey(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
     data: {
       facing: number;
       anim: string;
@@ -14294,6 +14920,8 @@ export class WorldScene extends Phaser.Scene {
       packReady = coywolfPackReady() ? "1" : "0";
     } else if (kind === "bear") {
       packReady = bearPackReady() ? "1" : "0";
+    } else if (kind === "crow") {
+      packReady = crowPackReady() ? "1" : "0";
     }
 
     return [
@@ -14317,7 +14945,7 @@ export class WorldScene extends Phaser.Scene {
 
   private updateEntityFromState(
     sprite: EntitySprite,
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
     entityId: string,
   ) {
     let data = sprite.getData("server") as
@@ -14343,6 +14971,7 @@ export class WorldScene extends Phaser.Scene {
           searchTargetId?: string;
           searchEndTime?: number;
           fightingStanceUntil?: number;
+          altitude?: number;
         }
       | undefined;
 
@@ -14392,7 +15021,7 @@ export class WorldScene extends Phaser.Scene {
     const isDead =
       kind === "corpse"
         ? true
-        : kind === "zombie" || kind === "coywolf" || kind === "bear"
+        : kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow"
           ? this.isZombieDead(data)
           : kind === "guard"
             ? data.alive === false
@@ -14420,6 +15049,13 @@ export class WorldScene extends Phaser.Scene {
                 isDead,
                 BEAR_DIE_FRAMES,
                 BEAR_DIE_ANIM_MS,
+              )
+          : kind === "crow"
+            ? this.resolveDieFrame(
+                entityId,
+                isDead,
+                CROW_DIE_FRAMES,
+                CROW_DIE_ANIM_MS,
               )
           : kind === "guard"
             ? this.resolveDieFrame(
@@ -14510,7 +15146,7 @@ export class WorldScene extends Phaser.Scene {
     sprite.setVisible(true);
 
     const renderPos =
-      kind === "zombie" || kind === "coywolf" || kind === "bear"
+      kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow"
         ? this.getZombieRenderPosition(sprite, data.x, data.y)
         : kind === "player"
           ? this.getPlayerRenderPosition(sprite, data.x, data.y)
@@ -14542,7 +15178,15 @@ export class WorldScene extends Phaser.Scene {
     const crawlDrop = zombieCrawling && !isDead ? ZOMBIE_CRAWL_TILE_DROP_PX : 0;
     const coyoteDrop = kind === "coywolf" ? COYWOLF_TILE_DROP_PX : 0;
     const bearDrop = kind === "bear" ? BEAR_TILE_DROP_PX : 0;
-    sprite.setPosition(iso.x, entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop);
+    const crowLift = kind === "crow" ? crowFlightLiftPx(data.altitude ?? 0) : 0;
+    if (kind === "crow" && crowLift > 0) {
+      // One (x+y) step is TILE_HEIGHT/2 pixels and 1024 depth, matching groundSortDepth.
+      depth += (crowLift / (TILE_HEIGHT / 2)) * 1024;
+    }
+    sprite.setPosition(
+      iso.x,
+      entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop - crowLift,
+    );
     sprite.setDepth(depth);
 
     if (entityId === this.sessionId && kind === "player") {
@@ -14684,6 +15328,7 @@ export class WorldScene extends Phaser.Scene {
       containerJson,
       inventoryJson,
       piles,
+      this.localExtraPockets(),
     );
   }
 
@@ -14703,7 +15348,11 @@ export class WorldScene extends Phaser.Scene {
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     if (this.fireplaceUI?.isOpen()) this.closeFireplaceUI();
     if (this.prefabDepositUI?.isOpen()) this.closePrefabUI();
-    this.craftUI?.open(payload);
+    this.craftUI?.setLearnedRecipes(this.learnedRecipeIds);
+    this.craftUI?.open({
+      ...payload,
+      extraPockets: this.localExtraPockets(),
+    });
   }
 
   private closeCraftUI() {
@@ -15730,9 +16379,12 @@ export class WorldScene extends Phaser.Scene {
       playerName: payload.playerName,
       redOrderReputation: payload.redOrderReputation,
       dogtagCount: this.localDogtagCount(),
+      inventoryJson:
+        this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]",
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
       questsJson: this.localQuestsJson(),
+      extraPockets: this.localExtraPockets(),
     });
   }
 
@@ -15826,6 +16478,7 @@ export class WorldScene extends Phaser.Scene {
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
       doctorHealCost: this.localSkillMods().doctorHealCost,
+      extraPockets: this.localExtraPockets(),
     });
   }
 
@@ -16163,6 +16816,21 @@ export class WorldScene extends Phaser.Scene {
       );
     }
 
+    const crow = room.state.crows?.get(containerId);
+    const crowData =
+      crow ??
+      (this.crowSprites.get(containerId)?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined);
+    if (crowData) {
+      return (
+        !!crowData.isDead &&
+        !crowData.looted &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, crowData.x, crowData.y)
+      );
+    }
+
     return false;
   }
 
@@ -16257,7 +16925,7 @@ export class WorldScene extends Phaser.Scene {
             slotIndex,
           ) ?? 0);
     if (rounds <= 0) return;
-    if (!canAddToInventory(inventory, ammoType, rounds)) return;
+    if (!canAddToInventory(inventory, ammoType, rounds, this.localExtraPockets())) return;
 
     this.beginLocalTimedAction("unload", UNLOAD_DURATION_MS, "Unloading", true);
     AudioManager.get().playUnload(slot.id);

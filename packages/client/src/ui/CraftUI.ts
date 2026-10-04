@@ -3,6 +3,7 @@ import {
   DISASSEMBLY_RECIPES,
   canCraftRecipe,
   canDisassemble,
+  craftRecipeIsVisible,
   countItemInInventory,
   getItemDefinition,
   isCraftItemQty,
@@ -98,8 +99,10 @@ export class CraftUI {
   private visible = false;
   private workbenchId = "";
   private inventory: Inventory = [];
+  private extraPockets = 0;
   /** Recipe id currently expanded (null = all collapsed). */
   private expandedRecipeId: string | null = null;
+  private learnedRecipeIds = new Set<string>();
 
   private station: CraftStationKind = "workbench";
   private overlay: HTMLElement;
@@ -165,13 +168,21 @@ export class CraftUI {
     return this.station;
   }
 
+  /** Weapon recipes the player has learned. Hidden until this set includes them. */
+  setLearnedRecipes(recipeIds: Iterable<string>) {
+    this.learnedRecipeIds = new Set(recipeIds);
+    if (this.visible) this.render();
+  }
+
   open(opts: {
     workbenchId: string;
     inventoryJson: string;
     station?: CraftStationKind;
+    extraPockets?: number;
   }) {
     this.workbenchId = opts.workbenchId;
     this.station = opts.station === "furnace" ? "furnace" : "workbench";
+    this.extraPockets = opts.extraPockets ?? 0;
     this.inventory = parseInventory(opts.inventoryJson);
     this.expandedRecipeId = null;
     this.titleEl.textContent =
@@ -179,7 +190,7 @@ export class CraftUI {
     this.hintEl.textContent =
       this.station === "furnace"
         ? "The fire must stay lit. If it goes out, the craft stops."
-        : "Craft materials, or break a firearm into parts";
+        : "Craft materials, build a weapon you have learned, or break a firearm into parts";
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("craft-open");
@@ -206,7 +217,9 @@ export class CraftUI {
   private render() {
     this.listEl.replaceChildren();
     const stationRecipes = CRAFT_RECIPES.filter(
-      (recipe) => recipe.station === this.station,
+      (recipe) =>
+        recipe.station === this.station &&
+        craftRecipeIsVisible(recipe, this.learnedRecipeIds),
     );
     for (const recipe of stationRecipes) {
       if (recipe.breakdown) continue;
@@ -231,7 +244,7 @@ export class CraftUI {
 
   private buildRecipeCard(recipe: CraftRecipe): HTMLElement {
     const expanded = this.expandedRecipeId === recipe.id;
-    const can = canCraftRecipe(this.inventory, recipe);
+    const can = canCraftRecipe(this.inventory, recipe, this.extraPockets);
     const outDef = getItemDefinition(recipe.output.itemId);
     const name = outDef?.name ?? recipe.output.itemId;
 
@@ -338,7 +351,7 @@ export class CraftUI {
     const toolId = input && isCraftItemQty(input) ? input.itemId : "";
     const expanded = this.expandedRecipeId === recipe.id;
     const hasTool = countItemInInventory(this.inventory, toolId) >= 1;
-    const can = canCraftRecipe(this.inventory, recipe);
+    const can = canCraftRecipe(this.inventory, recipe, this.extraPockets);
     const tool = getItemDefinition(toolId);
     const name = tool?.name ?? toolId;
     const outDef = getItemDefinition(recipe.output.itemId);
@@ -439,7 +452,7 @@ export class CraftUI {
     const expanded = this.expandedRecipeId === recipe.id;
     const hasWeapon =
       countItemInInventory(this.inventory, recipe.weaponId) >= 1;
-    const can = canDisassemble(this.inventory, recipe);
+    const can = canDisassemble(this.inventory, recipe, [], this.extraPockets);
     const weapon = getItemDefinition(recipe.weaponId);
     const name = weapon?.name ?? recipe.weaponId;
 

@@ -30,7 +30,7 @@ export const SUB_SKILLS_BY_PARENT = {
     "cooking",
   ] as const,
   intelligence: ["medicine", "reading"] as const,
-  charisma: ["bartering", "persuasion", "leadership"] as const,
+  charisma: ["bartering", "persuasion"] as const,
 } as const;
 
 export type SubSkillId =
@@ -75,7 +75,6 @@ export const SUB_SKILL_LABELS: Record<SubSkillId, string> = {
   reading: "Reading",
   bartering: "Bartering",
   persuasion: "Persuasion",
-  leadership: "Leadership",
 };
 
 export function xpToNextLevel(level: number): number {

@@ -3,9 +3,24 @@
  * Accept-time only: the scan is cheap next to a dialog click.
  */
 
-import { isBirchportHospital, isBuildingInBirchport } from "./birchport.js";
+import {
+  isAshenTraderWarehouse,
+  isBirchportHospital,
+  isBuildingInBirchport,
+} from "./birchport.js";
 import { isInBirchportBarracks } from "./birchportBarracks.js";
-import { getPlayerSpawnFootprint, getBuildingAt, type BuildingInfo } from "./worldgen.js";
+import { PLAYER_SPAWN_HUB_NAME } from "./constants.js";
+import {
+  getPlayerSpawnFootprint,
+  getBuildingAt,
+  getCityName,
+  getCityRoadLinks,
+  getSettlementType,
+  listBuildingsInRect,
+  settlementCellsInRegion,
+  SETTLEMENT_CELL_SIZE,
+  type BuildingInfo,
+} from "./worldgen.js";
 
 export type QuestTargetExclude = {
   ox?: number;
@@ -127,6 +142,125 @@ export function questTargetBuildingLabel(ox: number, oy: number): string {
       ? "motel"
       : bld?.buildingType === "house"
         ? "house"
-        : "building";
+        : bld?.buildingType === "supermarket"
+          ? "supermarket"
+          : bld?.buildingType === "warehouse"
+            ? "warehouse"
+            : "building";
   return `${kind} at ${ox}, ${oy}`;
+}
+
+/** Rings around Birchport. Near first, then a wider pass if the near ring is empty. */
+const QUEST_NEAR_PAD = 288;
+const QUEST_FAR_PAD = 576;
+
+function buildingsAroundBirchport(pad: number): BuildingInfo[] {
+  const f = getPlayerSpawnFootprint();
+  return listBuildingsInRect(
+    f.minX - pad,
+    f.maxX + pad,
+    f.minY - pad,
+    f.maxY + pad,
+  );
+}
+
+function pickOutsideBirchport(
+  type: BuildingInfo["buildingType"],
+  exclude?: QuestTargetExclude,
+): BuildingInfo | null {
+  for (const pad of [QUEST_NEAR_PAD, QUEST_FAR_PAD]) {
+    const pool = buildingsAroundBirchport(pad).filter(
+      (bld) =>
+        bld.buildingType === type &&
+        !isBuildingInBirchport(bld.ox, bld.oy) &&
+        notExcluded(bld, exclude),
+    );
+    const picked = pickFrom(pool);
+    if (picked) return picked;
+  }
+  return null;
+}
+
+function birchportCityCell(): { cx: number; cy: number } | null {
+  const f = getPlayerSpawnFootprint();
+  for (const cell of settlementCellsInRegion(f.minX, f.maxX, f.minY, f.maxY)) {
+    if (getSettlementType(cell.cx, cell.cy) !== "city") continue;
+    if (getCityName(cell.cx, cell.cy) !== PLAYER_SPAWN_HUB_NAME) continue;
+    return cell;
+  }
+  return null;
+}
+
+/** Supermarkets in one city. Grids can sit a little outside the 96-tile cell. */
+function supermarketsInCity(
+  cx: number,
+  cy: number,
+  exclude?: QuestTargetExclude,
+): BuildingInfo[] {
+  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
+  const cellMax = SETTLEMENT_CELL_SIZE - 1;
+  return listBuildingsInRect(
+    cx - spill,
+    cx + cellMax + spill,
+    cy - spill,
+    cy + cellMax + spill,
+  ).filter(
+    (bld) =>
+      bld.buildingType === "supermarket" &&
+      !isBuildingInBirchport(bld.ox, bld.oy) &&
+      notExcluded(bld, exclude),
+  );
+}
+
+/**
+ * Supermarket outside Birchport for a supply-run scout.
+ * Nearby cities sit past the tile rings, so those markets are included too.
+ */
+export function pickAisleCheckSupermarket(
+  exclude?: QuestTargetExclude,
+): BuildingInfo | null {
+  const near = pickOutsideBirchport("supermarket", exclude);
+  if (near) return near;
+
+  const hub = birchportCityCell();
+  if (!hub) return null;
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of getCityRoadLinks(hub.cx, hub.cy)) {
+    for (const bld of supermarketsInCity(city.cx, city.cy, exclude)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  return pickFrom(pool);
+}
+
+/** House outside Birchport, rural or in another settlement. */
+export function pickClarkHouse(
+  exclude?: QuestTargetExclude,
+): BuildingInfo | null {
+  return pickOutsideBirchport("house", exclude);
+}
+
+/**
+ * Warehouse the Red Order wants emptied. Skips the Ashen market.
+ * Prefers one outside Birchport.
+ */
+export function pickFloorSpaceWarehouse(
+  exclude?: QuestTargetExclude,
+): BuildingInfo | null {
+  for (const pad of [QUEST_NEAR_PAD, QUEST_FAR_PAD]) {
+    const all = buildingsAroundBirchport(pad).filter(
+      (bld) =>
+        bld.buildingType === "warehouse" &&
+        !isAshenTraderWarehouse(bld.ox, bld.oy) &&
+        notExcluded(bld, exclude),
+    );
+    const outside = all.filter((bld) => !isBuildingInBirchport(bld.ox, bld.oy));
+    const picked = pickFrom(outside.length > 0 ? outside : all);
+    if (picked) return picked;
+  }
+  return null;
 }

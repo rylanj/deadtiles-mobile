@@ -10,6 +10,7 @@ import {
   pickDialogVariant,
 } from "@zombie/shared";
 import { createDialogCloseButton } from "./dialogCloseBtn";
+import { fillSpeechButton } from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 
@@ -188,7 +189,13 @@ export class AshenTraderDialogUI {
         btn.classList.add("red-dialog-speech-btn--active");
         btn.classList.add("ashen-dialog-speech-btn--active");
       }
-      btn.textContent = line.player;
+      const iconId =
+        this.isTraderMan() && line.action === "trade"
+          ? "backpack"
+          : this.isTraderMan() && line.action === "board"
+            ? "banknote"
+            : undefined;
+      fillSpeechButton(btn, line.player, iconId);
       btn.addEventListener("click", () => {
         this.activeLineId = line.id;
         this.render();

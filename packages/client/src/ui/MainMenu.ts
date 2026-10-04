@@ -359,6 +359,9 @@ export class MainMenu {
   private applyPreview(preview: PlayerPreview) {
     const health = preview.exists ? (preview.health ?? PLAYER_MAX_HEALTH) : PLAYER_MAX_HEALTH;
     const stamina = preview.exists ? (preview.stamina ?? STAMINA_MAX) : STAMINA_MAX;
+    const staminaMax = preview.exists
+      ? (preview.staminaMax ?? STAMINA_MAX)
+      : STAMINA_MAX;
     const hunger = preview.exists ? (preview.hunger ?? HUNGER_MAX) : HUNGER_MAX;
     const thirst = preview.exists ? (preview.thirst ?? THIRST_MAX) : THIRST_MAX;
     const temperature = preview.exists
@@ -373,7 +376,7 @@ export class MainMenu {
     this.healthFill.style.width = `${clampPct(shownHealth, PLAYER_MAX_HEALTH)}%`;
     this.healthCap.style.width = `${clampPct(maxHp, PLAYER_MAX_HEALTH)}%`;
     this.healthLost.style.width = `${Math.max(0, 100 - clampPct(maxHp, PLAYER_MAX_HEALTH))}%`;
-    this.staminaFill.style.width = `${clampPct(stamina, STAMINA_MAX)}%`;
+    this.staminaFill.style.width = `${clampPct(stamina, staminaMax)}%`;
     this.hungerFill.style.width = `${clampPct(hunger, HUNGER_MAX)}%`;
     this.thirstFill.style.width = `${clampPct(thirst, THIRST_MAX)}%`;
     this.tempFill.style.width = `${tempLook.percent}%`;

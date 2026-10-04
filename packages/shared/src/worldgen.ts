@@ -799,6 +799,12 @@ function isPlayerSpawnHubCell(cx: number, cy: number): boolean {
  * With INTER_CITY_SEARCH_CELLS=8, spans are ≤8 cells → need ≥4 cells of reach.
  */
 const URBAN_REACH = SETTLEMENT_CELL * 4; // 384
+/**
+ * How far past a tile street and building lookups can reach.
+ * The client warms this far beyond the render window so a zoom-out does not
+ * build a city layout inside the paint budget.
+ */
+export const WORLDGEN_QUERY_REACH = URBAN_REACH;
 /** Safety cap for single-segment stub arterials (old path; inter-city paths use own logic). */
 const ARTERIAL_MAX_REACH = URBAN_REACH - 8;
 
@@ -3054,6 +3060,28 @@ export function setBuildingPlacementBlockedTile(
 
 function settlementCellKey(cx: number, cy: number): string {
   return `${cx}:${cy}`;
+}
+
+/** Buildings whose footprints overlap a tile rectangle. Cell gen is cached. */
+export function listBuildingsInRect(
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+): BuildingInfo[] {
+  const seen = new Set<string>();
+  const out: BuildingInfo[] = [];
+  for (const { cx, cy } of settlementCellsInRegion(minX, maxX, minY, maxY)) {
+    for (const bld of settlementBuildings(cx, cy)) {
+      if (bld.ox > maxX || bld.ox + bld.w < minX) continue;
+      if (bld.oy > maxY || bld.oy + bld.h < minY) continue;
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(bld);
+    }
+  }
+  return out;
 }
 
 function settlementBuildings(cx: number, cy: number): BuildingInfo[] {

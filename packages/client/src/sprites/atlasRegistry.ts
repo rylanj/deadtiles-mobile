@@ -25,7 +25,7 @@ export type TextureRef = {
   frame?: string;
 };
 
-/** Atlas variant to load. Mobile frames are capped at 128px, desktop at 160px. */
+/** Atlas variant to load. Mobile frames are capped at 128px, desktop at 160px. ConferenceTable1 is packed larger so its 512 art is not upscaled. */
 const PROFILE = IS_MOBILE ? "mobile" : "desktop";
 const ATLAS_BASE = `/assets/atlas/${PROFILE}`;
 
