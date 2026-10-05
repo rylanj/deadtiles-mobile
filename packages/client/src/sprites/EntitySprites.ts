@@ -182,6 +182,10 @@ export function coywolfDieFrameKey(dir: DirectionLabel, frame: number) {
   return `coywolf-die-${dir}-${animFrameTag(frame)}`;
 }
 
+export function coywolfSkinnedKey(dir: DirectionLabel) {
+  return `coywolf-skinned-${dir}`;
+}
+
 export function bearIdleKey(dir: DirectionLabel) {
   return `bear-idle-${dir}`;
 }
@@ -198,6 +202,10 @@ export function bearDieFrameKey(dir: DirectionLabel, frame: number) {
   return `bear-die-${dir}-${animFrameTag(frame)}`;
 }
 
+export function bearSkinnedKey(dir: DirectionLabel) {
+  return `bear-skinned-${dir}`;
+}
+
 export function crowIdleKey(dir: DirectionLabel) {
   return `crow-idle-${dir}`;
 }
@@ -208,6 +216,10 @@ export function crowFlyFrameKey(dir: DirectionLabel, frame: number) {
 
 export function crowDieFrameKey(dir: DirectionLabel, frame: number) {
   return `crow-die-${dir}-${animFrameTag(frame)}`;
+}
+
+export function crowSkinnedKey(dir: DirectionLabel) {
+  return `crow-skinned-${dir}`;
 }
 
 const COYWOLF_FEET_ORIGIN_Y = 0.92;
@@ -1350,6 +1362,8 @@ export type EntityVisualState = {
   attackFrame?: number;
   isDead?: boolean;
   alive?: boolean;
+  /** Carcass emptied. Animals swap the death pose for the skinned frame. */
+  looted?: boolean;
   /** 1–11 = ZombieMan1–11 */
   zombieSkin?: number;
   /** ZombieMan6 / ZombieMan10 crawler: IdleCrawl / Crawl instead of Idle / Walk. */
@@ -1394,7 +1408,9 @@ export function updateEntityVisual(
   sprite.setActive(true);
 
   if (kind === "coywolf") {
-    if (isDead) {
+    if (isDead && state.looted) {
+      applyCoywolfFrame(sprite, coywolfSkinnedKey(dir));
+    } else if (isDead) {
       const frame = Math.min(9, Math.max(1, (state.dieFrame ?? 0) + 1));
       applyCoywolfFrame(sprite, coywolfDieFrameKey(dir, frame));
     } else if (isRunning) {
@@ -1416,7 +1432,14 @@ export function updateEntityVisual(
   }
 
   if (kind === "crow") {
-    if (isDead) {
+    if (isDead && state.looted) {
+      applyCrowFrame(
+        sprite,
+        crowSkinnedKey(dir),
+        CROW_DIE_FEET_ORIGIN_Y,
+        CROW_RENDER_HEIGHT,
+      );
+    } else if (isDead) {
       const frame = Math.min(
         CROW_DIE_FRAMES,
         Math.max(1, (state.dieFrame ?? 0) + 1),
@@ -1449,7 +1472,9 @@ export function updateEntityVisual(
   }
 
   if (kind === "bear") {
-    if (isDead) {
+    if (isDead && state.looted) {
+      applyBearFrame(sprite, bearSkinnedKey(dir));
+    } else if (isDead) {
       const frame = Math.min(9, Math.max(1, (state.dieFrame ?? 0) + 1));
       applyBearFrame(sprite, bearDieFrameKey(dir, frame));
     } else if (isRunning) {

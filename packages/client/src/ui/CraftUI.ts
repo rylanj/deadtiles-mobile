@@ -1,6 +1,7 @@
 import {
   CRAFT_RECIPES,
   DISASSEMBLY_RECIPES,
+  blueprintDisassemblyYield,
   canCraftRecipe,
   canDisassemble,
   craftRecipeIsVisible,
@@ -245,6 +246,9 @@ export class CraftUI {
   private buildRecipeCard(recipe: CraftRecipe): HTMLElement {
     const expanded = this.expandedRecipeId === recipe.id;
     const can = canCraftRecipe(this.inventory, recipe, this.extraPockets);
+    const allInputsOk = recipe.inputs.every((ing) =>
+      ingredientSatisfied(this.inventory, ing),
+    );
     const outDef = getItemDefinition(recipe.output.itemId);
     const name = outDef?.name ?? recipe.output.itemId;
 
@@ -277,7 +281,11 @@ export class CraftUI {
     nameEl.textContent = name;
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
-    meta.textContent = can ? "Ready to craft" : "Missing materials";
+    meta.textContent = can
+      ? "Ready to craft"
+      : allInputsOk
+        ? "Inventory full"
+        : "Missing materials";
     label.append(nameEl, meta);
     summary.appendChild(label);
 
@@ -317,9 +325,6 @@ export class CraftUI {
     }
     details.appendChild(needRow);
 
-    const allInputsOk = recipe.inputs.every((ing) =>
-      ingredientSatisfied(this.inventory, ing),
-    );
     if (can) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -388,8 +393,8 @@ export class CraftUI {
     meta.textContent = can
       ? "Ready to break down"
       : hasTool
-        ? "Not enough room"
-        : "Not in inventory";
+        ? "Inventory full"
+        : "Missing materials";
     label.append(nameEl, meta);
     summary.appendChild(label);
 
@@ -452,7 +457,14 @@ export class CraftUI {
     const expanded = this.expandedRecipeId === recipe.id;
     const hasWeapon =
       countItemInInventory(this.inventory, recipe.weaponId) >= 1;
-    const can = canDisassemble(this.inventory, recipe, [], this.extraPockets);
+    const fullYield = blueprintDisassemblyYield(recipe, this.learnedRecipeIds);
+    const can = canDisassemble(
+      this.inventory,
+      recipe,
+      [],
+      this.extraPockets,
+      this.learnedRecipeIds,
+    );
     const weapon = getItemDefinition(recipe.weaponId);
     const name = weapon?.name ?? recipe.weaponId;
 
@@ -485,10 +497,12 @@ export class CraftUI {
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
     meta.textContent = can
-      ? "Ready to break down"
+      ? fullYield
+        ? "Every part comes back"
+        : "Ready to break down"
       : hasWeapon
-        ? "Not enough room"
-        : "No weapon";
+        ? "Inventory full"
+        : "Missing materials";
     label.append(nameEl, meta);
     summary.appendChild(label);
 
@@ -507,9 +521,38 @@ export class CraftUI {
 
     const details = document.createElement("div");
     details.className = "craft-recipe-details";
+    if (fullYield) {
+      const returnTitle = document.createElement("div");
+      returnTitle.className = "red-dialog-task-heading";
+      returnTitle.textContent = "Returns";
+      details.appendChild(returnTitle);
+
+      const returnRow = document.createElement("div");
+      returnRow.className = "red-dialog-task-row";
+      fullYield.forEach((part, i) => {
+        if (i > 0) {
+          const sep = document.createElement("span");
+          sep.className = "craft-ingredient-and";
+          sep.textContent = "+";
+          returnRow.appendChild(sep);
+        }
+        const def = getItemDefinition(part.id);
+        const partName = def?.name ?? part.id;
+        returnRow.appendChild(
+          makeDisplayCell({
+            itemId: part.id,
+            qtyLabel: `×${part.quantity}`,
+            ariaLabel: `${partName} ×${part.quantity}`,
+          }),
+        );
+      });
+      details.appendChild(returnRow);
+    }
     const hint = document.createElement("div");
     hint.className = "craft-recipe-hint";
-    hint.textContent = `Destroys the ${name}. Returns 3 of ${recipe.parts.length} parts at random.`;
+    hint.textContent = fullYield
+      ? "You know this blueprint, so every part comes back."
+      : `Destroys the ${name}. Returns ${recipe.returnCount} of ${recipe.parts.length} parts at random.`;
     details.appendChild(hint);
 
     if (can) {
@@ -522,6 +565,11 @@ export class CraftUI {
         this.handlers.onCraft(recipe.id);
       });
       details.appendChild(btn);
+    } else if (hasWeapon) {
+      const room = document.createElement("div");
+      room.className = "craft-recipe-hint";
+      room.textContent = "Inventory full";
+      details.appendChild(room);
     }
 
     section.appendChild(details);

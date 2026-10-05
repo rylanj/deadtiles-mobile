@@ -136,15 +136,6 @@
       #world-clock-time[hidden] {
         display: none !important;
       }
-      #world-clock-debug {
-        display: flex;
-        flex-direction: column;
-        gap: 1px;
-        font: 600 11px/1.25 "Consolas", "ui-monospace", monospace;
-        letter-spacing: 0.04em;
-        color: #c5d6e4;
-        opacity: 0.92;
-      }
 
       /* ── Player stats HUD (bottom-left) ───────────────────────────────── */
       #player-hud {
@@ -477,6 +468,9 @@
         background: rgba(255, 255, 255, 0.08);
         overflow: hidden;
       }
+      .journal-skill-summary-bar {
+        margin-top: 4px;
+      }
       .journal-xp-fill {
         height: 100%;
         width: 0;
@@ -507,6 +501,7 @@
         inset: 0;
         z-index: 100;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         background: rgba(0, 0, 0, 0.55);
@@ -934,8 +929,20 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        width: fit-content;
+        width: min(736px, 100%);
         max-width: 100%;
+        flex: 0 1 auto;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
+      /* Fill the overlay so the item lists have a real height to scroll inside. */
+      #trader-overlay .trader-layout {
+        flex: 1 1 0%;
+        height: auto;
+        max-height: 100%;
+        min-height: 0;
+        overflow: hidden;
       }
       .trader-columns {
         display: flex;
@@ -943,17 +950,37 @@
         justify-content: center;
         align-items: stretch;
         gap: 16px;
-        width: min(736px, 100%);
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
       }
-      .trader-panel {
+      #trader-overlay .trader-columns {
+        flex: 1 1 0%;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .inventory-panel.trader-panel:not(.market-panel) {
         width: min(360px, calc(50% - 8px));
-        flex: 1 1 0;
+        flex: 1 1 auto;
         max-width: 360px;
         min-width: 0;
+        min-height: 0;
+        max-height: 100%;
         display: flex;
         flex-direction: column;
-        max-height: min(420px, 70vh);
         overflow: hidden;
+      }
+      #trader-overlay .inventory-panel.trader-panel:not(.market-panel) {
+        flex: 1 1 0%;
+        align-self: stretch;
+        height: auto;
+        max-height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .trader-panel > .trader-panel-header {
+        flex: 0 0 auto;
       }
       .trader-panel .trader-panel-header {
         display: flex;
@@ -1051,8 +1078,11 @@
       }
       .trader-grid-wrap {
         flex: 1 1 auto;
+        overflow-x: hidden;
         overflow-y: auto;
         min-height: 0;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
       }
       .trader-grid {
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1093,6 +1123,7 @@
         grid-column: 1 / -1;
       }
       .trader-footer {
+        flex: 0 0 auto;
         width: 100%;
         box-sizing: border-box;
         background: rgba(10, 14, 10, 0.92);
@@ -1244,31 +1275,144 @@
         inset: 0;
         z-index: 110;
         display: flex;
-        align-items: flex-end;
-        justify-content: flex-start;
-        background: transparent;
-        padding: 16px;
-        box-sizing: border-box;
-        pointer-events: none;
-      }
-      #onboarding-controls-legend {
         align-items: center;
         justify-content: center;
         background: rgba(0, 0, 0, 0.45);
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      #onboarding-controls-legend {
+        z-index: 115;
+      }
+      #tutorial-stack {
+        position: fixed;
+        top: max(12px, env(safe-area-inset-top, 0px));
+        left: max(12px, env(safe-area-inset-left, 0px));
+        z-index: 60;
+        width: min(320px, calc(100vw - 24px));
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        pointer-events: none;
+      }
+      body.main-menu-open #tutorial-stack,
+      body:not(.game-ready) #tutorial-stack {
+        display: none;
+      }
+      .tutorial-tracker,
+      .tutorial-tip {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
         pointer-events: auto;
+      }
+      .tutorial-tracker[hidden],
+      .tutorial-tip[hidden],
+      .tutorial-pill[hidden] {
+        display: none;
+      }
+      .tutorial-tip {
+        border-color: rgba(230, 200, 110, 0.6);
+      }
+      .tutorial-tracker-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tutorial-tracker-chapter {
+        flex: 1 1 auto;
+        color: #9fd89f;
+        font: 600 11px/1.2 system-ui, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .tutorial-tracker-progress {
+        color: #8aa08a;
+        font: 600 11px/1.2 ui-monospace, monospace;
+      }
+      .tutorial-tracker-title {
+        color: #e8f8e8;
+        font: 600 15px/1.25 system-ui, sans-serif;
+      }
+      .tutorial-tip .tutorial-tracker-title {
+        color: #f0e0b0;
+      }
+      .tutorial-tracker-body {
+        margin: 0;
+        color: #c8e0c8;
+        font: 13px/1.45 system-ui, sans-serif;
+      }
+      .tutorial-tracker-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 2px;
+      }
+      .tutorial-btn,
+      .tutorial-pill {
+        padding: 6px 10px;
+        border: 1px solid rgba(100, 220, 100, 0.55);
+        border-radius: 4px;
+        background: rgba(14, 28, 14, 0.9);
+        color: #d4f0d4;
+        font: 600 12px/1.2 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .tutorial-btn--quiet {
+        border-color: rgba(140, 160, 140, 0.45);
+        color: #b8c8b8;
+        font-weight: 500;
+      }
+      .tutorial-btn:hover,
+      .tutorial-pill:hover {
+        border-color: rgba(120, 230, 120, 0.85);
+        color: #e8f8e8;
+      }
+      .tutorial-pill {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        pointer-events: auto;
+      }
+      .tutorial--advanced {
+        animation: tutorial-advance 0.9s ease-out;
+      }
+      @keyframes tutorial-advance {
+        0% {
+          box-shadow: 0 0 0 0 rgba(120, 230, 120, 0.75);
+        }
+        100% {
+          box-shadow: 0 0 0 10px rgba(120, 230, 120, 0);
+        }
+      }
+      .journal-guide-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      body.is-mobile.game-ready:not(.main-menu-open) #tutorial-stack {
+        top: calc(max(10px, env(safe-area-inset-top, 0px)) + 78px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(360px, calc(100vw - 20px));
+        align-items: center;
       }
       #onboarding-overlay[hidden],
       #onboarding-controls-legend[hidden] {
         display: none;
       }
       .onboarding-panel {
-        width: min(380px, 92vw);
-        padding: 14px 16px 16px;
+        width: min(440px, 92vw);
+        padding: 16px 18px 18px;
         display: flex;
         flex-direction: column;
         gap: 10px;
-        pointer-events: auto;
-        margin-bottom: 72px;
       }
       .onboarding-title {
         margin: 0;
@@ -2282,6 +2426,7 @@
         justify-content: flex-end;
         gap: 10px;
         width: 100%;
+        flex: 0 0 auto;
         box-sizing: border-box;
         padding: 0 0 2px;
         background: transparent;
@@ -2313,6 +2458,30 @@
       .inventory-grid-wrap {
         padding: 12px 16px;
         overflow: visible;
+      }
+      /* The generic wrap is overflow visible. Trade lists scroll instead. */
+      #trader-overlay .inventory-grid-wrap.trader-grid-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: none;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(126, 207, 126, 0.75) rgba(0, 0, 0, 0.28);
+      }
+      #trader-overlay .inventory-grid-wrap.trader-grid-wrap::-webkit-scrollbar {
+        width: 8px;
+      }
+      #trader-overlay .inventory-grid-wrap.trader-grid-wrap::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.28);
+        border-radius: 4px;
+      }
+      #trader-overlay .inventory-grid-wrap.trader-grid-wrap::-webkit-scrollbar-thumb {
+        background: rgba(94, 168, 94, 0.72);
+        border: 2px solid rgba(10, 14, 10, 0.92);
+        border-radius: 4px;
       }
       body #inventory-overlay {
         overflow: hidden;
@@ -4325,7 +4494,6 @@
       #inventory-overlay,
       #market-overlay,
       #container-loot-overlay,
-      #trader-overlay,
       #red-order-dialog-overlay,
       #ashen-dialog-overlay,
       #ashen-militia-dialog-overlay,
@@ -4458,6 +4626,7 @@
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
         }
+        #onboarding-overlay,
         #onboarding-controls-legend {
           padding: calc(24px + env(safe-area-inset-top, 0px))
             calc(20px + env(safe-area-inset-right, 0px))
@@ -4578,21 +4747,21 @@
 
         .trader-layout {
           width: min(420px, 100%);
-          max-height: none;
+          max-height: 100%;
           min-height: 0;
           margin-block: 0;
-          overflow: visible;
+          overflow: hidden;
           display: flex;
           flex-direction: column;
           gap: 10px;
         }
         .trader-columns {
           flex-direction: column;
-          flex: 0 0 auto;
+          flex: 1 1 0%;
           min-height: 0;
           width: 100%;
           gap: 10px;
-          overflow: visible;
+          overflow: hidden;
         }
         .red-dialog-layout {
           width: min(420px, 100%);
@@ -4630,23 +4799,25 @@
           max-height: none;
           overflow: visible;
         }
-        .trader-panel {
+        .inventory-panel.trader-panel:not(.market-panel) {
           width: 100%;
           max-width: none;
-          /* Override desktop flex: 1 1 0 — that collapses height in a column layout. */
-          flex: 0 0 auto;
+          flex: 1 1 0%;
           height: auto;
-          max-height: none;
+          max-height: 100%;
           min-height: 0;
-          overflow: visible;
+          overflow: hidden;
         }
-        .trader-panel .trader-grid-wrap {
-          flex: 0 0 auto;
+        #trader-overlay .inventory-grid-wrap.trader-grid-wrap {
+          flex: 1 1 auto;
           max-height: none;
-          overflow: visible;
+          overflow-x: hidden;
+          overflow-y: auto;
           min-height: 0;
         }
         #trader-overlay {
+          overflow: hidden;
+          flex-direction: column;
           touch-action: pan-y;
         }
         .trader-footer {
@@ -4659,6 +4830,7 @@
         .death-screen-panel,
         .faction-attack-warning-panel,
         .onboarding-legend-panel,
+        .onboarding-panel,
         .trader-qty-panel {
           margin-block: 0;
         }
@@ -4810,7 +4982,6 @@
       /* APK / phone: overlay is the only scroller. */
       body.is-mobile #container-loot-overlay:not([hidden]),
       body.is-mobile #journal-overlay:not([hidden]),
-      body.is-mobile #trader-overlay:not([hidden]),
       body.is-mobile #red-order-dialog-overlay:not([hidden]),
       body.is-mobile #ashen-dialog-overlay:not([hidden]),
       body.is-mobile #ashen-militia-dialog-overlay:not([hidden]) {
@@ -4823,11 +4994,19 @@
         touch-action: pan-y;
       }
       body.is-mobile .container-loot-layout,
-      body.is-mobile .trader-layout,
       body.is-mobile .red-dialog-layout {
         margin-block: 0;
         max-height: none;
         overflow: visible;
+      }
+      body.is-mobile #trader-overlay:not([hidden]) {
+        overflow: hidden;
+        flex-direction: column;
+      }
+      body.is-mobile .trader-layout {
+        margin-block: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
     </style>
   </head>
@@ -4852,10 +5031,6 @@
     </div>
     <div id="world-clock" hidden aria-label="Time of day">
       <div id="world-clock-time"></div>
-      <div id="world-clock-debug">
-        <div id="world-clock-core"></div>
-        <div id="world-clock-air"></div>
-      </div>
     </div>
     <div id="hud"><div id="status"></div></div>
     <div id="player-hud">

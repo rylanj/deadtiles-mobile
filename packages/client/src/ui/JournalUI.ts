@@ -5,6 +5,7 @@ import {
   SUB_SKILLS_BY_PARENT,
   SUB_SKILL_LABELS,
   SUB_SKILL_BENEFIT,
+  FIELD_GUIDE_PAGES,
   canAbandonQuest,
   listTrackedJournalQuests,
   parseQuestsJson,
@@ -30,11 +31,13 @@ import { isMobileDevice } from "../device";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 
-export type JournalTab = "quests" | "skills";
+export type JournalTab = "quests" | "skills" | "guide";
 
 export type JournalUIHandlers = {
   onClose: () => void;
   onAbandonQuest: (questId: string) => void;
+  onShowControls: () => void;
+  onReplayTutorial: () => void;
 };
 
 function statusLabel(status: QuestStatus): string {
@@ -60,8 +63,15 @@ function skillBar(progress: SkillProgress, cap: number): HTMLElement {
   return wrap;
 }
 
-function skillMeta(progress: SkillProgress, cap: number): string {
-  if (progress.level >= cap) return `Lv ${progress.level} (max)`;
+function skillMeta(
+  progress: SkillProgress,
+  cap: number,
+  cappedBy?: string,
+): string {
+  if (progress.level >= cap) {
+    if (cappedBy) return `Lv ${progress.level} (Capped by ${cappedBy})`;
+    return `Lv ${progress.level} (max)`;
+  }
   const need = xpToNextLevel(progress.level);
   return `Lv ${progress.level}  ·  ${progress.xp}/${need} XP`;
 }
@@ -75,6 +85,8 @@ export class JournalUI {
   private expandedQuestId: string | null = null;
   /** Parent skill currently expanded (null = all collapsed). */
   private expandedSkillId: ParentSkillId | null = null;
+  /** Field Guide page currently expanded (null = all collapsed). */
+  private expandedGuideId: string | null = null;
   private overlay: HTMLElement;
   private hintEl: HTMLElement;
   private tabsEl: HTMLElement;
@@ -126,8 +138,13 @@ export class JournalUI {
     else this.open();
   }
 
-  open() {
-    if (this.visible) return;
+  open(tab?: JournalTab) {
+    if (tab) this.tab = tab;
+    if (this.visible) {
+      this.renderTabs();
+      this.renderBody(true);
+      return;
+    }
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("journal-open");
@@ -182,13 +199,19 @@ export class JournalUI {
       });
       return btn;
     };
-    this.tabsEl.append(makeTab("quests", "Quests"), makeTab("skills", "Skills"));
+    this.tabsEl.append(
+      makeTab("quests", "Quests"),
+      makeTab("skills", "Skills"),
+      makeTab("guide", "Field Guide"),
+    );
   }
 
   private renderBody(resetScroll = false) {
     const scrollTop = resetScroll ? 0 : this.bodyEl.scrollTop;
     this.bodyEl.replaceChildren();
-    if (this.tab === "skills") {
+    if (this.tab === "guide") {
+      this.bodyEl.appendChild(this.buildGuide());
+    } else if (this.tab === "skills") {
       this.bodyEl.appendChild(this.buildSkills(parseSkillsJson(this.skillsJson)));
     } else {
       this.bodyEl.appendChild(this.buildQuests(parseQuestsJson(this.questsJson)));
@@ -380,6 +403,68 @@ export class JournalUI {
     return section;
   }
 
+  private buildGuide(): HTMLElement {
+    const list = document.createElement("div");
+    list.className = "craft-recipe-list journal-guide-list";
+
+    const actions = document.createElement("div");
+    actions.className = "journal-guide-actions";
+    const controls = document.createElement("button");
+    controls.type = "button";
+    controls.className = "red-dialog-complete-btn";
+    controls.textContent = "Controls";
+    controls.addEventListener("click", () => this.handlers.onShowControls());
+    const replay = document.createElement("button");
+    replay.type = "button";
+    replay.className = "red-dialog-complete-btn";
+    replay.textContent = "Replay tutorial";
+    replay.addEventListener("click", () => this.handlers.onReplayTutorial());
+    actions.append(controls, replay);
+    list.appendChild(actions);
+
+    for (const page of FIELD_GUIDE_PAGES) {
+      const expanded = this.expandedGuideId === page.id;
+      const section = document.createElement("section");
+      section.className = "craft-recipe journal-guide-page";
+      if (expanded) section.classList.add("craft-recipe--expanded");
+
+      const summary = document.createElement("button");
+      summary.type = "button";
+      summary.className = "craft-recipe-summary";
+      summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+      const label = document.createElement("div");
+      label.className = "craft-recipe-summary-text";
+      const nameEl = document.createElement("span");
+      nameEl.className = "craft-recipe-summary-name";
+      nameEl.textContent = page.title;
+      label.appendChild(nameEl);
+      const chevron = document.createElement("span");
+      chevron.className = "craft-recipe-chevron";
+      chevron.setAttribute("aria-hidden", "true");
+      chevron.textContent = expanded ? "▾" : "▸";
+      summary.append(label, chevron);
+      summary.addEventListener("click", () => {
+        this.expandedGuideId = expanded ? null : page.id;
+        this.renderBody();
+      });
+      section.appendChild(summary);
+
+      if (expanded) {
+        const details = document.createElement("div");
+        details.className = "craft-recipe-details";
+        for (const text of page.paragraphs) {
+          const p = document.createElement("p");
+          p.className = "journal-quest-desc";
+          p.textContent = text;
+          details.appendChild(p);
+        }
+        section.appendChild(details);
+      }
+      list.appendChild(section);
+    }
+    return list;
+  }
+
   private buildSkills(state: PlayerSkillsState): HTMLElement {
     const list = document.createElement("div");
     list.className = "craft-recipe-list journal-skill-list";
@@ -418,7 +503,9 @@ export class JournalUI {
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
     meta.textContent = skillMeta(progress, SKILL_LEVEL_MAX);
-    label.append(nameEl, meta);
+    const bar = skillBar(progress, SKILL_LEVEL_MAX);
+    bar.classList.add("journal-skill-summary-bar");
+    label.append(nameEl, meta, bar);
     summary.appendChild(label);
 
     const chevron = document.createElement("span");
@@ -438,7 +525,6 @@ export class JournalUI {
 
     const details = document.createElement("div");
     details.className = "craft-recipe-details";
-    details.appendChild(skillBar(progress, SKILL_LEVEL_MAX));
 
     const subs = document.createElement("div");
     subs.className = "journal-skill-subs";
@@ -454,7 +540,11 @@ export class JournalUI {
       subName.textContent = SUB_SKILL_LABELS[subId];
       const subMeta = document.createElement("div");
       subMeta.className = "journal-skill-meta";
-      subMeta.textContent = skillMeta(sub, parentLevel);
+      subMeta.textContent = skillMeta(
+        sub,
+        parentLevel,
+        PARENT_SKILL_LABELS[parentId],
+      );
       subHead.append(subName, subMeta);
       row.append(subHead, skillBar(sub, parentLevel));
       for (const line of SUB_SKILL_BENEFIT[subId]) {

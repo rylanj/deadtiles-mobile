@@ -37,7 +37,6 @@ import {
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
-  fireplaceAirHeatFromOffset,
 } from "@zombie/shared";
 import {
   BUILDING_WALL_PLYWOOD_KEY,
@@ -225,7 +224,7 @@ const WATERCONTAINER_BOTTOM_PAD = Math.round(FURNITURE_RENDER_HEIGHT * 0.1);
 /** Bed1 — 10% larger than generic furniture. */
 const BED_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.1);
 /** Bed1 — lower by 10% of display height. */
-const BED_BOTTOM_PAD = Math.round(BED_RENDER_HEIGHT * 0.1);
+const BED_BOTTOM_PAD = Math.round(BED_RENDER_HEIGHT * 0.125);
 /** MilitaryBed1 — bed scale, then lower by 2.5%. */
 const MILITARYBED_BOTTOM_PAD =
   BED_BOTTOM_PAD + Math.round(BED_RENDER_HEIGHT * 0.025);
@@ -345,10 +344,9 @@ const BAGCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.8);
 /** Armchair1 — wingback, then 10% smaller. */
 const ARMCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 0.9);
 /** Sofa1: bench height so a 2-tile seat reads wide, then 10% smaller. */
-const SOFA_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 1.2 * 0.9);
-/** Sofa1: bench drop of 12.5%, then raised by 5% of display height. */
-const SOFA_BOTTOM_PAD =
-  Math.round(SOFA_RENDER_HEIGHT * 0.125) - Math.round(SOFA_RENDER_HEIGHT * 0.05);
+const SOFA_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.15);
+/** Sofa1: bench drop of 12.5%, raised by 5%, then lowered by 10% of display height. */
+const SOFA_BOTTOM_PAD = Math.round(SOFA_RENDER_HEIGHT * 0.2);
 /** CampChair1 — 20% then 20% smaller than BagChair1, then 20% larger, then 10% smaller. */
 const CAMPCHAIR_RENDER_HEIGHT = Math.round(
   BAGCHAIR_RENDER_HEIGHT * 0.8 * 0.8 * 1.2 * 0.9,
@@ -772,25 +770,6 @@ export class InteriorView {
       if (this.hearthNear(tile, tx, ty)) return true;
     }
     return false;
-  }
-
-  /** 0–1 indoor fire air heat from the strongest lit fireplace. */
-  fireplaceAirHeatAt(tx: number, ty: number, nowMs: number): number {
-    if (!this.visible) return 0;
-    let best = 0;
-    for (const tile of this.fireplaces) {
-      if (nowMs >= tile.activeUntil) continue;
-      const heat = fireplaceAirHeatFromOffset(tile.x - tx, tile.y - ty, true);
-      if (heat > best) best = heat;
-      if (best >= 1) return 1;
-    }
-    for (const tile of this.furnaceTiles.values()) {
-      if (nowMs >= tile.activeUntil) continue;
-      const heat = this.hearthHeat(tile, tx, ty);
-      if (heat > best) best = heat;
-      if (best >= 1) return 1;
-    }
-    return best;
   }
 
   /** Re-clamp every placeable sprite after walls/doors change. */
@@ -2509,21 +2488,6 @@ export class InteriorView {
     const dy =
       ty < tile.y ? tile.y - ty : ty > tile.y + tile.h - 1 ? ty - (tile.y + tile.h - 1) : 0;
     return Math.max(dx, dy) <= 1;
-  }
-
-  private hearthHeat(
-    tile: { x: number; y: number; w: number; h: number },
-    tx: number,
-    ty: number,
-  ): number {
-    let best = 0;
-    for (let y = tile.y; y < tile.y + tile.h; y++) {
-      for (let x = tile.x; x < tile.x + tile.w; x++) {
-        const heat = fireplaceAirHeatFromOffset(x - tx, y - ty, true);
-        if (heat > best) best = heat;
-      }
-    }
-    return best;
   }
 
   /** Inactive still, or a looping active sheet while wood is burning. */

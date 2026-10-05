@@ -237,6 +237,36 @@ export function pickAisleCheckSupermarket(
   return pickFrom(pool);
 }
 
+/** Rings for the starter job: close to town first so new players don't trek far. */
+const FIRST_SWEEP_PADS = [64, 128, QUEST_NEAR_PAD] as const;
+/** Pick among this many of the nearest houses so players don't all share one. */
+const FIRST_SWEEP_POOL = 5;
+
+/** One of the closest houses just outside the Birchport footprint. */
+export function pickFirstSweepHouse(
+  exclude?: QuestTargetExclude,
+): BuildingInfo | null {
+  const f = getPlayerSpawnFootprint();
+  const cx = (f.minX + f.maxX) / 2;
+  const cy = (f.minY + f.maxY) / 2;
+  for (const pad of FIRST_SWEEP_PADS) {
+    const pool = buildingsAroundBirchport(pad).filter(
+      (bld) =>
+        bld.buildingType === "house" &&
+        !isBuildingInBirchport(bld.ox, bld.oy) &&
+        notExcluded(bld, exclude),
+    );
+    if (pool.length === 0) continue;
+    pool.sort((a, b) => {
+      const ac = buildingCenter(a);
+      const bc = buildingCenter(b);
+      return Math.hypot(ac.x - cx, ac.y - cy) - Math.hypot(bc.x - cx, bc.y - cy);
+    });
+    return pickFrom(pool.slice(0, FIRST_SWEEP_POOL));
+  }
+  return null;
+}
+
 /** House outside Birchport, rural or in another settlement. */
 export function pickClarkHouse(
   exclude?: QuestTargetExclude,

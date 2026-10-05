@@ -133,6 +133,10 @@ function scheduleCoywolfPack(track: TrackFn) {
         `Coywolf1/Die/Coywolf1_Die_${dir}_${tag}.png`,
       );
     }
+    track(
+      `coywolf-skinned-${dir}`,
+      `Coywolf1/Skinned/Coywolf1_Skinned_${dir}.png`,
+    );
   }
 }
 
@@ -153,6 +157,7 @@ function scheduleCrowPack(track: TrackFn) {
         `Crow1/Die/Crow1_Die_${dir}_${tag}.png`,
       );
     }
+    track(`crow-skinned-${dir}`, `Crow1/Skinned/Crow1_Skinned_${dir}.png`);
   }
 }
 
@@ -180,6 +185,7 @@ function scheduleBearPack(track: TrackFn) {
         `Bear1/Die/Bear1_Die_${dir}_${tag}.png`,
       );
     }
+    track(`bear-skinned-${dir}`, `Bear1/Skinned/Bear1_Skinned_${dir}.png`);
   }
 }
 

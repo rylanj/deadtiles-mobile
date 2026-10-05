@@ -311,16 +311,34 @@ export function resolveCraftIngredient(
   return null;
 }
 
+function inventoryAfterCraftInputs(
+  inventory: Inventory,
+  recipe: CraftRecipe,
+  deferSlots: readonly number[],
+): Inventory | null {
+  let next = inventory;
+  for (const ing of recipe.inputs) {
+    const resolved = resolveCraftIngredient(next, ing);
+    if (!resolved) return null;
+    next = consumeCraftInput(
+      next,
+      resolved.itemId,
+      resolved.quantity,
+      deferSlots,
+    );
+  }
+  return next;
+}
+
 export function canCraftRecipe(
   inventory: Inventory,
   recipe: CraftRecipe,
   extraPockets?: number,
 ): boolean {
-  for (const ing of recipe.inputs) {
-    if (!resolveCraftIngredient(inventory, ing)) return false;
-  }
+  const next = inventoryAfterCraftInputs(inventory, recipe, []);
+  if (!next) return false;
   return canAddToInventory(
-    inventory,
+    next,
     recipe.output.itemId,
     recipe.output.quantity,
     extraPockets,
@@ -354,26 +372,29 @@ export function applyCraftRecipe(
   inventory: Inventory,
   recipe: CraftRecipe,
   deferSlots: readonly number[] = [],
+  extraPockets?: number,
 ): Inventory | null {
-  if (!canCraftRecipe(inventory, recipe)) return null;
-  let next = inventory;
-  for (const ing of recipe.inputs) {
-    const resolved = resolveCraftIngredient(next, ing);
-    if (!resolved) return null;
-    next = consumeCraftInput(
+  const next = inventoryAfterCraftInputs(inventory, recipe, deferSlots);
+  if (!next) return null;
+  if (
+    !canAddToInventory(
       next,
-      resolved.itemId,
-      resolved.quantity,
-      deferSlots,
-    );
-  }
-  if (!canAddToInventory(next, recipe.output.itemId, recipe.output.quantity)) {
+      recipe.output.itemId,
+      recipe.output.quantity,
+      extraPockets,
+    )
+  ) {
     return null;
   }
-  return addToInventory(next, recipe.output.itemId, recipe.output.quantity);
+  return addToInventory(
+    next,
+    recipe.output.itemId,
+    recipe.output.quantity,
+    extraPockets,
+  );
 }
 
-/** Parts returned when a firearm is broken down. The rest are ruined. */
+/** Parts returned when a firearm is broken down without its blueprint. The rest are ruined. */
 export const DISASSEMBLY_RETURN_COUNT = 3;
 export const DISASSEMBLY_DURATION_MS = 15_000;
 
@@ -474,6 +495,27 @@ export function getDisassemblyRecipe(
   return DISASSEMBLY_RECIPES.find((r) => r.id === recipeId);
 }
 
+/**
+ * Every part from the learned blueprint, in craft order.
+ * Null when that blueprint has not been learned.
+ */
+export function blueprintDisassemblyYield(
+  recipe: DisassemblyRecipe,
+  learnedRecipeIds: ReadonlySet<string>,
+): { id: string; quantity: number }[] | null {
+  const craft = CRAFT_RECIPES.find(
+    (entry) =>
+      !!entry.blueprintItemId && entry.output.itemId === recipe.weaponId,
+  );
+  if (!craft || !learnedRecipeIds.has(craft.id)) return null;
+  const yields: { id: string; quantity: number }[] = [];
+  for (const ing of craft.inputs) {
+    if (!isCraftItemQty(ing)) return null;
+    yields.push({ id: ing.itemId, quantity: ing.quantity });
+  }
+  return yields;
+}
+
 /** How many more of itemId fit in stacks that already hold it. */
 function stackedRoom(inventory: Inventory, itemId: string): number {
   const max = maxStackForItem(itemId);
@@ -497,18 +539,36 @@ function emptySlotsFor(
   return n;
 }
 
+function yieldFits(
+  inventory: Inventory,
+  yields: readonly { id: string; quantity: number }[],
+  extraPockets?: number,
+): boolean {
+  let next = inventory;
+  for (const part of yields) {
+    if (!canAddToInventory(next, part.id, part.quantity, extraPockets)) {
+      return false;
+    }
+    next = addToInventory(next, part.id, part.quantity, extraPockets);
+  }
+  return true;
+}
+
 /**
- * True when the player has the gun and any 3 of its parts will fit
- * after the gun is removed.
+ * True when the player has the gun and the parts will fit after it is removed.
+ * A learned blueprint needs room for every part. Otherwise any 3 parts must fit.
  */
 export function canDisassemble(
   inventory: Inventory,
   recipe: DisassemblyRecipe,
   deferSlots: readonly number[] = [],
   extraPockets?: number,
+  learnedRecipeIds: ReadonlySet<string> = new Set(),
 ): boolean {
   if (countItemInInventory(inventory, recipe.weaponId) < 1) return false;
   const next = consumeCraftInput(inventory, recipe.weaponId, 1, deferSlots);
+  const full = blueprintDisassemblyYield(recipe, learnedRecipeIds);
+  if (full) return yieldFits(next, full, extraPockets);
   const needsSlot = recipe.parts.filter((id) => stackedRoom(next, id) < 1);
   const slotsNeeded = Math.min(recipe.returnCount, needsSlot.length);
   if (slotsNeeded === 0) return true;
@@ -537,7 +597,8 @@ export type DisassemblyResult = {
 };
 
 /**
- * Destroy one gun and add a random subset of its parts.
+ * Destroy one gun and return parts.
+ * A learned blueprint returns every craft part. Otherwise a random subset.
  * A gun in the pockets is taken before one on the hotbar.
  * Returns null when the gun is missing or the parts will not fit.
  */
@@ -546,14 +607,37 @@ export function applyDisassembly(
   recipe: DisassemblyRecipe,
   rng: () => number = Math.random,
   deferSlots: readonly number[] = [],
+  learnedRecipeIds: ReadonlySet<string> = new Set(),
+  extraPockets?: number,
 ): DisassemblyResult | null {
-  if (!canDisassemble(inventory, recipe, deferSlots)) return null;
-  const picked = pickDistinctParts(recipe.parts, recipe.returnCount, rng);
+  if (
+    !canDisassemble(
+      inventory,
+      recipe,
+      deferSlots,
+      extraPockets,
+      learnedRecipeIds,
+    )
+  ) {
+    return null;
+  }
+  const full = blueprintDisassemblyYield(recipe, learnedRecipeIds);
   let next = consumeCraftInput(inventory, recipe.weaponId, 1, deferSlots);
   const salvaged: { id: string; quantity: number }[] = [];
+  if (full) {
+    for (const part of full) {
+      if (!canAddToInventory(next, part.id, part.quantity, extraPockets)) {
+        return null;
+      }
+      next = addToInventory(next, part.id, part.quantity, extraPockets);
+      salvaged.push({ id: part.id, quantity: part.quantity });
+    }
+    return { inventory: next, salvaged, ruined: [] };
+  }
+  const picked = pickDistinctParts(recipe.parts, recipe.returnCount, rng);
   for (const id of picked) {
-    if (!canAddToInventory(next, id, 1)) return null;
-    next = addToInventory(next, id, 1);
+    if (!canAddToInventory(next, id, 1, extraPockets)) return null;
+    next = addToInventory(next, id, 1, extraPockets);
     salvaged.push({ id, quantity: 1 });
   }
   const kept = new Set(picked);

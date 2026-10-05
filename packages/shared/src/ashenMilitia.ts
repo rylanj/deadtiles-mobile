@@ -456,7 +456,26 @@ export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
+/**
+ * One-shot starter job: clear a house just outside Birchport.
+ * Davis lends a worn hammer on accept and takes it back on turn-in.
+ */
+export const ASHEN_MILITIA_FIRST_SWEEP_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_first_sweep",
+  dialogLineId: "jobs",
+  rewardBanknotes: 60,
+  rewardReputation: 150,
+  label: "First Sweep",
+  displayItemId: "weapon_hammer",
+};
+
+/** Davis's loaner hammer for First Sweep. */
+export const FIRST_SWEEP_LOANER_ITEM_ID = "weapon_hammer";
+/** Loaner durability as a fraction of the hammer's max. */
+export const FIRST_SWEEP_LOANER_DURABILITY_FRACTION = 0.1;
+
 export const ASHEN_MILITIA_CAPTAIN_TASKS: readonly AshenMilitiaTask[] = [
+  ASHEN_MILITIA_FIRST_SWEEP_TASK,
   ASHEN_MILITIA_AMMO_TASK,
   ASHEN_MILITIA_POCKET_ROUNDS_TASK,
   ASHEN_MILITIA_CIGARETTES_TASK,
@@ -759,10 +778,9 @@ export function canTalkWithAshenMilitia(reputation: number): boolean {
   return canTradeWithAshen(reputation);
 }
 
-/** Friendly or Allied may use the Birchport barracks bargate. */
+/** Anyone the militia will still talk to may use the Birchport barracks bargate. */
 export function canEnterBirchportBarracks(reputation: number): boolean {
-  const standing = ashenMilitiaStanding(reputation);
-  return standing === "friendly" || standing === "allied";
+  return canTalkWithAshenMilitia(reputation);
 }
 
 export function dropAshenMilitiaReputationLevel(reputation: number): number {

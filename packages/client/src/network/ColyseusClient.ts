@@ -722,7 +722,11 @@ export type SkillSyncEvent = {
 /** Learned weapon recipes. Owner-only, same channel style as skills. */
 export type BlueprintSyncEvent = {
   type: "blueprintSync";
-  payload: { learnedBlueprintsJson: string };
+  payload: {
+    learnedBlueprintsJson: string;
+    /** Set only when this sync is a blueprint the player just finished reading. */
+    weaponId?: string;
+  };
 };
 
 export type CraftOpenEvent = {

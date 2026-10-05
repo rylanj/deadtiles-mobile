@@ -123,6 +123,8 @@ export type InventoryEntry = {
    * 3-3000 = player nets. Missing = untuned.
    */
   radioFreq?: number;
+  /** Lent by a quest giver and taken back when that job is turned in. */
+  loaner?: boolean;
   /**
    * Items sealed inside a backpack that is not being worn.
    * While the pack is worn, those items live in the backpack storage slots
@@ -174,6 +176,7 @@ export function withNormalizedItemMeta(entry: InventoryEntry): InventoryEntry {
   }
   const freq = normalizeRadioFreq(entry.radioFreq);
   if (freq != null) next.radioFreq = freq;
+  if (entry.loaner === true) next.loaner = true;
   return next;
 }
 /** One inventory cell — null when empty. */
@@ -988,7 +991,13 @@ export function setEntryWetness(entry: InventoryEntry, wetness: number): void {
 
 export type InventoryEntryMeta = Pick<
   InventoryEntry,
-  "rarity" | "condition" | "durability" | "wetness" | "radioFreq" | "contents"
+  | "rarity"
+  | "condition"
+  | "durability"
+  | "wetness"
+  | "radioFreq"
+  | "contents"
+  | "loaner"
 >;
 
 export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
@@ -1001,6 +1010,7 @@ export function inventoryEntryMeta(entry: InventoryEntry): InventoryEntryMeta {
   if (wet > 0) meta.wetness = wet;
   const freq = getEntryRadioFreq(entry);
   if (freq > 0) meta.radioFreq = freq;
+  if (entry.loaner === true) meta.loaner = true;
   if (entry.contents?.length) meta.contents = entry.contents;
   return meta;
 }
@@ -1254,7 +1264,8 @@ export function itemFitsInSlot(
   if (isRadioSlot(slotIndex)) return isRadioItem(itemId);
   if (isMapSlot(slotIndex)) return isMapItem(itemId);
   if (isBackpackSlot(slotIndex)) return isBackpackItem(itemId);
-  if (isHotbarOnlyItem(itemId)) return false;
+  // Long guns skip pockets. A worn backpack can still carry one.
+  if (isHotbarOnlyItem(itemId)) return isBackpackStorageIndex(slotIndex);
   return true;
 }
 
@@ -1772,6 +1783,33 @@ export function addToInventory(
   return next;
 }
 
+/** Put one prepared entry in the first slot it fits. Null when there is no room. */
+export function addEntryToInventory(
+  inventory: Inventory,
+  entry: InventoryEntry,
+  extraPockets?: number,
+): Inventory | null {
+  if (!getItemDefinition(entry.id)) return null;
+  const access = inventorySlotAccess(inventory, extraPockets);
+  for (let i = 0; i < inventory.length; i++) {
+    if (inventory[i] || !itemFitsInSlot(entry.id, i, access)) continue;
+    const next = cloneInventory(inventory);
+    next[i] = entry;
+    return next;
+  }
+  return null;
+}
+
+/** Slot indices holding a quest loaner of `itemId`. */
+export function loanerSlotIndices(inventory: Inventory, itemId: string): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < inventory.length; i++) {
+    const slot = inventory[i];
+    if (slot?.id === itemId && slot.loaner === true) out.push(i);
+  }
+  return out;
+}
+
 export function getAmmoTypeForWeapon(weaponId: string): string | null {
   switch (weaponId) {
     case "weapon_pistol":
@@ -1904,6 +1942,7 @@ export function makeInventoryEntry(
     const freq = normalizeRadioFreq(meta?.radioFreq);
     if (freq != null) entry.radioFreq = freq;
   }
+  if (meta?.loaner === true && maxDur != null) entry.loaner = true;
   if (isBackpackItem(itemId) && depth < PACK_CONTENTS_MAX_DEPTH) {
     const packed = normalizePackContents(meta?.contents, depth);
     if (packed) entry.contents = packed;
@@ -3325,6 +3364,7 @@ export function serializeInventory(inventory: Inventory) {
     if (wet > 0) serialized.wetness = wet;
     const freq = getEntryRadioFreq(slot);
     if (freq > 0) serialized.radioFreq = freq;
+    if (slot.loaner === true && maxDur != null) serialized.loaner = true;
     // Worn storage is the live copy. Sealed contents belong on every other pack.
     if (isBackpackItem(slot.id)) {
       const wornOpen =

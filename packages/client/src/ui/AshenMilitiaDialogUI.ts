@@ -21,6 +21,8 @@ import {
   inventoryAfterTurnIn,
   isMilitiaCaptainSkin,
   isMilitiaDoctorSkin,
+  QUEST_ID_FIRST_SWEEP,
+  davisPostsOnlyFirstSweep,
   isQuestActive,
   isQuestListed,
   militiaGuardArtSkin,
@@ -119,6 +121,7 @@ export class AshenMilitiaDialogUI {
   /** Completions used in the current rolling window, keyed by task id. */
   private taskCompletions: Record<string, number> = {};
   private questsJson = "";
+  private tutorialDone = false;
   private doctorHealCost = ASHEN_MILITIA_DOCTOR_HEAL_COST;
   private activeLineId: string | null = null;
   /** Task id currently expanded on the jobs reply (null = all collapsed). */
@@ -252,6 +255,7 @@ export class AshenMilitiaDialogUI {
     playerInfected?: boolean;
     taskCompletionsJson?: string;
     questsJson?: string;
+    tutorialDone?: boolean;
     doctorHealCost?: number;
     extraPockets?: number;
   }) {
@@ -284,6 +288,7 @@ export class AshenMilitiaDialogUI {
     this.playerInfected = !!opts.playerInfected;
     this.taskCompletions = this.parseTaskCompletions(opts.taskCompletionsJson);
     this.questsJson = opts.questsJson ?? "";
+    this.tutorialDone = opts.tutorialDone === true;
     this.doctorHealCost =
       typeof opts.doctorHealCost === "number" && opts.doctorHealCost > 0
         ? Math.round(opts.doctorHealCost)
@@ -305,6 +310,7 @@ export class AshenMilitiaDialogUI {
     playerInfected?: boolean;
     taskCompletionsJson?: string;
     questsJson?: string;
+    tutorialDone?: boolean;
     extraPockets?: number;
   }) {
     if (opts.inventoryJson != null) this.inventoryJson = opts.inventoryJson;
@@ -320,6 +326,7 @@ export class AshenMilitiaDialogUI {
       this.taskCompletions = this.parseTaskCompletions(opts.taskCompletionsJson);
     }
     if (opts.questsJson != null) this.questsJson = opts.questsJson;
+    if (opts.tutorialDone != null) this.tutorialDone = opts.tutorialDone;
     if (this.visible) this.render();
   }
 
@@ -336,6 +343,7 @@ export class AshenMilitiaDialogUI {
     this.playerInfected = false;
     this.taskCompletions = {};
     this.questsJson = "";
+    this.tutorialDone = false;
   }
 
   private parseTaskCompletions(json: string | undefined): Record<string, number> {
@@ -417,14 +425,21 @@ export class AshenMilitiaDialogUI {
             guardLine.npcInterior
           ? guardLine.npcInterior
           : active.npc;
-    reply.textContent = pickDialogVariant(
-      variants,
-      `${this.npcId}|${active.id}|${this.inInterior ? "in" : "out"}|${
-        this.isDoctor && active.id === "heal"
-          ? `${Math.floor(this.playerHealth)}|${this.playerInfected ? 1 : 0}`
-          : ""
-      }`,
-    );
+    const questsForReply = parseQuestsJson(this.questsJson);
+    const firstSweepOnly =
+      this.isCaptain &&
+      active.id === "jobs" &&
+      davisPostsOnlyFirstSweep(questsForReply, this.tutorialDone);
+    reply.textContent = firstSweepOnly
+      ? "One job for now. A house just outside town. Clear it, bring the hammer back, and then the rest of the board is yours."
+      : pickDialogVariant(
+          variants,
+          `${this.npcId}|${active.id}|${this.inInterior ? "in" : "out"}|${
+            this.isDoctor && active.id === "heal"
+              ? `${Math.floor(this.playerHealth)}|${this.playerInfected ? 1 : 0}`
+              : ""
+          }`,
+        );
     this.responseEl.appendChild(reply);
 
     if (this.isDoctor && active.id === "heal") {
@@ -447,6 +462,13 @@ export class AshenMilitiaDialogUI {
       for (const task of tasks) {
         const def = getQuestDefinition(task.id);
         if (def && !isQuestListed(quests, def)) continue;
+        if (
+          firstSweepOnly &&
+          task.id !== QUEST_ID_FIRST_SWEEP &&
+          !isQuestActive(quests, task.id)
+        ) {
+          continue;
+        }
         list.appendChild(this.buildTaskSection(task));
       }
       if (list.childElementCount > 0) this.responseEl.appendChild(list);

@@ -26,9 +26,9 @@ function resetNestedScroll(root: HTMLElement) {
  */
 export function resetDialogScroll(root: HTMLElement) {
   const apply = () => {
-    // Onboarding sits on the bottom edge. Do not re-pin it to the top.
+    // Trade keeps its own height and scrolls the item lists, so never pin it.
     const canRecenter =
-      root.id !== "onboarding-overlay" && root.id !== "onboarding-controls-legend";
+      root.id !== "onboarding-controls-legend" && root.id !== "trader-overlay";
     if (canRecenter) root.classList.remove(OVERFLOW_CLASS);
     resetNestedScroll(root);
 

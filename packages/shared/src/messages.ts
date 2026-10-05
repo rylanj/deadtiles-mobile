@@ -338,9 +338,20 @@ export type RadioSetChannelMessage = {
 /** Mark a tutorial step complete (or skip all when done=true / mark seen). */
 export type TutorialCompleteStepMessage = {
   stepId?: string;
+  /** One-time tip the player has now seen. */
+  tipId?: string;
   done?: boolean;
-  /** Coach was shown once — do not auto-open again on reconnect. */
+  /** Legacy: coach was shown once. */
   seen?: boolean;
+  /** Replay from the Journal: clear steps and start over. */
+  reset?: boolean;
+  tipsOff?: boolean;
+  minimized?: boolean;
+};
+
+/** Server to owner: gameplay moments the client can't see on its own. */
+export type TutorialEventMessage = {
+  event: "zombieKill" | "weaponBroke" | "theftWarning";
 };
 
 /** Place a ghost prefab (no collision until built). */
@@ -877,12 +888,18 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     }
     case "tutorialCompleteStep": {
       if (p.stepId !== undefined && !isIdString(p.stepId)) return null;
-      if (p.done !== undefined && typeof p.done !== "boolean") return null;
-      if (p.seen !== undefined && typeof p.seen !== "boolean") return null;
+      if (p.tipId !== undefined && !isIdString(p.tipId)) return null;
+      for (const key of ["done", "seen", "reset", "tipsOff", "minimized"] as const) {
+        if (p[key] !== undefined && typeof p[key] !== "boolean") return null;
+      }
       if (
         p.stepId === undefined &&
+        p.tipId === undefined &&
         p.done !== true &&
-        p.seen !== true
+        p.seen !== true &&
+        p.reset !== true &&
+        p.tipsOff === undefined &&
+        p.minimized === undefined
       ) {
         return null;
       }
@@ -890,8 +907,12 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
         type,
         payload: {
           stepId: typeof p.stepId === "string" ? p.stepId : undefined,
+          tipId: typeof p.tipId === "string" ? p.tipId : undefined,
           done: p.done === true ? true : undefined,
           seen: p.seen === true ? true : undefined,
+          reset: p.reset === true ? true : undefined,
+          tipsOff: typeof p.tipsOff === "boolean" ? p.tipsOff : undefined,
+          minimized: typeof p.minimized === "boolean" ? p.minimized : undefined,
         },
       };
     }
@@ -1111,7 +1132,7 @@ export type ServerMessage =
       };
     }
   | {
-      /** Birchport barracks bargate opening for a Friendly+ crossing. */
+      /** Birchport barracks bargate opening for a player crossing. */
       type: "bargateOpen";
       payload: {
         x: number;
@@ -1223,7 +1244,11 @@ export type ServerMessage =
     }
   | {
       type: "blueprintSync";
-      payload: { learnedBlueprintsJson: string };
+      payload: {
+        learnedBlueprintsJson: string;
+        /** Set only when this sync is a blueprint the player just finished reading. */
+        weaponId?: string;
+      };
     }
   | {
       type: "worldClockSync";

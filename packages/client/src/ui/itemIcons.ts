@@ -8,12 +8,12 @@ import {
 
 const ITEM_ICON_PATHS: Record<string, string> = {
   weapon_pistol: "/assets/UI/UI_Pistol.png",
-  blueprint_pistol: "/assets/UI/UI_Pistol.png",
-  blueprint_revolver: "/assets/UI/UI_Revolver.png",
-  blueprint_shotgun: "/assets/UI/UI_Shotgun.png",
-  blueprint_hunting_rifle: "/assets/UI/UI_HuntingRifle.png",
-  blueprint_ak: "/assets/UI/UI_AK.png",
-  blueprint_m4: "/assets/UI/UI_M4A1.png",
+  blueprint_pistol: "/assets/UI/UI_blueprint_pistol.png",
+  blueprint_revolver: "/assets/UI/UI_blueprint_revolver.png",
+  blueprint_shotgun: "/assets/UI/UI_blueprint_shotgun.png",
+  blueprint_hunting_rifle: "/assets/UI/UI_blueprint_hunting_rifle.png",
+  blueprint_ak: "/assets/UI/UI_blueprint_AK.png",
+  blueprint_m4: "/assets/UI/UI_blueprint_M4.png",
   pistol_frame: "/assets/UI/UI_PistolFrame.png",
   pistol_slide: "/assets/UI/UI_PistolSlide.png",
   small_spring: "/assets/UI/UI_SmallSpring.png",

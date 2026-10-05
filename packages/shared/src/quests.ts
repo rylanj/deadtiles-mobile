@@ -14,6 +14,7 @@ import {
   ASHEN_MILITIA_DOCTOR_NAME,
   ASHEN_MILITIA_DONT_FEED_THEM_TASK,
   ASHEN_MILITIA_DONT_HOCK_THEM_TASK,
+  ASHEN_MILITIA_FIRST_SWEEP_TASK,
   ASHEN_MILITIA_HOT_PLATE_TASK,
   ASHEN_MILITIA_LIGHTER_TASK,
   ASHEN_MILITIA_MEDICAL_TASK,
@@ -332,6 +333,33 @@ export const QUEST_ID_DONT_HOCK_THEM = ASHEN_MILITIA_DONT_HOCK_THEM_TASK.id;
 /** Completes when the anniversary earrings are in the player's inventory. */
 export const QUEST_DONT_HOCK_FIND_OBJECTIVE = "find_earrings";
 export const QUEST_ID_FLOOR_SPACE = RED_ORDER_FLOOR_SPACE_TASK.id;
+export const QUEST_ID_FIRST_SWEEP = ASHEN_MILITIA_FIRST_SWEEP_TASK.id;
+
+export const QUEST_FIRST_SWEEP: QuestDefinition = {
+  id: QUEST_ID_FIRST_SWEEP,
+  title: ASHEN_MILITIA_FIRST_SWEEP_TASK.label,
+  description:
+    "Davis wants a house just outside Birchport cleared so patrols can use it. Accept the job and he lends you a worn hammer. Clear every walker inside, then report back. He takes the hammer back when you do.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  objectives: [
+    {
+      id: "clear_house",
+      kind: "clearBuilding",
+      label: "Clear walkers from the marked house",
+      buildingType: "house",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_FIRST_SWEEP_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_FIRST_SWEEP_TASK.rewardReputation,
+    },
+  ],
+};
 
 export const QUEST_QUIET_STRETCH: QuestDefinition = {
   id: QUEST_ID_QUIET_STRETCH,
@@ -655,6 +683,7 @@ export const QUEST_MELT_POT: QuestDefinition = questFromMilitiaTask(
 );
 
 export const QUEST_REGISTRY: readonly QuestDefinition[] = [
+  QUEST_FIRST_SWEEP,
   QUEST_ASHEN_PATROL_DOGTAGS,
   QUEST_CUT_CLOTH,
   QUEST_MELT_POT,
@@ -900,6 +929,23 @@ export function questCompletionsRemaining(
   const windowMs = def.completionWindowMs ?? ASHEN_MILITIA_TASK_WINDOW_MS;
   const recent = taskCompletionsInWindow(state, def.id, windowMs, now).length;
   return Math.max(0, max - recent);
+}
+
+/**
+ * While the tutorial is still running, Davis posts First Sweep and nothing else.
+ * Turning that job in, or ending the tutorial, opens the rest of his board.
+ * Jobs already accepted stay listed so they can be turned in.
+ */
+export function davisPostsOnlyFirstSweep(
+  state: PlayerQuestsState,
+  tutorialDone: boolean,
+): boolean {
+  if (tutorialDone) return false;
+  const prev = state.quests[QUEST_ID_FIRST_SWEEP];
+  if (prev?.status === "completed" || (prev?.timesCompleted ?? 0) > 0) {
+    return false;
+  }
+  return true;
 }
 
 export function canAcceptQuest(
@@ -1413,56 +1459,3 @@ export function recordTaskCompletion(
 }
 
 export const EMPTY_QUESTS_JSON = serializeQuestsJson(createEmptyQuestsState());
-
-export type TutorialFlagsState = {
-  done?: boolean;
-  /** True after the coach was shown once — never auto-open again on reconnect. */
-  seen?: boolean;
-  steps?: Record<string, boolean>;
-};
-
-export function createEmptyTutorialFlags(): TutorialFlagsState {
-  return { done: false, seen: false, steps: {} };
-}
-
-export function parseTutorialFlagsJson(
-  json: string | null | undefined,
-): TutorialFlagsState {
-  if (!json || typeof json !== "string" || json.length === 0) {
-    return createEmptyTutorialFlags();
-  }
-  try {
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return createEmptyTutorialFlags();
-    }
-    const obj = parsed as Record<string, unknown>;
-    const steps: Record<string, boolean> = {};
-    if (obj.steps && typeof obj.steps === "object") {
-      for (const [k, v] of Object.entries(obj.steps as Record<string, unknown>)) {
-        steps[k] = v === true;
-      }
-    }
-    return {
-      done: obj.done === true,
-      seen: obj.seen === true,
-      steps,
-    };
-  } catch {
-    return createEmptyTutorialFlags();
-  }
-}
-
-export function serializeTutorialFlagsJson(
-  state: TutorialFlagsState,
-): string {
-  return JSON.stringify({
-    done: state.done === true,
-    seen: state.seen === true || state.done === true,
-    steps: state.steps ?? {},
-  });
-}
-
-export const EMPTY_TUTORIAL_FLAGS_JSON = serializeTutorialFlagsJson(
-  createEmptyTutorialFlags(),
-);

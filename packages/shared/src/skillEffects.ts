@@ -82,49 +82,27 @@ export const SKILL_XP = {
   readMagazineBonus: 250,
   /** Reading XP from finishing a crafting recipe. */
   readCraft: 12,
+  /** Reading XP from learning a weapon blueprint. */
+  readBlueprint: 200,
 } as const;
 
 export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
-  melee: ["Melee damage increases from 100% to 120%."],
-  harvesting: ["Trees fall in fewer swings, from 10 down to 6."],
-  carrying: ["Max carry weight increases from 16kg to 32kg."],
-  construction: [
-    "Building and deconstructing take less time, from 30 seconds down to 20 seconds.",
-    "Hammer wear falls from 10 down to 5.",
-    "Materials refunded increase from 50% to 100%.",
-  ],
-  fitness: ["Stamina increases from 50 to 100."],
-  immunity: [
-    "A bite's infection chance falls from 10% to 2.5%.",
-    "Infection rises slower, from 1 point per minute to 0.5.",
-  ],
-  recovery: [
-    "Hunger and thirst drain slower, from 100% down to 75%.",
-    "Bandage healing and fireplace warmth increase from 100% to 150%.",
-  ],
-  accuracy: ["Aim cone shrinks from 100% down to 50%."],
-  crafting: ["Recipe time decreases from 10 seconds to 5 seconds."],
-  scavenging: ["Searches finish faster, from 5 seconds down to 3 seconds."],
-  stealth: ["Zombies notice you from closer, from 12 tiles down to 8 tiles."],
-  cooking: [
-    "Food and drink restore more hunger and thirst, from 100% to 120%.",
-  ],
-  medicine: [
-    "Health from medicine increases from 100% to 120%.",
-    "Antibiotics last up to twice as long.",
-  ],
-  reading: [
-    "Skill magazine XP increases from 100% to 150%.",
-    "Reading a magazine takes less time, from 30 seconds down to 20 seconds.",
-    "Gain Reading XP from crafting recipes and skill magazines.",
-  ],
-  bartering: [
-    "Buy and sell prices improve by up to 10%, on top of reputation.",
-  ],
-  persuasion: [
-    "Quest banknotes increase from 100% to 150%.",
-    "Quest reputation increases from 100% to 150%.",
-  ],
+  melee: ["Increases melee damage"],
+  harvesting: ["Trees fall in fewer swings"],
+  carrying: ["Maximum carry weight increases"],
+  construction: ["Building takes less time, tools wear less, and more materials are refunded"],
+  fitness: ["Maximum stamina increases"],
+  immunity: ["Infection chance reduces and infection rises slower"],
+  recovery: ["Hunger and thirst drain slower and healing effects increase"],
+  accuracy: ["Bullet spread reduces"],
+  crafting: ["Crafting time reduces"],
+  scavenging: ["Searching time reduces"],
+  stealth: ["Zombies do not notice you as easily"],
+  cooking: ["Food and drink restore more"],
+  medicine: ["Medicine is more effective and lasts longer"],
+  reading: ["Magazine XP increases and reading time reduces"],
+  bartering: ["Buy and sell prices improve"],
+  persuasion: ["Rewards from quests increase"],
 };
 
 export type PlayerSkillMods = {

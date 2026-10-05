@@ -79,6 +79,9 @@ export const STAMINA_REGEN_DELAY_MS = 10_000;
 /** Hunger drains 0.5 per minute; thirst drains 1 per minute. */
 export const HUNGER_MAX = 100;
 export const THIRST_MAX = 100;
+/** A brand-new survivor wakes half hungry and half thirsty, so the tutorial meal matters. */
+export const NEW_PLAYER_HUNGER = HUNGER_MAX * 0.5;
+export const NEW_PLAYER_THIRST = THIRST_MAX * 0.5;
 export const HUNGER_DRAIN_PER_SEC = 0.5 / 60;
 export const THIRST_DRAIN_PER_SEC = 1 / 60;
 /** Health lost per second while hunger is empty. */
@@ -239,13 +242,13 @@ export const ASHEN_MARKET_DOOR_LINES = [
   "Your kind isn't coming in. We don't want you inside.",
   "Turn around. We don't do business with your kind.",
 ] as const;
-/** Bargate1_Active frames when a Friendly+ player uses the barracks gate. */
+/** Bargate1_Active frames when a player the militia will talk to uses the barracks gate. */
 export const BARRACKS_BARGATE_ACTIVE_FRAMES = 5;
 /** Ms per Active frame before the last pose is held. */
 export const BARRACKS_BARGATE_FRAME_MS = 80;
 /** After the last Active frame, wait this long before returning to Idle. */
 export const BARRACKS_BARGATE_HOLD_MS = 3_000;
-/** Total time the barracks bargate stays walkable after a Friendly+ open. */
+/** Total time the barracks bargate stays walkable after a player opens it. */
 export const BARRACKS_BARGATE_OPEN_MS =
   (BARRACKS_BARGATE_ACTIVE_FRAMES - 1) * BARRACKS_BARGATE_FRAME_MS +
   BARRACKS_BARGATE_HOLD_MS;

@@ -36,6 +36,7 @@ import {
   interiorWallOccupiesTile,
   isInteriorExitTile,
   isBirchportWeaponEquipRestricted,
+  BIRCHPORT_WEAPON_EQUIP_DENIED,
   roomAtInteriorDoor,
   roomDoorApproachGoal,
   searchableFootprint,
@@ -69,9 +70,15 @@ import {
   RADIO_SLOT_INDEX,
   clothingSkinFromItemId,
   isClothingItem,
+  getEntryWetness,
+  isRawMeat,
+  isInBirchport,
+  isMilitiaCaptainSkin,
+  QUEST_ID_FIRST_SWEEP,
   isWatchItem,
   isMapItem,
   isRadioItem,
+  isSkillMagazine,
   getEntryRadioFreq,
   TICK_MS,
   zombieSpeedAtTime,
@@ -191,9 +198,7 @@ import {
   worldChainlinkOccupiesTile,
   fireplaceIsActive,
   temperatureHudLook,
-  ambientAirTemperatureC,
   buildingInteriorIsPowered,
-  fireplaceAirHeatFromOffset,
   isStorageBoxKind,
   TEMPERATURE_CORE_DEFAULT,
   countStandingTreesNear,
@@ -343,7 +348,7 @@ import {
   type FireplaceAudioSource,
   type GunshotSource,
 } from "../audio/AudioManager";
-import { OnboardingUI } from "../ui/OnboardingUI";
+import { OnboardingUI, type FirstSweepState } from "../ui/OnboardingUI";
 import { EntityActionLabelManager } from "../ui/EntityActionLabel";
 import {
   MapOverlayUI,
@@ -352,7 +357,13 @@ import {
 } from "../ui/MapOverlayUI";
 import { getItemIconPath } from "../ui/itemIcons";
 import { playerAvatarSrc } from "../ui/playerAvatar";
-import type { OnboardingStepId } from "@zombie/shared";
+import type {
+  OnboardingStepId,
+  PlayerQuestsState,
+  TutorialCompleteStepMessage,
+  TutorialEventMessage,
+  TutorialTipId,
+} from "@zombie/shared";
 import { PlayerOcclusionHighlight } from "../sprites/PlayerOcclusionHighlight";
 import { PlayerOccludedGhost } from "../sprites/PlayerOccludedGhost";
 import {
@@ -444,9 +455,6 @@ const ZOMBIE_RENDER_LERP = 0.35;
 const MAX_FRAME_DELTA_MS = TICK_MS;
 /** Tiles around an entity searched for placed walls when resolving depth. */
 const OVERWORLD_STRUCTURE_DEPTH_REACH = 3;
-/** How often the "Air x°C" readout is recomputed (it is shown to 0.1 °C). */
-const AIR_READ_REFRESH_MS = 250;
-
 type BloodConfig = {
   count: number;
   speed: { min: number; max: number };
@@ -805,8 +813,6 @@ export class WorldScene extends Phaser.Scene {
   private infectionFxEl?: HTMLElement;
   private worldClockEl?: HTMLElement;
   private worldClockTimeEl?: HTMLElement;
-  private worldClockCoreEl?: HTMLElement;
-  private worldClockAirEl?: HTMLElement;
   private consumeActionLabel = "Eating";
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private shiftKey?: Phaser.Input.Keyboard.Key;
@@ -939,6 +945,11 @@ export class WorldScene extends Phaser.Scene {
   private factionAttackWarningUI?: FactionAttackWarningUI;
   private deathScreenUI?: DeathScreenUI;
   private onboardingUI?: OnboardingUI;
+  private tutorialVitals: { hunger: number; thirst: number } | null = null;
+  private tutorialSawDeath = false;
+  private lastTutorialWatchAt = 0;
+  /** Last weather sample, so the rain tip fires when rain begins. */
+  private tutorialPrecip: string | null = null;
   /**
    * Factions already warned this session — skip the attack popup next time.
    * Keys: "ashen" | "ashenMilitia" | "redOrder".
@@ -988,17 +999,13 @@ export class WorldScene extends Phaser.Scene {
     tempFx: "",
     infectionFx: "",
   };
-  /** Last strings pushed to the world clock (time / core / air readouts). */
+  /** Last strings pushed to the world clock. */
   private lastWorldClock = {
     time: "",
     phase: "",
-    core: "",
-    air: "",
     clockHidden: null as boolean | null,
     timeHidden: null as boolean | null,
   };
-  /** Next time (ms) the air readout is recomputed. */
-  private nextAirReadAt = 0;
   private lastQuestUiKey = "";
   /**
    * Quests and skills are owner-only: the server pushes them over questSync /
@@ -1846,8 +1853,6 @@ export class WorldScene extends Phaser.Scene {
     this.infectionFxEl = document.getElementById("infection-fx") ?? undefined;
     this.worldClockEl = document.getElementById("world-clock") ?? undefined;
     this.worldClockTimeEl = document.getElementById("world-clock-time") ?? undefined;
-    this.worldClockCoreEl = document.getElementById("world-clock-core") ?? undefined;
-    this.worldClockAirEl = document.getElementById("world-clock-air") ?? undefined;
 
     this.tileManager = drawProceduralWorld(this, this.worldBounds);
     setOverworldStructureFootprintProvider((tx, ty) =>
@@ -1886,6 +1891,11 @@ export class WorldScene extends Phaser.Scene {
     this.journalUI = new JournalUI({
       onClose: () => this.journalUI?.close(),
       onAbandonQuest: (questId) => this.sendQuestAbandon(questId),
+      onShowControls: () => this.onboardingUI?.openLegend(),
+      onReplayTutorial: () => {
+        this.journalUI?.close();
+        this.onboardingUI?.replay();
+      },
     });
     this.containerLootUI = new ContainerLootUI({
       onTakeFromContainer: (containerId, fromSlot, toSlot) =>
@@ -1969,9 +1979,7 @@ export class WorldScene extends Phaser.Scene {
       onRespawn: () => this.requestRespawn(),
     });
     this.onboardingUI = new OnboardingUI({
-      onCompleteStep: (stepId) => this.sendTutorialStep(stepId),
-      onSkipAll: () => this.sendTutorialDone(),
-      onSeen: () => this.sendTutorialSeen(),
+      send: (payload) => this.sendTutorialUpdate(payload),
     });
     this.doorCodeUI = new DoorCodeUI({
       onSubmitEnterCode: (code) => {
@@ -2299,7 +2307,14 @@ export class WorldScene extends Phaser.Scene {
       room.onMessage("tutorialSync", (msg: { flagsJson?: string }) => {
         if (typeof msg?.flagsJson === "string") {
           this.onboardingUI?.applyFlagsJson(msg.flagsJson);
+          this.syncAshenMilitiaDialogState();
         }
+      });
+
+      room.onMessage("tutorialEvent", (msg: TutorialEventMessage) => {
+        if (msg?.event === "zombieKill") this.notifyTutorial("kill_zombie");
+        else if (msg?.event === "weaponBroke") this.notifyTip("weapon_broke");
+        else if (msg?.event === "theftWarning") this.notifyTip("theft_warning");
       });
 
       room.onMessage("event", (msg: ServerEvent) => {
@@ -2361,9 +2376,10 @@ export class WorldScene extends Phaser.Scene {
             const ruined = (msg.payload.ruined ?? [])
               .map((part) => part.name)
               .filter((name) => name.length > 0);
+            const count = msg.payload.salvaged.length;
             const header = ruined.length
-              ? `You salvaged 3 parts. Ruined: ${ruined.join(", ")}.`
-              : "You salvaged:";
+              ? `You salvaged ${count} ${count === 1 ? "part" : "parts"}. Ruined: ${ruined.join(", ")}.`
+              : "You recovered every part.";
             this.lootPopup?.show(msg.payload.salvaged, { header });
           } else if (msg.payload.crafted) {
             this.lootPopup?.show([msg.payload.crafted], { header: "You made:" });
@@ -2400,6 +2416,19 @@ export class WorldScene extends Phaser.Scene {
           this.applySkillSync(msg.payload.skillsJson);
         } else if (msg.type === "blueprintSync") {
           this.applyBlueprintSync(msg.payload.learnedBlueprintsJson);
+          if (msg.payload.weaponId) {
+            this.lootPopup?.show(
+              [
+                {
+                  id: msg.payload.weaponId,
+                  name: "You have learned a new recipe",
+                  quantity: 1,
+                  hideQuantity: true,
+                },
+              ],
+              { header: "" },
+            );
+          }
         } else if (msg.type === "dialogTaskDenied") {
           this.ashenMilitiaDialogUI?.noteDenied(
             msg.payload.taskId,
@@ -2429,6 +2458,7 @@ export class WorldScene extends Phaser.Scene {
           });
         } else if (msg.type === "playerNote") {
           const text = msg.payload.text.trim();
+          if (text === BIRCHPORT_WEAPON_EQUIP_DENIED) this.notifyTip("weapon_blocked");
           const noteItems = msg.payload.items?.filter((item) => item?.name);
           if (!text && (!noteItems || noteItems.length === 0)) return;
           const durationMs = msg.payload.durationMs;
@@ -2897,12 +2927,9 @@ export class WorldScene extends Phaser.Scene {
     this.lastWorldClock = {
       time: "",
       phase: "",
-      core: "",
-      air: "",
       clockHidden: null,
       timeHidden: null,
     };
-    this.nextAirReadAt = 0;
     this.clearGroundBackpackSprites();
     try {
       this.interiorView?.hide();
@@ -3456,7 +3483,6 @@ export class WorldScene extends Phaser.Scene {
     const wasOpen = this.inventoryUI?.isOpen() ?? false;
     this.inventoryUI?.toggle();
     if (!wasOpen) {
-      this.notifyTutorial("inventory");
       this.lastInventoryRenderKey = "";
       this.refreshInventoryUI();
     } else {
@@ -3599,7 +3625,7 @@ export class WorldScene extends Phaser.Scene {
       }
       if (this.onboardingUI?.isOpen()) {
         e.preventDefault();
-        this.onboardingUI.closeLegend();
+        this.onboardingUI.closeTopmost();
         return;
       }
       if (this.redOrderDialogUI?.isOpen()) {
@@ -4822,11 +4848,28 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     // Warm clothing packs while shirts sit in the bag so Wear is instant.
-    for (const slot of parseInventory(msg.inventoryJson)) {
+    const syncedInventory = parseInventory(msg.inventoryJson);
+    for (const slot of syncedInventory) {
       if (slot && isClothingItem(slot.id)) {
         ensurePlayerClothingPack(this, clothingSkinFromItemId(slot.id));
       }
     }
+    if (syncedInventory.some((slot) => slot && isRawMeat(slot.id))) {
+      this.notifyTip("raw_meat");
+    }
+    if (syncedInventory.some((slot) => slot && isSkillMagazine(slot.id))) {
+      this.notifyTip("skill_magazine");
+    }
+    if (syncedInventory.some((slot) => slot && isRadioItem(slot.id))) {
+      this.notifyTip("radio");
+    }
+    if (syncedInventory.some((slot) => slot && isFirearmItemId(slot.id))) {
+      this.notifyTip("firearm");
+    }
+    if (getEntryWetness(syncedInventory[msg.equippedClothingSlot]) >= 0.4) {
+      this.notifyTip("wet");
+    }
+    if (msg.equippedWeaponIndex >= 0) this.notifyTutorial("equip_weapon");
     this.refreshInventoryUI();
     this.refreshHotbar();
     this.containerLootUI?.syncPlayerInventory(
@@ -4905,6 +4948,7 @@ export class WorldScene extends Phaser.Scene {
         arrow: "↑",
       });
     }
+    this.onboardingUI?.setFirstSweepState(firstSweepStateOf(next));
   }
 
   private localExtraPockets(): number {
@@ -4971,6 +5015,7 @@ export class WorldScene extends Phaser.Scene {
       playerHealth: me?.health ?? PLAYER_MAX_HEALTH,
       playerInfected: !!me?.infected,
       questsJson,
+      tutorialDone: this.onboardingUI?.isFinished() ?? false,
       extraPockets: this.localExtraPockets(),
     });
   }
@@ -7254,6 +7299,7 @@ export class WorldScene extends Phaser.Scene {
     if (!door.isOpen && door.isLocked) {
       this.pendingDoorCodeTile = { x: tx, y: ty };
       this.doorCodeUI?.openEnter();
+      this.notifyTip("locked_door");
       return true;
     }
 
@@ -10360,35 +10406,21 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", { type: "respawn" });
   }
 
-  private sendTutorialStep(stepId: OnboardingStepId) {
+  private sendTutorialUpdate(payload: TutorialCompleteStepMessage) {
     if (!this.room) return;
     const message: ClientMessage = {
       type: "tutorialCompleteStep",
-      payload: { stepId },
-    };
-    this.room.send("action", message);
-  }
-
-  private sendTutorialDone() {
-    if (!this.room) return;
-    const message: ClientMessage = {
-      type: "tutorialCompleteStep",
-      payload: { done: true },
-    };
-    this.room.send("action", message);
-  }
-
-  private sendTutorialSeen() {
-    if (!this.room) return;
-    const message: ClientMessage = {
-      type: "tutorialCompleteStep",
-      payload: { seen: true },
+      payload,
     };
     this.room.send("action", message);
   }
 
   private notifyTutorial(stepId: OnboardingStepId) {
     this.onboardingUI?.notifyStep(stepId);
+  }
+
+  private notifyTip(tipId: TutorialTipId) {
+    this.onboardingUI?.notifyTip(tipId);
   }
 
   private getEntityData(id: string, kind: CombatEntityKind) {
@@ -10605,6 +10637,8 @@ export class WorldScene extends Phaser.Scene {
       true,
     );
     AudioManager.get().playSearch(kind === "furniture" ? "furniture" : "body", objectType);
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (me && this.isOutsideTown(me)) this.notifyTip("search_noise");
   }
 
   private beginOptimisticReload() {
@@ -10622,7 +10656,6 @@ export class WorldScene extends Phaser.Scene {
     if (weapon) {
       AudioManager.get().playReload(weapon.itemId);
     }
-    this.notifyTutorial("reload");
   }
 
   private beginOptimisticConsume(durationMs: number, label: string) {
@@ -10924,7 +10957,7 @@ export class WorldScene extends Phaser.Scene {
       type: "fire",
       payload: { targetX: aim.x, targetY: aim.y },
     } satisfies ClientMessage);
-    this.notifyTutorial("aim_fire");
+    this.notifyTutorial("attack");
   }
 
   /**
@@ -10972,7 +11005,8 @@ export class WorldScene extends Phaser.Scene {
       payload: { targetX: aim.x, targetY: aim.y, sfxVariant },
     } satisfies ClientMessage);
     this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
-    this.notifyTutorial("aim_fire");
+    this.notifyTutorial("attack");
+    this.notifyTip("gunshot");
   }
 
   private fireAtTarget(tx: number, ty: number, targetId?: string) {
@@ -11026,7 +11060,8 @@ export class WorldScene extends Phaser.Scene {
       payload: { targetX: aimX, targetY: aimY, targetId, sfxVariant },
     } satisfies ClientMessage);
     if (!melee) this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
-    this.notifyTutorial("aim_fire");
+    this.notifyTutorial("attack");
+    if (!melee) this.notifyTip("gunshot");
   }
 
   private sendMoveToCoords(
@@ -11944,27 +11979,6 @@ export class WorldScene extends Phaser.Scene {
     if (this.statusEl) this.statusEl.textContent = text;
   }
 
-  private localPlayerFireHeat(me: {
-    x: number;
-    y: number;
-    inInterior?: boolean;
-  }): number {
-    const tx = Math.floor(me.x);
-    const ty = Math.floor(me.y);
-    const now = Date.now();
-    if (me.inInterior) {
-      return this.interiorView?.fireplaceAirHeatAt(tx, ty, now) ?? 0;
-    }
-    let best = 0;
-    for (const tile of this.structureFireplacesOverworld.values()) {
-      if (!fireplaceIsActive(tile.activeUntil, now)) continue;
-      const heat = fireplaceAirHeatFromOffset(tile.x - tx, tile.y - ty, false);
-      if (heat > best) best = heat;
-      if (best >= 1) return 1;
-    }
-    return best;
-  }
-
   /** Status bar + search progress — once per frame, not per entity update. */
   private updateDayNightLighting(dt = 16) {
     if (!this.dayNightLighting || !this.room?.state) return;
@@ -12011,7 +12025,7 @@ export class WorldScene extends Phaser.Scene {
       const wornWatch = inventory[WATCH_SLOT_INDEX];
       const showClock = !!wornWatch && isWatchItem(wornWatch.id);
       const clock = this.lastWorldClock;
-      const clockHidden = !me;
+      const clockHidden = !me || !showClock;
       if (clock.clockHidden !== clockHidden) {
         clock.clockHidden = clockHidden;
         this.worldClockEl.hidden = clockHidden;
@@ -12035,35 +12049,6 @@ export class WorldScene extends Phaser.Scene {
         } else {
           delete this.worldClockEl.dataset.phase;
           delete this.worldClockEl.dataset.weather;
-        }
-      }
-      // Air is the real outdoor or room temperature, plus nearby fire.
-      // Clothing changes core temperature, not this number. It is shown to
-      // 0.1 °C and drifts slowly, so recompute a few times a second.
-      const nowMs = Date.now();
-      if (me && this.worldClockCoreEl && this.worldClockAirEl) {
-        if (nowMs >= this.nextAirReadAt) {
-          this.nextAirReadAt = nowMs + AIR_READ_REFRESH_MS;
-          const fireHeat = this.localPlayerFireHeat(me);
-          const airC = ambientAirTemperatureC({
-            worldTimeMs,
-            sky,
-            precip,
-            indoor,
-            buildingX: indoor ? me.buildingX : undefined,
-            buildingY: indoor ? me.buildingY : undefined,
-            fireHeat,
-          });
-          const coreText = `Core ${(me.temperature ?? TEMPERATURE_CORE_DEFAULT).toFixed(1)}°C`;
-          const airText = `Air ${airC.toFixed(1)}°C`;
-          if (clock.core !== coreText) {
-            clock.core = coreText;
-            this.worldClockCoreEl.textContent = coreText;
-          }
-          if (clock.air !== airText) {
-            clock.air = airText;
-            this.worldClockAirEl.textContent = airText;
-          }
         }
       }
     }
@@ -12131,6 +12116,184 @@ export class WorldScene extends Phaser.Scene {
       rainAmount: weather.rain,
       snowAmount: weather.snow,
     });
+  }
+
+  /** Throttled checks that advance tutorial steps and raise one-time tips. */
+  private updateTutorialWatch(
+    me: {
+      alive?: boolean;
+      anim?: string;
+      x: number;
+      y: number;
+      inInterior?: boolean;
+      buildingX: number;
+      buildingY: number;
+      hunger: number;
+      thirst: number;
+      infected?: boolean;
+      redOrderReputation?: number;
+      ashenReputation?: number;
+      ashenMilitiaReputation?: number;
+    },
+    health: number,
+    maxHp: number,
+    staminaPct: number,
+    tempFx: "none" | "cold" | "hot",
+  ) {
+    const ui = this.onboardingUI;
+    if (!ui) return;
+    if (!me.alive) {
+      this.tutorialVitals = null;
+      this.tutorialSawDeath = true;
+      return;
+    }
+    if (this.tutorialSawDeath) {
+      this.tutorialSawDeath = false;
+      ui.notifyTip("first_death");
+    }
+
+    if (me.anim === "walk") ui.notifyStep("move");
+    if (me.anim === "sprint" || me.anim === "run") {
+      ui.notifyStep("move");
+      ui.notifyStep("sprint");
+    }
+    const prevVitals = this.tutorialVitals;
+    this.tutorialVitals = { hunger: me.hunger, thirst: me.thirst };
+    if (
+      prevVitals &&
+      (me.hunger > prevVitals.hunger + 0.5 || me.thirst > prevVitals.thirst + 0.5)
+    ) {
+      ui.notifyStep("eat_drink");
+    }
+
+    const now = this.time.now;
+    if (now - this.lastTutorialWatchAt < 500) return;
+    this.lastTutorialWatchAt = now;
+
+    if (me.inInterior === false) {
+      ui.notifyStep("leave_hospital");
+      if (!isInBirchport(me.x, me.y)) ui.notifyStep("leave_town");
+    }
+    if (me.inInterior) {
+      const target = parseQuestsJson(this.cachedQuestsJson).quests[
+        QUEST_ID_FIRST_SWEEP
+      ];
+      if (
+        target?.status === "active" &&
+        target.targetX === me.buildingX &&
+        target.targetY === me.buildingY
+      ) {
+        ui.notifyStep("enter_target");
+      }
+    }
+
+    if (me.hunger <= HUNGER_MAX * 0.25) ui.notifyTip("hungry");
+    if (me.thirst <= THIRST_MAX * 0.25) ui.notifyTip("thirsty");
+    if (tempFx === "cold") ui.notifyTip("cold");
+    if (tempFx === "hot") ui.notifyTip("hot");
+    if (me.infected) ui.notifyTip("infected");
+    if (health > 0 && health < maxHp * 0.5) ui.notifyTip("low_health");
+    if (staminaPct <= 0) ui.notifyTip("stamina_out");
+    if (this.room && isNightPhase(phaseOfDay(this.room.state.worldTimeMs))) {
+      ui.notifyTip("night");
+    }
+    const hostile = (rep: number | undefined) => {
+      if (rep == null) return false;
+      const standing = factionStanding(rep);
+      return standing === "hostile" || standing === "exiled";
+    };
+    if (
+      hostile(me.redOrderReputation) ||
+      hostile(me.ashenReputation) ||
+      hostile(me.ashenMilitiaReputation)
+    ) {
+      ui.notifyTip("standing_hostile");
+    }
+    if (!isInBirchport(me.x, me.y) && this.zombieWithinTiles(me, 10)) {
+      ui.notifyTip("zombie_near");
+    }
+    if (me.inInterior === false && this.playerInForest(me.x, me.y)) {
+      ui.notifyTip("wildlife");
+    }
+    if (this.isOutsideTown(me) && this.survivorWithinTiles(me, 16)) {
+      ui.notifyTip("other_survivor");
+    }
+    if (this.room) {
+      const precip = parsePrecip(this.room.state.weather);
+      if (precip === "rain" && this.tutorialPrecip !== "rain") {
+        ui.notifyTip("rain");
+      }
+      this.tutorialPrecip = precip;
+    }
+  }
+
+  private isOutsideTown(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): boolean {
+    if (!me.inInterior) return !isInBirchport(me.x, me.y);
+    const bld = getBuildingAt(me.buildingX, me.buildingY);
+    if (bld) return !isInBirchport(bld.ox + bld.w / 2, bld.oy + bld.h / 2);
+    return !isInBirchport(me.buildingX, me.buildingY);
+  }
+
+  private zombieWithinTiles(
+    me: { x: number; y: number; inInterior?: boolean; buildingX: number; buildingY: number },
+    tiles: number,
+  ): boolean {
+    const zombies = this.room?.state?.zombies;
+    if (!zombies) return false;
+    const r2 = tiles * tiles;
+    let found = false;
+    zombies.forEach((z: {
+      x: number;
+      y: number;
+      health?: number;
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    }) => {
+      if (found || (z.health ?? 1) <= 0) return;
+      if (!!z.inInterior !== !!me.inInterior) return;
+      if (me.inInterior && (z.buildingX !== me.buildingX || z.buildingY !== me.buildingY)) {
+        return;
+      }
+      const dx = z.x - me.x;
+      const dy = z.y - me.y;
+      if (dx * dx + dy * dy <= r2) found = true;
+    });
+    return found;
+  }
+
+  private survivorWithinTiles(
+    me: { x: number; y: number; inInterior?: boolean; buildingX: number; buildingY: number },
+    tiles: number,
+  ): boolean {
+    const players = this.room?.state?.players;
+    if (!players) return false;
+    const r2 = tiles * tiles;
+    let found = false;
+    players.forEach((p: {
+      alive?: boolean;
+      x: number;
+      y: number;
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    }, id: string) => {
+      if (found || id === this.sessionId || !p.alive) return;
+      if (!!p.inInterior !== !!me.inInterior) return;
+      if (me.inInterior && (p.buildingX !== me.buildingX || p.buildingY !== me.buildingY)) {
+        return;
+      }
+      const dx = p.x - me.x;
+      const dy = p.y - me.y;
+      if (dx * dx + dy * dy <= r2) found = true;
+    });
+    return found;
   }
 
   private logInfectionStatus(me: {
@@ -12270,16 +12433,7 @@ export class WorldScene extends Phaser.Scene {
       this.infectionFxEl.style.opacity = infectionOpacity;
     }
 
-    const moving =
-      me.anim === "walk" || me.anim === "sprint" || me.anim === "run";
-    if (moving) {
-      this.notifyTutorial(
-        me.anim === "sprint" || me.anim === "run" ? "sprint" : "move",
-      );
-    }
-    if (me.inInterior === false) {
-      this.notifyTutorial("exit_hospital");
-    }
+    this.updateTutorialWatch(me, health, maxHp, staminaPct, tempLook.fx);
 
     // Progress from a local start time (not server absolute end timestamps),
     // so RTT doesn't make the bar jump to ~30% and vanish before loot arrives.
@@ -13356,7 +13510,10 @@ export class WorldScene extends Phaser.Scene {
   private applyCombatLock(until: unknown) {
     const next = typeof until === "number" && Number.isFinite(until) ? until : 0;
     this.combatLockUntil = next > Date.now() ? next : 0;
-    if (this.combatLockUntil > 0) this.combatReconnectAttempts = 0;
+    if (this.combatLockUntil > 0) {
+      this.combatReconnectAttempts = 0;
+      this.notifyTip("combat_log");
+    }
     this.combatLockShownSec = -1;
     this.refreshCombatLockBanner();
   }
@@ -14887,6 +15044,7 @@ export class WorldScene extends Phaser.Scene {
       npcKind?: number;
       alive?: boolean;
       isDead?: boolean;
+      looted?: boolean;
     },
     animFrame: number,
     attackFrame: number | undefined,
@@ -14935,6 +15093,7 @@ export class WorldScene extends Phaser.Scene {
       attackFrame ?? -1,
       dieFrame ?? -1,
       isDead ? 1 : 0,
+      data.looted ? 1 : 0,
       kind === "guard" ? npcKind : "",
       packReady,
       data.alive === false ? 1 : 0,
@@ -14960,6 +15119,7 @@ export class WorldScene extends Phaser.Scene {
           idleWeapon?: string;
           clothingSkin?: number;
           isDead?: boolean;
+          looted?: boolean;
           skin?: number;
           npcKind?: number;
           inInterior?: boolean;
@@ -15135,6 +15295,7 @@ export class WorldScene extends Phaser.Scene {
         attackFrame,
         dieFrame,
         isDead,
+        looted: !!data.looted,
         alive: kind === "corpse" ? false : data.alive,
         zombieSkin: kind === "zombie" ? (data.skin ?? 1) : undefined,
         zombieCrawling,
@@ -16187,6 +16348,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    this.notifyTutorial("visit_traders");
     this.playerMarketUI?.open(payload);
     this.applyMarketInventory(payload);
   }
@@ -16231,6 +16393,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
+    this.notifyTutorial("visit_traders");
     const me = this.room?.state?.players?.get(this.sessionId);
     this.traderUI?.open({
       ...payload,
@@ -16372,6 +16535,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    this.notifyTutorial("talk_red_order");
     const me = this.room?.state?.players?.get(this.sessionId);
     this.redOrderDialogUI?.open({
       npcId: payload.npcId,
@@ -16432,6 +16596,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
+    this.notifyTutorial("visit_traders");
     const me = this.room?.state?.players?.get(this.sessionId);
     this.ashenTraderDialogUI?.open({
       npcId: payload.npcId,
@@ -16460,6 +16625,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
+    if (isMilitiaDoctorSkin(payload.npcSkin)) this.notifyTutorial("talk_clark");
+    if (isMilitiaCaptainSkin(payload.npcSkin)) this.notifyTutorial("talk_davis");
     const me = this.room?.state?.players?.get(this.sessionId);
     const inventoryJson =
       this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
@@ -16475,6 +16642,7 @@ export class WorldScene extends Phaser.Scene {
       playerInfected: !!me?.infected,
       taskCompletionsJson: payload.taskCompletionsJson,
       questsJson: this.localQuestsJson(),
+      tutorialDone: this.onboardingUI?.isFinished() ?? false,
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
       doctorHealCost: this.localSkillMods().doctorHealCost,
@@ -16932,4 +17100,17 @@ export class WorldScene extends Phaser.Scene {
     const msg: ClientMessage = { type: "unloadStart", payload: { slotIndex } };
     this.room.send("action", msg);
   }
+}
+
+function isFirearmItemId(itemId: string): boolean {
+  const weapon = WEAPONS.find((entry) => entry.itemId === itemId);
+  return !!weapon && !isMeleeWeapon(weapon);
+}
+
+function firstSweepStateOf(state: PlayerQuestsState): FirstSweepState {
+  const q = state.quests[QUEST_ID_FIRST_SWEEP];
+  if (!q) return "none";
+  if (q.status === "completed" || (q.timesCompleted ?? 0) > 0) return "done";
+  if (q.status !== "active") return "none";
+  return (q.progress.clear_house ?? 0) >= 1 ? "cleared" : "active";
 }
