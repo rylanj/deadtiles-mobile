@@ -104,6 +104,7 @@ export class TraderUI {
   private sellBtn: HTMLButtonElement;
   private sell5Btn: HTMLButtonElement;
   private sell10Btn: HTMLButtonElement;
+  private sellAllBtn: HTMLButtonElement;
   private buyBtn: HTMLButtonElement;
   private buy5Btn: HTMLButtonElement;
   private buy10Btn: HTMLButtonElement;
@@ -141,7 +142,7 @@ export class TraderUI {
     this.playerTitleEl.textContent = "You";
     const playerHint = document.createElement("span");
     playerHint.className = "inventory-hint";
-    playerHint.textContent = "Select to offer · double-click adds 1";
+    playerHint.textContent = "+ or − changes the offer";
     playerTitleWrap.append(this.playerTitleEl, playerHint);
     const playerNotes = makeAmountPill(0);
     this.playerNotesEl = playerNotes;
@@ -176,7 +177,7 @@ export class TraderUI {
     traderTitleRow.append(this.traderTitleEl, this.standingPillEl);
     const traderHint = document.createElement("span");
     traderHint.className = "inventory-hint";
-    traderHint.textContent = "Select to offer · double-click adds 1";
+    traderHint.textContent = "+ or − changes the offer";
     traderTitleWrap.append(traderTitleRow, traderHint);
     const traderNotes = makeAmountPill(0);
     this.traderNotesEl = traderNotes;
@@ -192,7 +193,6 @@ export class TraderUI {
 
     this.footerEl = document.createElement("div");
     this.footerEl.className = "inventory-footer trader-footer";
-    this.footerEl.hidden = true;
     this.detailEl = document.createElement("div");
     this.detailEl.className = "inventory-detail";
     const actions = document.createElement("div");
@@ -200,6 +200,7 @@ export class TraderUI {
     this.sellBtn = this.makeActionBtn("Sell", () => this.addToOffer(1));
     this.sell5Btn = this.makeActionBtn("Sell 5", () => this.addToOffer(5));
     this.sell10Btn = this.makeActionBtn("Sell 10", () => this.addToOffer(10));
+    this.sellAllBtn = this.makeActionBtn("Sell All", () => this.addToOffer(this.selection?.quantity ?? 0));
     this.buyBtn = this.makeActionBtn("Buy", () => this.addToOffer(1));
     this.buy5Btn = this.makeActionBtn("Buy 5", () => this.addToOffer(5));
     this.buy10Btn = this.makeActionBtn("Buy 10", () => this.addToOffer(10));
@@ -207,6 +208,7 @@ export class TraderUI {
       this.sellBtn,
       this.sell5Btn,
       this.sell10Btn,
+      this.sellAllBtn,
       this.buyBtn,
       this.buy5Btn,
       this.buy10Btn,
@@ -524,9 +526,10 @@ export class TraderUI {
     category: string;
     selected: boolean;
   }) {
-    const cell = document.createElement("button");
-    cell.type = "button";
+    const cell = document.createElement("div");
     cell.className = "inventory-cell inventory-cell--filled trader-cell";
+    cell.tabIndex = 0;
+    cell.setAttribute("role", "button");
     markQuestKeepsake(cell, opts.id);
     if (opts.selected) cell.classList.add("inventory-cell--selected");
     if (opts.offered > 0) cell.classList.add("trader-cell--offered");
@@ -565,7 +568,7 @@ export class TraderUI {
       `${def?.name ?? opts.id}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}`,
     );
 
-    cell.addEventListener("click", () => {
+    const selectCell = () => {
       if (opts.side === "player") {
         this.selection = {
           side: "player",
@@ -581,6 +584,9 @@ export class TraderUI {
           quantity: opts.quantity,
         };
       }
+    };
+    cell.addEventListener("click", () => {
+      selectCell();
       const key =
         opts.side === "player"
           ? `p:${opts.slotIndex}:${opts.id}`
@@ -593,17 +599,130 @@ export class TraderUI {
       if (doubled) this.addToOffer(1);
       else this.render();
     });
+    cell.addEventListener("keydown", (e) => {
+      if (e.target !== cell) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      cell.click();
+    });
+
+    const lock =
+      opts.side === "player"
+        ? this.playerOfferLock(opts.slotIndex!, opts.id)
+        : "";
+    const steps = document.createElement("div");
+    steps.className = "trader-cell-step";
+    steps.append(
+      this.makeQtyButton("−", `Remove one ${def?.name ?? opts.id}`, opts.offered <= 0, () =>
+        this.adjustLine(opts, -1),
+      ),
+      this.makeQtyButton(
+        "+",
+        `Add one ${def?.name ?? opts.id}`,
+        !!lock || opts.offered >= opts.quantity,
+        () => this.adjustLine(opts, 1),
+        lock,
+      ),
+    );
+    cell.appendChild(steps);
     return cell;
+  }
+
+  private makeQtyButton(
+    label: string,
+    aria: string,
+    disabled: boolean,
+    onClick: () => void,
+    title = "",
+  ): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "trader-cell-step-btn";
+    btn.textContent = label;
+    btn.setAttribute("aria-label", aria);
+    btn.disabled = disabled || this.confirmPending;
+    if (title) btn.title = title;
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn.disabled) return;
+      onClick();
+    });
+    return btn;
+  }
+
+  private playerOfferLock(slotIndex: number, itemId: string): string {
+    if (isQuestKeepsakeItem(itemId)) return "Traders will not buy these.";
+    if (this.wornPackLocked(slotIndex, itemId)) return "Empty the pack to sell it.";
+    return "";
+  }
+
+  /** Add or remove one of this stack from the offer, and select it. */
+  private adjustLine(
+    opts: {
+      side: "player" | "trader";
+      slotIndex?: number;
+      stockIndex?: number;
+      id: string;
+      quantity: number;
+    },
+    delta: number,
+  ) {
+    if (opts.side === "player") {
+      const slotIndex = opts.slotIndex!;
+      this.selection = {
+        side: "player",
+        slotIndex,
+        id: opts.id,
+        quantity: opts.quantity,
+      };
+      if (delta > 0 && this.playerOfferLock(slotIndex, opts.id)) {
+        this.render();
+        return;
+      }
+      const next = Math.max(
+        0,
+        Math.min(opts.quantity, this.offeredSellQty(slotIndex) + delta),
+      );
+      if (next <= 0) this.sellOffers.delete(slotIndex);
+      else {
+        this.sellOffers.set(slotIndex, {
+          slotIndex,
+          itemId: opts.id,
+          quantity: next,
+        });
+      }
+    } else {
+      const stockIndex = opts.stockIndex!;
+      this.selection = {
+        side: "trader",
+        stockIndex,
+        id: opts.id,
+        quantity: opts.quantity,
+      };
+      const next = Math.max(
+        0,
+        Math.min(opts.quantity, this.offeredBuyQty(stockIndex) + delta),
+      );
+      if (next <= 0) this.buyOffers.delete(stockIndex);
+      else {
+        this.buyOffers.set(stockIndex, {
+          stockIndex,
+          itemId: opts.id,
+          quantity: next,
+        });
+      }
+    }
+    this.render();
   }
 
   private updateDetail() {
     this.detailEl.replaceChildren();
+    this.footerEl.hidden = false;
     if (!this.selection && !this.hasOffer()) {
-      this.footerEl.hidden = true;
-      this.detailEl.textContent = "";
+      this.detailEl.textContent = "No item selected";
       return;
     }
-    this.footerEl.hidden = false;
     if (!this.selection) {
       this.detailEl.textContent = "Review your offer";
       return;
@@ -618,12 +737,19 @@ export class TraderUI {
 
   private updateSettlement() {
     if (!this.hasOffer()) {
-      this.settlementEl.hidden = true;
+      this.settlementEl.hidden = false;
       this.settlementEl.replaceChildren();
       this.settlementEl.classList.remove("trader-settlement--shortfall");
-      this.clearOfferBtn.hidden = true;
-      this.confirmBtn.hidden = true;
+      this.settlementEl.title = "";
+      const empty = document.createElement("div");
+      empty.className = "trader-settlement-cash";
+      empty.textContent = "No offer yet";
+      this.settlementEl.append(empty);
+      this.clearOfferBtn.hidden = false;
+      this.clearOfferBtn.disabled = true;
+      this.confirmBtn.hidden = false;
       this.confirmBtn.disabled = true;
+      this.confirmBtn.title = "";
       return;
     }
 
@@ -746,23 +872,21 @@ export class TraderUI {
     this.sellBtn.hidden = !sell;
     this.sell5Btn.hidden = !sell;
     this.sell10Btn.hidden = !sell;
+    this.sellAllBtn.hidden = !sell;
     this.buyBtn.hidden = !buy;
     this.buy5Btn.hidden = !buy;
     this.buy10Btn.hidden = !buy;
 
     if (sell && this.selection?.side === "player") {
-      const keepsake = isQuestKeepsakeItem(this.selection.id);
-      const packLocked = this.wornPackLocked(this.selection.slotIndex, this.selection.id);
+      const lock = this.playerOfferLock(this.selection.slotIndex, this.selection.id);
       const remaining =
         this.selection.quantity - this.offeredSellQty(this.selection.slotIndex);
-      this.sellBtn.disabled = keepsake || packLocked || remaining < 1;
-      this.sellBtn.title = keepsake
-        ? "Traders will not buy these."
-        : packLocked
-          ? "Empty the pack to sell it."
-          : "";
-      this.sell5Btn.disabled = keepsake || packLocked || remaining < 5;
-      this.sell10Btn.disabled = keepsake || packLocked || remaining < 10;
+      this.sellBtn.disabled = !!lock || remaining < 1;
+      this.sellBtn.title = lock;
+      this.sell5Btn.disabled = !!lock || remaining < 5;
+      this.sell10Btn.disabled = !!lock || remaining < 10;
+      this.sellAllBtn.disabled = !!lock || remaining < 1;
+      this.sellAllBtn.title = lock;
     }
     if (buy && this.selection?.side === "trader") {
       const remaining =

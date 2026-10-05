@@ -29,6 +29,27 @@
         box-sizing: border-box;
         -webkit-user-select: none;
         user-select: none;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(126, 207, 126, 0.75) rgba(0, 0, 0, 0.28);
+      }
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      *::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.28);
+        border-radius: 4px;
+      }
+      *::-webkit-scrollbar-thumb {
+        background: rgba(94, 168, 94, 0.72);
+        border: 2px solid rgba(10, 14, 10, 0.92);
+        border-radius: 4px;
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background: rgba(126, 207, 126, 0.9);
+      }
+      *::-webkit-scrollbar-corner {
+        background: transparent;
       }
       input,
       textarea {
@@ -1096,6 +1117,46 @@
         -webkit-appearance: none;
         margin: 0;
       }
+      .trader-cell-step {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 3px;
+        z-index: 4;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .trader-cell:hover .trader-cell-step,
+      .trader-cell:focus-within .trader-cell-step {
+        opacity: 1;
+      }
+      .trader-cell-step-btn {
+        pointer-events: none;
+        appearance: none;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid rgba(100, 220, 100, 0.55);
+        border-radius: 4px;
+        background: rgba(8, 14, 8, 0.92);
+        color: #e8f8e8;
+        font: 700 16px/1 system-ui, sans-serif;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      .trader-cell:hover .trader-cell-step-btn,
+      .trader-cell:focus-within .trader-cell-step-btn {
+        pointer-events: auto;
+      }
+      .trader-cell-step-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
       .trader-cell-price {
         position: absolute;
         left: 3px;
@@ -1123,7 +1184,10 @@
         grid-column: 1 / -1;
       }
       .trader-footer {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
+        max-height: 38%;
+        overflow-x: hidden;
+        overflow-y: auto;
         width: 100%;
         box-sizing: border-box;
         background: rgba(10, 14, 10, 0.92);
@@ -2461,7 +2525,7 @@
       }
       /* The generic wrap is overflow visible. Trade lists scroll instead. */
       #trader-overlay .inventory-grid-wrap.trader-grid-wrap {
-        flex: 1 1 auto;
+        flex: 1 1 0%;
         min-height: 0;
         max-height: none;
         overflow-x: hidden;
@@ -4809,11 +4873,19 @@
           overflow: hidden;
         }
         #trader-overlay .inventory-grid-wrap.trader-grid-wrap {
-          flex: 1 1 auto;
+          flex: 1 1 0%;
           max-height: none;
           overflow-x: hidden;
           overflow-y: auto;
           min-height: 0;
+        }
+        #trader-overlay .trader-cell-step {
+          opacity: 1;
+        }
+        #trader-overlay .trader-cell-step-btn {
+          pointer-events: auto;
+          width: 28px;
+          height: 28px;
         }
         #trader-overlay {
           overflow: hidden;
@@ -4821,7 +4893,8 @@
           touch-action: pan-y;
         }
         .trader-footer {
-          flex: 0 0 auto;
+          flex: 0 1 auto;
+          max-height: 38%;
         }
 
         .craft-layout,
@@ -5000,13 +5073,27 @@
         overflow: visible;
       }
       body.is-mobile #trader-overlay:not([hidden]) {
+        height: 100dvh;
+        max-height: 100dvh;
         overflow: hidden;
         flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
       }
-      body.is-mobile .trader-layout {
-        margin-block: 0;
+      body.is-mobile #trader-overlay .trader-layout {
+        flex: 1 1 0%;
+        width: 100%;
+        height: 100%;
         max-height: 100%;
+        min-height: 0;
+        margin-block: 0;
         overflow: hidden;
+      }
+      body.is-mobile #trader-overlay .trader-cell-step {
+        opacity: 1;
+      }
+      body.is-mobile #trader-overlay .trader-cell-step-btn {
+        pointer-events: auto;
       }
     </style>
   </head>

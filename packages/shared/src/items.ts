@@ -471,12 +471,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     id: "multivitamins",
     name: "Multivitamins",
     category: "medical",
-    stackable: true,
+    stackable: false,
     weight: 0.05,
     consumeDurationMs: 2_000,
     restoreHunger: 5,
     restoreThirst: 5,
-    /** +1 HP every 10s for 300s (30 HP total). */
+    /** One bottle. Each use is +1 HP every 10s for 300s (30 HP). */
+    maxDurability: 10,
     healOverTimeHp: 1,
     healOverTimeIntervalMs: 10_000,
     healOverTimeDurationMs: 300_000,
@@ -541,6 +542,20 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     weight: 0.05,
   },
   { id: "gold_ring", name: "Gold Ring", category: "junk", stackable: true, weight: 0.05 },
+  {
+    id: "caravan_manifest",
+    name: "Caravan Manifest",
+    category: "junk",
+    stackable: false,
+    weight: 0.05,
+  },
+  {
+    id: "wagon_note",
+    name: "Caravan Note",
+    category: "junk",
+    stackable: false,
+    weight: 0.02,
+  },
   { id: "silver_chain", name: "Silver Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "silver_ring", name: "Silver Ring", category: "junk", stackable: true, weight: 0.05 },
   { id: "old_teddy", name: "Old Teddy", category: "junk", stackable: true, weight: 0.2 },
@@ -798,9 +813,17 @@ export function getItemDefinition(id: string) {
 
 /** Clark's anniversary pair. Not ordinary gold earrings, and not for sale. */
 export const CLARKS_EARRINGS_ITEM_ID = "clarks_earrings";
+/** Page from a caravan that came up short. Kevin wants it back. Not for sale. */
+export const CARAVAN_MANIFEST_ITEM_ID = "caravan_manifest";
+/** Last word from a caravan that stopped answering the radio. Not for sale. */
+export const WAGON_NOTE_ITEM_ID = "wagon_note";
 
 export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
-  return itemId === CLARKS_EARRINGS_ITEM_ID;
+  return (
+    itemId === CLARKS_EARRINGS_ITEM_ID ||
+    itemId === CARAVAN_MANIFEST_ITEM_ID ||
+    itemId === WAGON_NOTE_ITEM_ID
+  );
 }
 
 /** True when this furniture type can roll container loot. */
@@ -1330,7 +1353,7 @@ export function backpackStorageHasItems(inventory: Inventory): boolean {
 
 /** True when a backpack entry already has sealed items inside it. */
 export function backpackContentsHaveItems(
-  entry: InventoryEntry | null | undefined,
+  entry: { contents?: readonly ({ quantity: number } | null)[] } | null | undefined,
 ): boolean {
   return !!entry?.contents?.some((cell) => !!cell && cell.quantity > 0);
 }
@@ -1358,6 +1381,18 @@ export function backpackHoldsItems(inventory: Inventory, slotIndex: number): boo
     return true;
   }
   return backpackContentsHaveItems(slot);
+}
+
+/**
+ * A backpack that still holds items can be worn or dropped on the floor.
+ * It cannot be placed in a pocket or inside another pack.
+ */
+export function loadedBackpackStowBlocked(
+  entry: { contents?: readonly ({ quantity: number } | null)[] } | null | undefined,
+  destSlot: number,
+): boolean {
+  if (!backpackContentsHaveItems(entry)) return false;
+  return isPocketSlot(destSlot) || isBackpackStorageIndex(destSlot);
 }
 
 function replaceMagazines(target: WeaponMagazines, next: WeaponMagazines): void {
@@ -1745,6 +1780,20 @@ export function inventoryAfterTurnIn(
   return removeItemFromInventory(inventory, itemId, quantity);
 }
 
+/** Hand in several quest stacks. Null when any one of them is short. */
+export function inventoryAfterTurnIns(
+  inventory: Inventory,
+  items: readonly { itemId: string; quantity: number }[],
+): Inventory | null {
+  let next: Inventory | null = inventory;
+  for (const item of items) {
+    if (!item.itemId || item.quantity <= 0) continue;
+    next = inventoryAfterTurnIn(next, item.itemId, item.quantity);
+    if (!next) return null;
+  }
+  return next;
+}
+
 export function addToInventory(
   inventory: Inventory,
   itemId: string,
@@ -1870,6 +1919,7 @@ function normalizePackContents(
   if (!Array.isArray(raw) || depth >= PACK_CONTENTS_MAX_DEPTH) return undefined;
   const limit = Math.min(raw.length, MAX_BACKPACK_STORAGE_SLOTS);
   const out: (InventoryEntry | null)[] = [];
+  const spill: InventoryEntry[] = [];
   let any = false;
   for (let i = 0; i < limit; i++) {
     const cell = raw[i];
@@ -1896,10 +1946,41 @@ function normalizePackContents(
         depth + 1,
       ),
     );
+    const extra = extraUseCountItems(src);
+    for (let n = 0; n < extra; n++) {
+      spill.push(makeInventoryEntry(src.id, 1, undefined, undefined, depth + 1));
+    }
     any = true;
+  }
+  for (const extra of spill) {
+    const hole = out.findIndex((cell) => cell == null);
+    if (hole >= 0) {
+      out[hole] = extra;
+      continue;
+    }
+    if (out.length >= MAX_BACKPACK_STORAGE_SLOTS) break;
+    out.push(extra);
   }
   while (out.length > 0 && !out[out.length - 1]) out.pop();
   return any ? out : undefined;
+}
+
+/**
+ * Old saves stacked multivitamins as one use each. A use-count item with no
+ * durability and quantity above 1 is that many full items.
+ */
+function extraUseCountItems(entry: {
+  id: string;
+  quantity: number;
+  durability?: number;
+}): number {
+  if (getMaxDurability(entry.id) == null) return 0;
+  if (typeof entry.durability === "number" && Number.isFinite(entry.durability)) {
+    return 0;
+  }
+  const qty = Math.floor(entry.quantity);
+  if (!Number.isFinite(qty) || qty <= 1) return 0;
+  return qty - 1;
 }
 
 /** Build a slot entry, optionally carrying chambered magazine rounds + meta. */
@@ -2030,9 +2111,11 @@ export function moveInventorySlot(
   if (wornLeaves) sealWornPack(next, magWork);
   const from = next[fromSlot];
   if (!from || !getItemDefinition(from.id)) return inventory;
+  if (loadedBackpackStowBlocked(from, toSlot)) return inventory;
   if (!itemFitsInSlot(from.id, toSlot, access)) return inventory;
 
   const to = next[toSlot];
+  if (to && loadedBackpackStowBlocked(to, fromSlot)) return inventory;
   if (!to) {
     next[toSlot] = from;
     next[fromSlot] = null;
@@ -2578,6 +2661,21 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
     "parts_pistol",
     "parts_shotgun",
   ],
+  /** Large retail clothing racks. Shirts only, filtered below. */
+  clothingrack1: ["junk"],
+  clothingrack2: ["junk"],
+  clothingrack3: ["junk"],
+  /** Large retail gondolas. General merchandise, no cash drawer. */
+  retailshelf1: ["consumables", "crafting_lite", "medical_lite", "junk"],
+  retailshelf2: ["consumables", "crafting_lite", "medical_lite", "junk"],
+  retailshelf3: ["consumables", "crafting_lite", "medical_lite", "junk"],
+  /** Abandoned shopping cart. */
+  cart1: ["consumables", "junk"],
+  cart2: ["consumables", "junk"],
+  /** Jewelry display. Rings and chains only, filtered below. */
+  retailcase1: ["junk"],
+  /** Watch display. The watch roll is dedicated below. */
+  retailcase2: ["junk"],
 };
 
 const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: number }> = {
@@ -2681,6 +2779,51 @@ function eligibleLootItems(objectType: string): string[] {
     items = items.filter((id) => !junkIds.has(id) || shelfJunk.has(id));
   }
 
+  // Clothing racks: shirts only.
+  if (
+    objectType === "clothingrack1" ||
+    objectType === "clothingrack2" ||
+    objectType === "clothingrack3"
+  ) {
+    return items.filter((id) => id === "white_tshirt" || id === "black_tshirt");
+  }
+
+  // Jewelry case: rings and chains only.
+  if (objectType === "retailcase1") {
+    return items.filter(
+      (id) =>
+        id === "gold_chain" ||
+        id === "gold_earrings" ||
+        id === "gold_ring" ||
+        id === "silver_chain" ||
+        id === "silver_ring",
+    );
+  }
+
+  // Watch case: no generic junk. The watch is rolled separately.
+  if (objectType === "retailcase2") return [];
+
+  // Retail shelves and carts: merchandise, not cash or jewellery.
+  if (
+    objectType === "retailshelf1" ||
+    objectType === "retailshelf2" ||
+    objectType === "retailshelf3" ||
+    objectType === "cart1" ||
+    objectType === "cart2"
+  ) {
+    const merch = new Set([
+      "map",
+      "teddy",
+      "old_teddy",
+      "white_tshirt",
+      "black_tshirt",
+      "lighter",
+      "blue_cigarettes",
+    ]);
+    const junkIds = new Set(CATEGORY_ITEMS.junk ?? []);
+    items = items.filter((id) => !junkIds.has(id) || merch.has(id));
+  }
+
   // SuperFridge1: consumable drink rolls only (cola / lemonade / water).
   if (objectType === "superfridge1" || objectType === "drinkdisplay") {
     items = items.filter((id) => getItemDefinition(id)?.category === "drink");
@@ -2770,6 +2913,7 @@ const MAGAZINE_CONTAINERS = new Set([
 
 /** Clothing tables, plus warehouse shelves that do not roll shirts. */
 function containerRollsBackpacks(objectType: string): boolean {
+  if (objectType === "retailcase1" || objectType === "retailcase2") return false;
   const categories = CONTAINER_CATEGORIES[objectType];
   if (!categories || categories.length === 0) return false;
   if (categories.includes("junk")) return true;
@@ -2804,10 +2948,17 @@ export function generateSearchLoot(
         id === "large_spring")
         ? 4
         : 1;
-    if (Math.random() >= Math.min(1, data.chance * scale * cushionBoost)) continue;
+    // House junk rates are tiny. A display case should usually still hold a piece.
+    const caseBoost = objectType === "retailcase1" ? 18 : 1;
+    if (Math.random() >= Math.min(1, data.chance * scale * cushionBoost * caseBoost)) continue;
     const quantity =
       Math.floor(Math.random() * (data.maxQty - data.minQty + 1)) + data.minQty;
     results.push({ id, quantity });
+  }
+
+  // Watch case: one watch, often. Watches are not in the generic junk table.
+  if (objectType === "retailcase2" && Math.random() < Math.min(1, 0.65 * scale)) {
+    results.push({ id: WATCH_ITEM_ID, quantity: 1 });
   }
 
   if (
@@ -3216,6 +3367,10 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
         entry.magazineRounds,
         inventoryEntryMeta(entry),
       );
+      const extraBottles = extraUseCountItems(entry);
+      for (let n = 0; n < extraBottles; n++) {
+        overflow.push(makeInventoryEntry(normalized.id, 1));
+      }
       // Keep leftovers from the old 12-pocket row in place. Compacting runs later.
       if (isRetiredPocketSlot(i)) {
         slots[i] = normalized;
@@ -3476,8 +3631,10 @@ export function putIntoStorageBoxSlot(
   }
   const from = nextPlayer[fromSlot];
   if (!from || !getItemDefinition(from.id)) return null;
+  if (backpackContentsHaveItems(from)) return null;
 
   const to = nextContainer[toSlot];
+  if (to && loadedBackpackStowBlocked(to, fromSlot)) return null;
   const packed = (playerInv: Inventory) => {
     const committed = commitPlayerPack(playerInventory, playerInv, magWork, magazines);
     if (!committed) return null;
@@ -3782,6 +3939,7 @@ export function parseContainerInventory(json: string): Inventory {
     const parsed = JSON.parse(json);
     if (!Array.isArray(parsed)) return createEmptyContainerInventory();
     const slots = createEmptyContainerInventory();
+    const spill: InventoryEntry[] = [];
     for (let i = 0; i < Math.min(parsed.length, CONTAINER_INVENTORY_SLOTS); i++) {
       const slot = parsed[i];
       if (
@@ -3799,7 +3957,16 @@ export function parseContainerInventory(json: string): Inventory {
           entry.magazineRounds,
           inventoryEntryMeta(entry),
         );
+        const extra = extraUseCountItems(entry);
+        for (let n = 0; n < extra; n++) {
+          spill.push(makeInventoryEntry(entry.id, 1));
+        }
       }
+    }
+    for (const extra of spill) {
+      const hole = slots.findIndex((cell) => cell == null);
+      if (hole < 0) break;
+      slots[hole] = extra;
     }
     return slots;
   } catch {
@@ -3855,9 +4022,11 @@ export function takeFromContainerSlot(
   if (toSlot === BACKPACK_SLOT_INDEX) sealWornPack(nextPlayer, magWork);
   const from = nextContainer[fromSlot];
   if (!from || !getItemDefinition(from.id)) return null;
+  if (loadedBackpackStowBlocked(from, toSlot)) return null;
   if (!itemFitsInSlot(from.id, toSlot, access)) return null;
 
   const to = nextPlayer[toSlot];
+  if (to && backpackContentsHaveItems(to)) return null;
   const packed = (playerInv: Inventory) => {
     const committed = commitPlayerPack(
       playerInventory,

@@ -15,7 +15,7 @@ export const CROW_CELL = 96;
 export const CROW_SPAWN_CHANCE = 0.62;
 /** Crows inside this Chebyshev distance of an outdoor player wake up. */
 export const CROW_ACTIVATE_RADIUS = 80;
-/** Wake stays until every player is farther than this from the perch. */
+/** Wake stays until every player is farther than this from the crow. */
 export const CROW_DEACTIVATE_RADIUS = 120;
 
 /**
@@ -46,8 +46,8 @@ export const CROW_MAX_HEALTH = 32;
 export const CROW_FLY_FRAMES = 9;
 export const CROW_DIE_FRAMES = 9;
 /** Standing bird. Shorter than a person so it reads as a crow. */
-export const CROW_RENDER_HEIGHT = 50;
-/**
+  export const CROW_RENDER_HEIGHT = 32;
+  /**
  * Fly sheets are 168px to the idle sheet's 128px. Matching the body size
  * means the wing canvas is drawn taller, not that the bird swells.
  */

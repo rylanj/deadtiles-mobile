@@ -38,13 +38,22 @@ import {
   RED_ORDER_MELT_POT_TASK,
   type RedOrderTask,
 } from "./redOrder.js";
+import {
+  CARAVAN_MANIFEST_ITEM_ID,
+  WAGON_NOTE_ITEM_ID,
+} from "./items.js";
 import { questTargetBuildingLabel } from "./questTargets.js";
+import { ASHEN_MARKET_TRADER_NAME } from "./trade.js";
 import { getBuildingAt } from "./worldgen.js";
 
 export type QuestFaction = "redOrder" | "ashenTraders" | "ashenMilitia" | "none";
 
 /** Who posts the job (journal + NPC accept checks). */
-export type QuestGiverId = "redOrder" | "ashenCaptain" | "ashenDoctor";
+export type QuestGiverId =
+  | "redOrder"
+  | "ashenCaptain"
+  | "ashenDoctor"
+  | "ashenTrader";
 
 export type QuestObjectiveKind =
   | "turnInItem"
@@ -109,6 +118,8 @@ export type QuestDefinition = {
   completionWindowMs?: number;
   /** When true, definition is registered but not offered yet. */
   stub?: boolean;
+  /** Icon on the jobs list when the job is not a single item turn-in. */
+  iconItemId?: string;
 };
 
 export type QuestStatus = "available" | "active" | "completed" | "failed";
@@ -153,6 +164,7 @@ export const QUEST_GIVER_LABELS: Record<QuestGiverId, string> = {
   redOrder: RED_ORDER_FACTION,
   ashenCaptain: ASHEN_MILITIA_CAPTAIN_NAME,
   ashenDoctor: ASHEN_MILITIA_DOCTOR_NAME,
+  ashenTrader: ASHEN_MARKET_TRADER_NAME,
 };
 
 function questFromMilitiaTask(
@@ -572,6 +584,275 @@ export const QUEST_FLOOR_SPACE: QuestDefinition = {
   ],
 };
 
+export const QUEST_ID_FLANK_LOAD = "ashen_trader_flank_load";
+export const QUEST_ID_ROAD_TINS = "ashen_trader_road_tins";
+export const QUEST_ID_CRATE_LIDS = "ashen_trader_crate_lids";
+export const QUEST_ID_STILL_ON_THE_SHELF = "ashen_trader_still_on_the_shelf";
+export const QUEST_ID_SCALING_UP = "ashen_trader_scaling_up";
+export const QUEST_ID_SHORT_CRATE = "ashen_trader_short_crate";
+export const QUEST_ID_X_MARKS = "ashen_trader_x_marks_the_spot";
+export const QUEST_ID_PAID_AHEAD = "ashen_trader_paid_ahead";
+export const QUEST_SHORT_CRATE_FIND_OBJECTIVE = "find_manifest";
+export const QUEST_X_MARKS_FIND_OBJECTIVE = "find_note";
+
+/**
+ * Kevin's board at the Birchport market.
+ * Repeatable rows are daily. One-time rows stay up until turned in.
+ * Reputation is Ashen Traders, never the militia.
+ */
+export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
+  {
+    id: QUEST_ID_FLANK_LOAD,
+    title: "Flank Load",
+    description:
+      "Trader guards on the roads are light on buckshot. Accept with Kevin, then bring eight shells to the Birchport market. Once a day.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "ammo_buckshot",
+    repeatable: true,
+    maxCompletionsPerWindow: 1,
+    completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+    objectives: [
+      {
+        id: "turn_in_buckshot",
+        kind: "turnInItem",
+        label: "Turn in buckshot",
+        itemId: "ammo_buckshot",
+        quantity: 8,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 70 },
+      { faction: "ashenTraders", reputation: 120 },
+    ],
+  },
+  {
+    id: QUEST_ID_ROAD_TINS,
+    title: "Road Tins",
+    description:
+      "Travelling traders eat between towns. Accept with Kevin, then bring four cans of tuna to the market. Once a day.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "canned_tuna",
+    repeatable: true,
+    maxCompletionsPerWindow: 1,
+    completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+    objectives: [
+      {
+        id: "turn_in_tuna",
+        kind: "turnInItem",
+        label: "Turn in canned tuna",
+        itemId: "canned_tuna",
+        quantity: 4,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 60 },
+      { faction: "ashenTraders", reputation: 110 },
+    ],
+  },
+  {
+    id: QUEST_ID_CRATE_LIDS,
+    title: "Crate Lids",
+    description:
+      "The market's storage crates are splitting. Accept with Kevin, then bring eight screws and four wood. Once a day.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "screws",
+    repeatable: true,
+    maxCompletionsPerWindow: 1,
+    completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
+    objectives: [
+      {
+        id: "turn_in_screws",
+        kind: "turnInItem",
+        label: "Turn in screws",
+        itemId: "screws",
+        quantity: 8,
+        count: 1,
+      },
+      {
+        id: "turn_in_wood",
+        kind: "turnInItem",
+        label: "Turn in wood",
+        itemId: "wood",
+        quantity: 4,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 80 },
+      { faction: "ashenTraders", reputation: 130 },
+    ],
+  },
+  {
+    id: QUEST_ID_STILL_ON_THE_SHELF,
+    title: "Still on the Shelf",
+    description:
+      "Kevin wants a supermarket counted before he sends a buyer. Search three shelves and two fridges, then tell him what is left. You keep what you pocket. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "map",
+    objectives: [
+      {
+        id: "search_shelves",
+        kind: "searchShelf",
+        label: "Search shelves in the marked supermarket",
+        count: 3,
+      },
+      {
+        id: "search_fridges",
+        kind: "searchShelf",
+        label: "Search fridges in the marked supermarket",
+        count: 2,
+      },
+    ],
+    rewards: [
+      { banknotes: 120 },
+      { faction: "ashenTraders", reputation: 220 },
+    ],
+  },
+  {
+    id: QUEST_ID_SCALING_UP,
+    title: "Scaling Up",
+    description:
+      "Kevin wants a warehouse the caravans can actually use. Accept the job, clear the walkers from the marked building, then report back. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "map",
+    objectives: [
+      {
+        id: "clear_warehouse",
+        kind: "clearBuilding",
+        label: "Clear walkers from the marked warehouse",
+        buildingType: "warehouse",
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 180 },
+      { faction: "ashenTraders", reputation: 320 },
+    ],
+  },
+  {
+    id: QUEST_ID_SHORT_CRATE,
+    title: "Short Crate",
+    description:
+      "The last caravan into Birchport was short a crate. The crew set the manifest down so they could argue about who had to carry the heavy one, then left without it. It is in a building in another city. Bring Kevin the page before he invents the numbers.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "journal",
+    objectives: [
+      {
+        id: QUEST_SHORT_CRATE_FIND_OBJECTIVE,
+        kind: "haveItem",
+        label: "Find the caravan manifest",
+        itemId: CARAVAN_MANIFEST_ITEM_ID,
+        count: 1,
+      },
+      {
+        id: "turn_in_manifest",
+        kind: "turnInItem",
+        label: "Hand the manifest to Kevin",
+        itemId: CARAVAN_MANIFEST_ITEM_ID,
+        quantity: 1,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 180 },
+      { faction: "ashenTraders", reputation: 350 },
+    ],
+  },
+  {
+    id: QUEST_ID_X_MARKS,
+    title: "X Marks the Spot",
+    description:
+      "A trading caravan stopped answering the radio. Kevin has the last building they called from, in another city. Find what happened to them and bring back any note they left.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "journal",
+    objectives: [
+      {
+        id: QUEST_X_MARKS_FIND_OBJECTIVE,
+        kind: "haveItem",
+        label: "Find the caravan's note",
+        itemId: WAGON_NOTE_ITEM_ID,
+        count: 1,
+      },
+      {
+        id: "turn_in_note",
+        kind: "turnInItem",
+        label: "Hand the note to Kevin",
+        itemId: WAGON_NOTE_ITEM_ID,
+        quantity: 1,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 200 },
+      { faction: "ashenTraders", reputation: 400 },
+    ],
+  },
+  {
+    id: QUEST_ID_PAID_AHEAD,
+    title: "Paid Ahead",
+    description:
+      "Kevin wants to see every piece of a pistol before the stall tries to make one. Accept the job, then bring a frame, a slide, a small spring, and a trigger. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "pistol_frame",
+    objectives: [
+      {
+        id: "turn_in_frame",
+        kind: "turnInItem",
+        label: "Turn in a pistol frame",
+        itemId: "pistol_frame",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_slide",
+        kind: "turnInItem",
+        label: "Turn in a pistol slide",
+        itemId: "pistol_slide",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_spring",
+        kind: "turnInItem",
+        label: "Turn in a small spring",
+        itemId: "small_spring",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_trigger",
+        kind: "turnInItem",
+        label: "Turn in a pistol trigger",
+        itemId: "pistol_trigger",
+        quantity: 1,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 220 },
+      { faction: "ashenTraders", reputation: 400 },
+    ],
+  },
+];
+
 /** Stub faction / POI jobs — content fills in later phases. */
 export const QUEST_STUBS: readonly QuestDefinition[] = [
   {
@@ -695,6 +976,7 @@ export const QUEST_REGISTRY: readonly QuestDefinition[] = [
   QUEST_AISLE_CHECK,
   QUEST_THIN_THE_PACK,
   QUEST_DONT_HOCK_THEM,
+  ...ASHEN_TRADER_QUESTS,
   ...QUEST_STUBS,
 ];
 
@@ -898,6 +1180,7 @@ export function listedOneTimeQuestIds(
   return selectListedOneTimeQuestIds(
     oneTime.map((q) => q.id),
     (id) => questStatusOf(state, id),
+    giver === "ashenTrader" ? ASHEN_TRADER_QUESTS.length : ONE_TIME_QUESTS_LISTED,
   );
 }
 
@@ -984,6 +1267,39 @@ export function questProgressObjectivesComplete(
     if ((prev.progress[obj.id] ?? 0) < need) return false;
   }
   return true;
+}
+
+export function questRewardBanknotes(def: QuestDefinition): number {
+  let total = 0;
+  for (const reward of def.rewards) total += reward.banknotes ?? 0;
+  return total;
+}
+
+export function questRewardReputation(
+  def: QuestDefinition,
+  faction: QuestFaction,
+): number {
+  let total = 0;
+  for (const reward of def.rewards) {
+    if (reward.faction === faction) total += reward.reputation ?? 0;
+  }
+  return total;
+}
+
+/** Item stacks this job takes out of the pack on turn-in. */
+export function questTurnInItems(
+  def: QuestDefinition,
+): { itemId: string; quantity: number; label: string }[] {
+  const out: { itemId: string; quantity: number; label: string }[] = [];
+  for (const obj of def.objectives) {
+    if (obj.kind !== "turnInItem" || !obj.itemId) continue;
+    out.push({
+      itemId: obj.itemId,
+      quantity: Math.max(1, obj.quantity ?? 1),
+      label: obj.label,
+    });
+  }
+  return out;
 }
 
 /** True when the job is accepted, not at its daily cap, and field work is done. */

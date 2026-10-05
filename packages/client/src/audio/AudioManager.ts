@@ -93,6 +93,14 @@ const GUNSHOT_BANKS: Record<
   weapon_hunting_rifle: { dir: "HuntingRifle", stem: "HuntingRifle", variants: 1 },
 };
 
+/**
+ * Extra trim for banks mastered well above the pistol takes.
+ * Missing ids stay at 1. Shotguns remain the loudest shot.
+ */
+const GUNSHOT_BANK_GAIN: Record<string, number> = {
+  weapon_shotgun: 0.6,
+};
+
 function gunshotBankVariants(itemId: string): number {
   const n = GUNSHOT_BANKS[itemId]?.variants ?? GUNSHOT_VARIANT_COUNT;
   return Math.max(1, n);
@@ -116,6 +124,10 @@ const GUNSHOT_FULL_DIST = 10;
 /** Fireplace crackle is close-range compared to gunshots. */
 const FIREPLACE_HEAR_RADIUS = 22;
 const FIREPLACE_FULL_DIST = 5;
+/** Loop peaks near full scale. Sit it with the rain bed, not on top of it. */
+const FIREPLACE_GAIN = 0.6;
+/** Extinguish hiss is a hotter file than the crackle loop. */
+const FIREPLACE_EXTINGUISH_GAIN = 0.22;
 /** Bed under outdoor scenes. Keep this just-noticeable, not a mix layer. */
 const WIND_AMBIENCE_GAIN = 0.1;
 const WIND_FADE_IN_PER_SEC = 0.14;
@@ -125,7 +137,8 @@ const EXTERIOR_RAIN_VARIANTS = 3;
 /** Overlap between rain takes so the next clip is already in when the last ends. */
 const RAIN_CROSSFADE_MS = 1600;
 const INTERIOR_RAIN_GAIN = 0.4;
-const THUNDER_GAIN = 0.85;
+/** Exterior takes are mastered near a gunshot. This keeps thunder under the shotgun. */
+const THUNDER_GAIN = 0.55;
 const THUNDER_COUNT = 2;
 /** Quiet bed under the login panel. Sits under UI, not a title theme. */
 const MENU_GAIN = 0.2;
@@ -157,7 +170,8 @@ export const ZOMBIE_GROAN_HEAR_RADIUS = 22;
 export const ZOMBIE_GROAN_COUNT = 12;
 /** Full groan volume at this distance; linear fade to silent at hear radius. */
 const ZOMBIE_GROAN_FULL_DIST = 1;
-const ZOMBIE_GROAN_GAIN = 0.75;
+/** Groan files peak near full scale. Keep a close walker under a rifle shot. */
+const ZOMBIE_GROAN_GAIN = 0.4;
 const ZOMBIE_GROAN_MAX_LIVE = 4;
 const TREE_FALL_HEAR_RADIUS = 50;
 const TREE_FALL_FULL_DIST = 12;
@@ -167,7 +181,8 @@ const TREE_FALL_GAIN = 0.75;
  * Below 1 slows the take, above 1 speeds it up.
  */
 export const TREE_CHOP_RATE = 1.2;
-const TREE_CHOP_GAIN = 0.7;
+/** Chop is a loop and stays loud out to the tree-fall distance. */
+const TREE_CHOP_GAIN = 0.45;
 const MELEE_HIT_COUNT = 4;
 type MeleeHitBank = "blade" | "blunt";
 const MELEE_HIT_BANKS: readonly MeleeHitBank[] = ["blade", "blunt"];
@@ -177,7 +192,11 @@ const MELEE_HIT_GAIN: Record<MeleeHitBank, number> = {
 };
 const DOOR_HEAR_RADIUS = 22;
 const DOOR_FULL_DIST = 6;
+/** Wooden doors. Hospital cubicle files are hotter, so they use a lower gain. */
 const DOOR_GAIN = 0.3;
+const HOSPITAL_DOOR_GAIN = 0.2;
+/** Eat, drink, and medical clips. The louder takes (soda, vitamins) were above the doors. */
+const CONSUME_GAIN = 0.35;
 const INVENTORY_UI_GAIN = 0.12;
 
 export type GunshotListener = {
@@ -213,6 +232,7 @@ export type FireplaceAudioSource = {
 type LiveGunshot = {
   sound: Phaser.Sound.BaseSound;
   source: GunshotSource;
+  fileGain: number;
 };
 
 type LiveFireplace = {
@@ -710,7 +730,7 @@ export class AudioManager {
       "consume",
       opts?.id ?? "local",
       key,
-      0.5,
+      CONSUME_GAIN,
       opts?.source,
       durationMs,
     );
@@ -719,7 +739,7 @@ export class AudioManager {
   /** Hiss when a fireplace is put out. Burn-out stays silent. */
   playFireplaceExtinguish(source?: GunshotSource) {
     const key = fireplaceExtinguishKey();
-    this.playSpatial(key, key, 0.3, source);
+    this.playSpatial(key, key, FIREPLACE_EXTINGUISH_GAIN, source);
   }
 
   stopConsume(id = "local") {
@@ -1169,15 +1189,16 @@ export class AudioManager {
     source: GunshotSource,
   ) {
     const key = open ? doorOpenKey(style) : doorCloseKey(style);
+    const gain = style === "hospital" ? HOSPITAL_DOOR_GAIN : DOOR_GAIN;
     const spatialSource = { ...source, noiseRadius: DOOR_HEAR_RADIUS };
     const spatial = this.positionalSpatial(spatialSource, DOOR_FULL_DIST);
     if (spatial.gain < GUNSHOT_MIN_GAIN) return;
     const sound = this.playKey(key, key, {
-      volume: DOOR_GAIN * spatial.gain,
+      volume: gain * spatial.gain,
       pan: spatial.pan,
       exteriorMuffle: spatial.exteriorMuffle,
     });
-    this.trackOneShot(sound, spatialSource, DOOR_GAIN, DOOR_FULL_DIST);
+    this.trackOneShot(sound, spatialSource, gain, DOOR_FULL_DIST);
   }
 
   private dropTreeFall(id: string) {
@@ -1281,14 +1302,15 @@ export class AudioManager {
     spatialSource.noiseRadius = gunshotHearRadius(itemId);
     const spatial = this.gunshotSpatial(spatialSource);
     if (spatial.gain < GUNSHOT_MIN_GAIN) return;
+    const fileGain = (opts?.volume ?? 1) * (GUNSHOT_BANK_GAIN[itemId] ?? 1);
     const sound = this.playKey(gunshotKey(itemId, v), gunshotKey(itemId, v), {
-      volume: (opts?.volume ?? 1) * spatial.gain,
+      volume: fileGain * spatial.gain,
       rate: opts?.rate,
       pan: spatial.pan,
       exteriorMuffle: spatial.exteriorMuffle,
     });
     if (!sound) return;
-    this.liveGunshots.push({ sound, source: spatialSource });
+    this.liveGunshots.push({ sound, source: spatialSource, fileGain });
     sound.once("destroy", () => this.dropLiveGunshot(sound));
   }
 
@@ -1321,7 +1343,10 @@ export class AudioManager {
       ) {
         existing.source = spatialSource;
         try {
-          applySoundVolume(existing.sound, this.volume * spatial.gain);
+          applySoundVolume(
+            existing.sound,
+            this.volume * FIREPLACE_GAIN * spatial.gain,
+          );
           applySoundPan(existing.sound, spatial.pan);
         } catch {
           /* HTML5 backend may lack pan */
@@ -1333,7 +1358,7 @@ export class AudioManager {
         this.liveFireplaces.delete(src.id);
       }
       const sound = this.playKey(sfxKey("fireplace"), "fireplace", {
-        volume: spatial.gain,
+        volume: FIREPLACE_GAIN * spatial.gain,
         pan: spatial.pan,
         exteriorMuffle: spatial.exteriorMuffle,
         loop: true,
@@ -1796,7 +1821,7 @@ export class AudioManager {
       if (!live.sound.isPlaying) continue;
       const spatial = this.gunshotSpatial(live.source);
       try {
-        applySoundVolume(live.sound, this.volume * spatial.gain);
+        applySoundVolume(live.sound, this.volume * live.fileGain * spatial.gain);
         applySoundPan(live.sound, spatial.pan);
       } catch {
         /* HTML5 backend may lack pan */
@@ -1891,7 +1916,10 @@ export class AudioManager {
         continue;
       }
       try {
-        applySoundVolume(live.sound, this.volume * spatial.gain);
+        applySoundVolume(
+          live.sound,
+          this.volume * FIREPLACE_GAIN * spatial.gain,
+        );
         applySoundPan(live.sound, spatial.pan);
       } catch {
         /* HTML5 backend may lack pan */

@@ -23,9 +23,9 @@ export const COYWOLF_SPAWN_CHANCE = 0.45;
  * its 30-tile hunt reaches you.
  */
 export const COYWOLF_ACTIVATE_RADIUS = 96;
-/** Wake stays until every player is farther than this from the pack home. */
+/** Wake stays until every player is farther than this from the pack. */
 export const COYWOLF_DEACTIVATE_RADIUS = 120;
-/** Wander stays inside this radius of the pack's home tile. */
+/** Wander stays inside this radius of wherever the pack last settled. */
 export const COYWOLF_HOME_RADIUS = 16;
 
 export const COYWOLF_PACK_MIN = 1;
@@ -42,7 +42,8 @@ export const COYWOLF_PACK_HUNT_SIZE = 3;
 export const COYWOLF_PACK_HUNT_RADIUS = 30;
 /**
  * Once they have a target, they keep it until it is this far from every
- * living member. A little past the hunt radius so they do not spin at the edge.
+ * living member, or they lose sight of it. A little past the hunt radius
+ * so they do not spin at the edge.
  */
 export const COYWOLF_PACK_CHASE_RADIUS = 40;
 /** Lunge reach. Longer than a zombie's grab, shorter than a bear's swipe. */

@@ -70,7 +70,37 @@ export type AnimatedFurnitureType =
   | "copier"
   | "officechair"
   | "whiteboard"
-  | "stairs";
+  | "stairs"
+  | "clothingrack1"
+  | "clothingrack2"
+  | "clothingrack3"
+  | "mannequin1"
+  | "mannequin2"
+  | "mannequin3"
+  | "cart1"
+  | "cart2"
+  | "retailshelf1"
+  | "retailshelf2"
+  | "retailshelf3"
+  | "retailcase1"
+  | "retailcase2";
+
+/** Idle-only SE/SW pair. Searched frames are omitted (frameCount 0). */
+function idlePair(
+  objectType: AnimatedFurnitureType,
+  folder: string,
+  filePrefix: string,
+): AnimatedFurnitureDef[] {
+  return (["SE", "SW"] as const).map((facing) => ({
+    objectType,
+    idleKey: `furniture-${objectType}-${facing.toLowerCase()}`,
+    animKey: `furniture-${objectType}-${facing.toLowerCase()}-searched`,
+    folder,
+    filePrefix,
+    facing,
+    frameCount: 0,
+  }));
+}
 
 export type AnimatedFurnitureDef = {
   objectType: AnimatedFurnitureType;
@@ -1146,4 +1176,17 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     facing: "SW",
     frameCount: 0,
   },
+  ...idlePair("clothingrack1", "Furniture/ClothingRack1", "ClothingRack1"),
+  ...idlePair("clothingrack2", "Furniture/ClothingRack2", "ClothingRack2"),
+  ...idlePair("clothingrack3", "Furniture/ClothingRack3", "ClothingRack3"),
+  ...idlePair("mannequin1", "Furniture/Mannequin1", "Mannequin1"),
+  ...idlePair("mannequin2", "Furniture/Mannequin2", "Mannequin2"),
+  ...idlePair("mannequin3", "Furniture/Mannequin3", "Mannequin3"),
+  ...idlePair("cart1", "Furniture/Cart1", "Cart1"),
+  ...idlePair("cart2", "Furniture/Cart2", "Cart2"),
+  ...idlePair("retailshelf1", "Furniture/RetailShelf1", "RetailShelf1"),
+  ...idlePair("retailshelf2", "Furniture/RetailShelf2", "RetailShelf2"),
+  ...idlePair("retailshelf3", "Furniture/RetailShelf3", "RetailShelf3"),
+  ...idlePair("retailcase1", "Furniture/RetailCase1", "RetailCase1"),
+  ...idlePair("retailcase2", "Furniture/RetailCase2", "RetailCase2"),
 ];

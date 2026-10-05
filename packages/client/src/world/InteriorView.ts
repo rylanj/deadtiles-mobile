@@ -293,6 +293,20 @@ const CHECKOUT_BOTTOM_PAD = Math.round(CHECKOUT_RENDER_HEIGHT * 0.2);
 const SUPERSHELF_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.4);
 /** SuperShelf1/2 — lower by 10% of display height. */
 const SUPERSHELF_BOTTOM_PAD = Math.round(SUPERSHELF_RENDER_HEIGHT * 0.1);
+/** ClothingRack1-3: 2-tile rail. Opaque width fills that span at this height. */
+const CLOTHING_RACK_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.15);
+/** Drop the few transparent rows under the wheels. */
+const CLOTHING_RACK_BOTTOM_PAD = Math.round(CLOTHING_RACK_RENDER_HEIGHT * (8 / 256));
+/** Mannequin1-3: about player height. */
+const MANNEQUIN_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.1);
+/** Cart1/2: one tile. Slightly under generic so the basket stays on the diamond. */
+const CART_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.9);
+/** Drop the transparent rows under the cart wheels. */
+const CART_BOTTOM_PAD = Math.round(CART_RENDER_HEIGHT * (10 / 256));
+/** RetailCase1/2: 3-tile glass counter. Same canvas scale as a gondola, so the length matches. */
+const RETAIL_CASE_RENDER_HEIGHT = SUPERSHELF_RENDER_HEIGHT;
+/** Feet sit 21px above the canvas bottom. */
+const RETAIL_CASE_BOTTOM_PAD = Math.round(RETAIL_CASE_RENDER_HEIGHT * (21 / 256));
 /** SuperFridge1 — commercial drink cooler bank. */
 const SUPERFRIDGE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.25);
 /** SuperFridge1 — lower by 10% of display height. */
@@ -441,6 +455,31 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "supershelf1" || objectType === "supershelf2") {
     return SUPERSHELF_RENDER_HEIGHT;
   }
+  if (
+    objectType === "retailshelf1" ||
+    objectType === "retailshelf2" ||
+    objectType === "retailshelf3"
+  ) {
+    return SUPERSHELF_RENDER_HEIGHT;
+  }
+  if (
+    objectType === "clothingrack1" ||
+    objectType === "clothingrack2" ||
+    objectType === "clothingrack3"
+  ) {
+    return CLOTHING_RACK_RENDER_HEIGHT;
+  }
+  if (
+    objectType === "mannequin1" ||
+    objectType === "mannequin2" ||
+    objectType === "mannequin3"
+  ) {
+    return MANNEQUIN_RENDER_HEIGHT;
+  }
+  if (objectType === "cart1" || objectType === "cart2") return CART_RENDER_HEIGHT;
+  if (objectType === "retailcase1" || objectType === "retailcase2") {
+    return RETAIL_CASE_RENDER_HEIGHT;
+  }
   if (objectType === "superfridge1") return SUPERFRIDGE_RENDER_HEIGHT;
   if (objectType === "hospitalbed") return HOSPITALBED_RENDER_HEIGHT;
   if (objectType === "hospitalbed2" || objectType === "hospitalbed3") {
@@ -517,6 +556,24 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "checkout") return CHECKOUT_BOTTOM_PAD;
   if (objectType === "supershelf1" || objectType === "supershelf2") {
     return SUPERSHELF_BOTTOM_PAD;
+  }
+  if (
+    objectType === "retailshelf1" ||
+    objectType === "retailshelf2" ||
+    objectType === "retailshelf3"
+  ) {
+    return SUPERSHELF_BOTTOM_PAD;
+  }
+  if (
+    objectType === "clothingrack1" ||
+    objectType === "clothingrack2" ||
+    objectType === "clothingrack3"
+  ) {
+    return CLOTHING_RACK_BOTTOM_PAD;
+  }
+  if (objectType === "cart1" || objectType === "cart2") return CART_BOTTOM_PAD;
+  if (objectType === "retailcase1" || objectType === "retailcase2") {
+    return RETAIL_CASE_BOTTOM_PAD;
   }
   if (objectType === "superfridge1") return SUPERFRIDGE_BOTTOM_PAD;
   if (objectType === "hospitalbed") return HOSPITALBED_BOTTOM_PAD;

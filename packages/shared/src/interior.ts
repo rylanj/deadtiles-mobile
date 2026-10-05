@@ -232,6 +232,20 @@ export const FURNITURE_TYPES = [
   "whiteboard",
   /** Office stairs between storeys. Not loot. */
   "stairs",
+  /** Large retail. Placed by layout, not rolled. */
+  "clothingrack1",
+  "clothingrack2",
+  "clothingrack3",
+  "mannequin1",
+  "mannequin2",
+  "mannequin3",
+  "cart1",
+  "cart2",
+  "retailshelf1",
+  "retailshelf2",
+  "retailshelf3",
+  "retailcase1",
+  "retailcase2",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -304,6 +318,19 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   officechair: "Office Chair",
   whiteboard: "Whiteboard",
   stairs: "Stairs",
+  clothingrack1: "Clothing Rack",
+  clothingrack2: "Clothing Rack",
+  clothingrack3: "Clothing Rack",
+  mannequin1: "Mannequin",
+  mannequin2: "Mannequin",
+  mannequin3: "Mannequin",
+  cart1: "Shopping Cart",
+  cart2: "Shopping Cart",
+  retailshelf1: "Shelf",
+  retailshelf2: "Shelf",
+  retailshelf3: "Shelf",
+  retailcase1: "Jewelry Case",
+  retailcase2: "Watch Case",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -526,6 +553,33 @@ export function furnitureFootprint(
         : furnitureFacing("desk3");
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
+  // ClothingRack1-3: long rail. SE 1x2, SW 2x1.
+  if (
+    objectType === "clothingrack1" ||
+    objectType === "clothingrack2" ||
+    objectType === "clothingrack3"
+  ) {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing(objectType);
+    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
+  }
+  // RetailShelf1-3: aisle gondolas, same span as SuperShelf. SE 1x3, SW 3x1.
+  // RetailCase1/2: glass counters, same span. SE 1x3, SW 3x1.
+  if (
+    objectType === "retailshelf1" ||
+    objectType === "retailshelf2" ||
+    objectType === "retailshelf3" ||
+    objectType === "retailcase1" ||
+    objectType === "retailcase2"
+  ) {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing(objectType);
+    return f === "SE" ? { w: 1, h: 3 } : { w: 3, h: 1 };
+  }
   // Stairs1 — 2×3, flush to a wall on the long side.
   // SE runs along X (3×2, north edge on the wall). SW runs along Y (2×3, west edge on the wall).
   if (objectType === "stairs") {
@@ -610,6 +664,19 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   officechair: "SW",
   whiteboard: "SW",
   stairs: "SW",
+  clothingrack1: "SE",
+  clothingrack2: "SE",
+  clothingrack3: "SE",
+  mannequin1: "SE",
+  mannequin2: "SE",
+  mannequin3: "SE",
+  cart1: "SE",
+  cart2: "SE",
+  retailshelf1: "SE",
+  retailshelf2: "SE",
+  retailshelf3: "SE",
+  retailcase1: "SE",
+  retailcase2: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -689,6 +756,12 @@ const VISION_BLOCKING_FURNITURE = new Set([
   "supershelf1",
   "supershelf2",
   "superfridge1",
+  "clothingrack1",
+  "clothingrack2",
+  "clothingrack3",
+  "retailshelf1",
+  "retailshelf2",
+  "retailshelf3",
 ]);
 
 export function furnitureBlocksVision(objectType: string): boolean {
@@ -712,6 +785,12 @@ const BULLET_BLOCKING_FURNITURE = new Set([
   "supershelf1",
   "supershelf2",
   "vendingmachine",
+  "clothingrack1",
+  "clothingrack2",
+  "clothingrack3",
+  "retailshelf1",
+  "retailshelf2",
+  "retailshelf3",
 ]);
 
 export function furnitureBlocksBullets(objectType: string): boolean {
@@ -729,10 +808,24 @@ export function furnitureIsStairs(objectType: string): boolean {
 }
 
 /** Shop shelves a supply scout can count. */
-const SUPPLY_SHELF_TYPES = new Set(["bigshelf", "supershelf1", "supershelf2"]);
+const SUPPLY_SHELF_TYPES = new Set([
+  "bigshelf",
+  "supershelf1",
+  "supershelf2",
+  "retailshelf1",
+  "retailshelf2",
+  "retailshelf3",
+]);
 
 export function isSupplyShelf(objectType: string): boolean {
   return SUPPLY_SHELF_TYPES.has(objectType);
+}
+
+/** Fridges a supply scout can count. */
+const SUPPLY_FRIDGE_TYPES = new Set(["fridge", "superfridge1", "minifridge"]);
+
+export function isSupplyFridge(objectType: string): boolean {
+  return SUPPLY_FRIDGE_TYPES.has(objectType);
 }
 
 export function searchableFootprint(obj: {
@@ -783,7 +876,15 @@ export function furnitureFrontApproachTiles(obj: {
   }
 
   // SuperShelf1/2: loot tile is only the middle front neighbour.
-  if (obj.objectType === "supershelf1" || obj.objectType === "supershelf2") {
+  if (
+    obj.objectType === "supershelf1" ||
+    obj.objectType === "supershelf2" ||
+    obj.objectType === "retailshelf1" ||
+    obj.objectType === "retailshelf2" ||
+    obj.objectType === "retailshelf3" ||
+    obj.objectType === "retailcase1" ||
+    obj.objectType === "retailcase2"
+  ) {
     const mx = obj.x + Math.floor((w - 1) / 2);
     const my = obj.y + Math.floor((h - 1) / 2);
     const ax = mx + dx;
@@ -1035,6 +1136,20 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   whiteboard: 0,
   /** Office stairs — placed by layout when the exterior has a second storey. */
   stairs: 0,
+  /** Large retail: placed by layout, never rolled. */
+  clothingrack1: 0,
+  clothingrack2: 0,
+  clothingrack3: 0,
+  mannequin1: 0,
+  mannequin2: 0,
+  mannequin3: 0,
+  cart1: 0,
+  cart2: 0,
+  retailshelf1: 0,
+  retailshelf2: 0,
+  retailshelf3: 0,
+  retailcase1: 0,
+  retailcase2: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -1107,6 +1222,11 @@ export function isMessHallInterior(bx: number, by: number): boolean {
 /** Downtown office interiors — meeting room, manager's office, bullpen. */
 export function isOfficeInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "office";
+}
+
+/** Department-store interiors: clothing, housewares, a small furniture display. */
+export function isLargeRetailInterior(bx: number, by: number): boolean {
+  return getBuildingAt(bx, by)?.buildingType === "large_retail";
 }
 
 const CANTEEN_TABLE_TYPES = [
@@ -7596,8 +7716,6 @@ function placeAshenTraderMarket(
   const staff = frame.counterDepth - 1;
   const mid = Math.floor(frame.span / 2);
   const staffProps: { along: number; type: FurnitureType; facing: FurnitureFacing }[] = [
-    { along: 0, type: "lantern1", facing: frame.faceDoor },
-    { along: frame.span - 1, type: "lantern1", facing: frame.faceDoor },
     { along: mid + 2, type: "campchair", facing: frame.faceDoor },
     { along: mid - 3, type: "footlocker", facing: frame.faceDoor },
     { along: mid + 4, type: "kitbag", facing: frame.faceDoor },
@@ -8798,6 +8916,315 @@ function placeOffice(
   return { furnitures, walls, doors };
 }
 
+const RETAIL_RACKS = ["clothingrack1", "clothingrack2", "clothingrack3"] as const;
+const RETAIL_SHELVES = ["retailshelf1", "retailshelf2", "retailshelf3"] as const;
+const RETAIL_MANNEQUINS = ["mannequin1", "mannequin2", "mannequin3"] as const;
+
+/**
+ * Department store. Gondolas run away from the door, with a clear aisle on
+ * the door span. Housewares sit toward the back wall, clothing toward the
+ * door. Checkouts flank the aisle. A jewelry case and a watch case sit on
+ * the aisle just inside the registers. The back wall is a small furniture
+ * display, with mannequins in the cross aisle and a few carts in the walks.
+ */
+function placeLargeRetail(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  rng: () => number,
+  occupied: Set<string>,
+  startIndex: number,
+): SearchableObject[] {
+  const doorEast = exit.face === "SE";
+  const aisleFace: FurnitureFacing = doorEast ? "SW" : "SE";
+  const wallFace: FurnitureFacing = doorEast ? "SE" : "SW";
+  const aisle0 = exit.alongMin;
+  const aisle1 = exit.alongMax;
+  const runN = doorEast ? iW : iH;
+  const rowN = doorEast ? iH : iW;
+  const runStart = 3;
+  const runLimit = runN - 1;
+  const toXY = (run: number, row: number) =>
+    doorEast ? { x: run, y: row } : { x: row, y: run };
+
+  const onAisle = (tx: number, ty: number) =>
+    doorEast ? ty >= aisle0 && ty <= aisle1 : tx >= aisle0 && tx <= aisle1;
+
+  const blocksEntry = (tx: number, ty: number) => {
+    if (!onAisle(tx, ty)) return false;
+    if (doorEast) return tx === exit.insideX || tx === exit.insideX - 1;
+    return ty === exit.insideY || ty === exit.insideY - 1;
+  };
+
+  if (doorEast) {
+    for (let y = aisle0; y <= aisle1; y++) {
+      occupied.add(`${exit.insideX},${y}`);
+      occupied.add(`${exit.insideX - 1},${y}`);
+    }
+  } else {
+    for (let x = aisle0; x <= aisle1; x++) {
+      occupied.add(`${x},${exit.insideY}`);
+      occupied.add(`${x},${exit.insideY - 1}`);
+    }
+  }
+
+  const frontTiles = (
+    type: FurnitureType,
+    x: number,
+    y: number,
+    face: FurnitureFacing,
+  ) => {
+    const { w, h } = furnitureFootprint(type, face);
+    const dx = face === "SE" ? 1 : face === "NW" ? -1 : 0;
+    const dy = face === "SW" ? 1 : face === "NE" ? -1 : 0;
+    const out: { x: number; y: number }[] = [];
+    const seen = new Set<string>();
+    for (let ty = y; ty < y + h; ty++) {
+      for (let tx = x; tx < x + w; tx++) {
+        const ax = tx + dx;
+        const ay = ty + dy;
+        if (ax >= x && ax < x + w && ay >= y && ay < y + h) continue;
+        const key = `${ax},${ay}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ x: ax, y: ay });
+      }
+    }
+    return out;
+  };
+
+  const furnitures: SearchableObject[] = [];
+  let furnitureIndex = startIndex;
+
+  const canPlace = (
+    type: FurnitureType,
+    x: number,
+    y: number,
+    face: FurnitureFacing,
+    needApproach = true,
+  ) => {
+    const { w, h } = furnitureFootprint(type, face);
+    if (x < 0 || y < 0 || x + w > iW || y + h > iH) return false;
+    for (let ty = y; ty < y + h; ty++) {
+      for (let tx = x; tx < x + w; tx++) {
+        if (occupied.has(`${tx},${ty}`)) return false;
+        if (blocksEntry(tx, ty)) return false;
+        if (onAisle(tx, ty)) return false;
+      }
+    }
+    if (!needApproach) return true;
+    const approaches = frontTiles(type, x, y, face);
+    if (approaches.length === 0) return false;
+    for (const t of approaches) {
+      if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (occupied.has(`${t.x},${t.y}`)) return false;
+      if (blocksEntry(t.x, t.y)) return false;
+    }
+    return true;
+  };
+
+  const push = (
+    type: FurnitureType,
+    x: number,
+    y: number,
+    face: FurnitureFacing,
+    reserveFront = true,
+  ) => {
+    const { w, h } = furnitureFootprint(type, face);
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+      kind: "furniture",
+      objectType: type,
+      x,
+      y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing: face,
+    });
+    for (let ty = y; ty < y + h; ty++) {
+      for (let tx = x; tx < x + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+    if (!reserveFront) return;
+    for (const t of frontTiles(type, x, y, face)) {
+      if (t.x >= 0 && t.y >= 0 && t.x < iW && t.y < iH) occupied.add(`${t.x},${t.y}`);
+    }
+  };
+
+  const placeAt = (
+    type: FurnitureType,
+    run: number,
+    row: number,
+    face: FurnitureFacing,
+    needApproach = true,
+  ) => {
+    const pos = toXY(run, row);
+    if (!canPlace(type, pos.x, pos.y, face, needApproach)) return false;
+    push(type, pos.x, pos.y, face, needApproach);
+    return true;
+  };
+
+  // Back wall: coolers, a sofa, and a chair. Bed stays on the west wall
+  // because Bed1 only has SE art.
+  let cursor = doorEast ? 1 : 3;
+  const placeWallPiece = (type: FurnitureType) => {
+    const { w, h } = furnitureFootprint(type, wallFace);
+    const rowSize = doorEast ? h : w;
+    let steps = 0;
+    while (cursor + rowSize < rowN - 1 && steps < rowN) {
+      steps++;
+      const pos = toXY(0, cursor);
+      if (canPlace(type, pos.x, pos.y, wallFace)) {
+        push(type, pos.x, pos.y, wallFace);
+        cursor += rowSize + 1;
+        return;
+      }
+      cursor += 1;
+    }
+  };
+  placeWallPiece("superfridge1");
+  placeWallPiece("superfridge1");
+  placeWallPiece("sofa");
+  placeWallPiece("armchair");
+  if (doorEast) {
+    placeWallPiece("bed");
+    for (const x of [3, 5, 7, 9]) {
+      if (canPlace("dresser", x, 0, "SW")) {
+        push("dresser", x, 0, "SW");
+        break;
+      }
+    }
+  } else {
+    placeWallPiece("dresser");
+    for (let y = 2; y < iH - 2; y++) {
+      if (!canPlace("bed", 0, y, "SE")) continue;
+      push("bed", 0, y, "SE");
+      break;
+    }
+  }
+
+  const { w: cw, h: ch } = furnitureFootprint("checkout", aisleFace);
+  const runSize = doorEast ? cw : ch;
+  const rowSize = doorEast ? ch : cw;
+  const doorRun = doorEast ? exit.insideX : exit.insideY;
+  const checkoutRun = doorRun - 1 - runSize;
+  placeAt("checkout", checkoutRun, aisle0 - rowSize, aisleFace);
+  placeAt("checkout", checkoutRun, aisle1 + 1, aisleFace);
+  // Bins and a vending machine just behind the registers, before gondolas claim that run.
+  const behind = checkoutRun - 1;
+  if (behind >= runStart) {
+    placeAt("trashcan", behind, aisle0 - rowSize, aisleFace);
+    placeAt("trashcan", behind, aisle1 + rowSize, aisleFace);
+    placeAt("vendingmachine", behind, aisle0 - rowSize - 1, wallFace);
+  }
+
+  // Jewelry then watches, glass toward the aisle, just inside the registers.
+  const placeCase = (type: FurnitureType) => {
+    const { w, h } = furnitureFootprint(type, aisleFace);
+    const along = doorEast ? w : h;
+    const deep = doorEast ? h : w;
+    const rows = [aisle0 - deep, aisle1 + 1];
+    for (const row of rows) {
+      if (row < 0 || row + deep > rowN) continue;
+      for (let run = checkoutRun - along; run >= runStart; run--) {
+        if (placeAt(type, run, row, aisleFace)) return;
+      }
+    }
+  };
+  placeCase("retailcase1");
+  placeCase("retailcase2");
+
+  const runSpan = runLimit - runStart;
+  let gap0 = -1;
+  let gap1 = -1;
+  if (runSpan >= 10) {
+    gap0 = runStart + Math.floor(runSpan / 2) - 1;
+    gap1 = gap0 + 2;
+  }
+
+  let shelfVariant = Math.floor(rng() * RETAIL_SHELVES.length);
+  let rackVariant = Math.floor(rng() * RETAIL_RACKS.length);
+  const placedRows: number[] = [];
+
+  const placeRun = (
+    row: number,
+    types: readonly FurnitureType[],
+    alongSize: number,
+    from: number,
+    to: number,
+    variant: { n: number },
+  ) => {
+    let along = from;
+    let count = 0;
+    while (along + alongSize <= to) {
+      const type = types[variant.n % types.length]!;
+      if (placeAt(type, along, row, aisleFace)) {
+        variant.n++;
+        along += alongSize;
+        count++;
+      } else {
+        along += 1;
+      }
+    }
+    return count;
+  };
+
+  const placeRow = (row: number) => {
+    const mid = Math.floor((runStart + runLimit) / 2);
+    const shelfEnd = gap0 >= 0 ? gap0 : mid;
+    const rackFrom = gap0 >= 0 ? gap1 : mid;
+    // Housewares toward the back wall, clothing toward the door.
+    const shelves = placeRun(
+      row,
+      RETAIL_SHELVES,
+      3,
+      runStart,
+      shelfEnd,
+      { n: shelfVariant },
+    );
+    shelfVariant += shelves;
+    const racks = placeRun(
+      row,
+      RETAIL_RACKS,
+      2,
+      rackFrom,
+      runLimit,
+      { n: rackVariant },
+    );
+    rackVariant += racks;
+    if (shelves + racks > 0) placedRows.push(row);
+  };
+
+  for (let row = aisle0 - 1; row >= 1; row -= 3) placeRow(row);
+  for (let row = aisle1 + 1; row + 1 <= rowN - 2; row += 3) placeRow(row);
+
+  if (gap0 >= 0) {
+    let m = 0;
+    for (const row of placedRows) {
+      if (m >= RETAIL_MANNEQUINS.length) break;
+      const type = RETAIL_MANNEQUINS[m]!;
+      if (placeAt(type, gap0, row, wallFace)) m++;
+    }
+  }
+
+  for (const row of placedRows) {
+    const cartRow = row + 2;
+    if (cartRow >= aisle0 && cartRow <= aisle1) continue;
+    if (cartRow < 1 || cartRow >= rowN - 1) continue;
+    const type: FurnitureType = rng() < 0.5 ? "cart1" : "cart2";
+    const span = Math.max(1, runLimit - runStart);
+    for (let n = 0; n < 5; n++) {
+      const along = runStart + Math.floor(rng() * span);
+      if (gap0 >= 0 && along >= gap0 && along < gap1) continue;
+      if (placeAt(type, along, cartRow, aisleFace, false)) break;
+    }
+  }
+
+  return furnitures;
+}
+
 export function generateInteriorContent(bx: number, by: number): {
   furnitures: SearchableObject[];
   zombieSpawns: { x: number; y: number }[];
@@ -8823,6 +9250,7 @@ export function generateInteriorContent(bx: number, by: number): {
   const tent = isTentInterior(bx, by);
   const messHall = isMessHallInterior(bx, by);
   const officeInterior = isOfficeInterior(bx, by);
+  const largeRetail = isLargeRetailInterior(bx, by);
   const multiRoomHouse = isMultiRoomHouseInterior(bx, by);
   let furnitures: SearchableObject[];
   let walls: InteriorWallTile[] = [];
@@ -9078,8 +9506,10 @@ export function generateInteriorContent(bx: number, by: number): {
     furnitures = placed.furnitures;
     walls = placed.walls;
     doors = placed.doors;
+  } else if (largeRetail) {
+    furnitures = placeLargeRetail(bx, by, iW, iH, exit, rng, occupied, 0);
   } else {
-    // `none` and other untyped shells — empty until a real type is assigned.
+    // Gun shop, diner, apartment, and untyped shells stay empty until a layout is assigned.
     furnitures = [];
   }
 

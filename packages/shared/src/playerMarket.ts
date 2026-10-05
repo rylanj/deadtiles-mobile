@@ -9,6 +9,7 @@ import {
   getItemDefinition,
   getMaxDurability,
   BACKPACK_SLOT_INDEX,
+  backpackHoldsItems,
   backpackStorageHasItems,
   inventoryAddRoom,
   inventorySlotAccess,
@@ -447,6 +448,9 @@ export function takeMarketListing(args: {
   }
   const slot = inventory[slotIndex];
   if (!slot) return { ok: false, error: "That slot changed." };
+  if (backpackHoldsItems(inventory, slotIndex)) {
+    return { ok: false, error: "Empty the pack, or drop it on the floor." };
+  }
   const claimed = getItemDefinition(itemId);
   const actual = getItemDefinition(slot.id);
   if (!claimed || !actual || claimed.id !== actual.id) {

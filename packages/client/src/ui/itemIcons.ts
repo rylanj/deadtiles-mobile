@@ -70,6 +70,8 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   gold_chain: "/assets/UI/UI_gold_chain.png",
   gold_earrings: "/assets/UI/UI_gold_earrings.png",
   clarks_earrings: "/assets/UI/UI_gold_earrings.png",
+  caravan_manifest: "/assets/UI/UI_journal.png",
+  wagon_note: "/assets/UI/UI_journal.png",
   gold_ring: "/assets/UI/UI_gold_ring.png",
   silver_chain: "/assets/UI/UI_silver_chain.png",
   silver_ring: "/assets/UI/UI_silver_ring.png",

@@ -1953,6 +1953,9 @@ export class WorldScene extends Phaser.Scene {
       onClose: () => this.closeAshenTraderDialog(),
       onRequestTrade: (traderId) => this.requestTradeOpen(traderId),
       onRequestBoard: (traderId) => this.requestMarketOpen(traderId),
+      onAcceptQuest: (questId) =>
+        this.sendQuestAccept(questId, this.ashenTraderDialogUI?.getNpcId()),
+      onCompleteTask: (taskId) => this.sendAshenTraderCompleteTask(taskId),
     });
     this.ashenMilitiaDialogUI = new AshenMilitiaDialogUI({
       onClose: () => this.closeAshenMilitiaDialog(),
@@ -2434,6 +2437,10 @@ export class WorldScene extends Phaser.Scene {
             msg.payload.taskId,
             msg.payload.reason,
           );
+          this.ashenTraderDialogUI?.noteDenied(
+            msg.payload.taskId,
+            msg.payload.reason,
+          );
           this.redOrderDialogUI?.noteDenied(
             msg.payload.taskId,
             msg.payload.reason,
@@ -2441,6 +2448,7 @@ export class WorldScene extends Phaser.Scene {
         } else if (msg.type === "dialogTaskComplete") {
           this.closeRedOrderDialog();
           this.closeAshenMilitiaDialog();
+          this.closeAshenTraderDialog();
           this.lootPopup?.show(msg.payload.rewards, {
             header: "You received:",
           });
@@ -4878,6 +4886,7 @@ export class WorldScene extends Phaser.Scene {
     );
     this.syncRedOrderDialogState();
     this.syncAshenMilitiaDialogState();
+    this.syncAshenTraderDialogState();
   }
 
   private refreshInventoryUI() {
@@ -4990,6 +4999,7 @@ export class WorldScene extends Phaser.Scene {
     this.lastQuestUiKey = key;
     this.syncRedOrderDialogStateWithQuests(questsJson);
     this.syncAshenMilitiaDialogStateWithQuests(questsJson);
+    this.syncAshenTraderDialogState();
   }
 
   private syncRedOrderDialogStateWithQuests(questsJson: string) {
@@ -16578,6 +16588,18 @@ export class WorldScene extends Phaser.Scene {
     this.syncAshenMilitiaDialogStateWithQuests(this.localQuestsJson());
   }
 
+  private syncAshenTraderDialogState() {
+    if (!this.ashenTraderDialogUI?.isOpen()) return;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    this.ashenTraderDialogUI.sync({
+      inventoryJson:
+        this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]",
+      questsJson: this.localQuestsJson(),
+      ashenReputation: me?.ashenReputation ?? ASHEN_REP_START,
+      extraPockets: this.localExtraPockets(),
+    });
+  }
+
   private localQuestsJson(): string {
     return this.cachedQuestsJson;
   }
@@ -16598,6 +16620,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     this.notifyTutorial("visit_traders");
     const me = this.room?.state?.players?.get(this.sessionId);
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
     this.ashenTraderDialogUI?.open({
       npcId: payload.npcId,
       npcKind: payload.npcKind,
@@ -16605,6 +16629,9 @@ export class WorldScene extends Phaser.Scene {
       ashenReputation: payload.ashenReputation,
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
+      inventoryJson,
+      questsJson: this.localQuestsJson(),
+      extraPockets: this.localExtraPockets(),
     });
   }
 
@@ -16664,6 +16691,17 @@ export class WorldScene extends Phaser.Scene {
     const message: ClientMessage = {
       type: "questAbandon",
       payload: { questId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendAshenTraderCompleteTask(taskId: string) {
+    if (!this.room || !this.ashenTraderDialogUI?.isOpen()) return;
+    const npcId = this.ashenTraderDialogUI.getNpcId();
+    if (!npcId) return;
+    const message: ClientMessage = {
+      type: "dialogCompleteTask",
+      payload: { npcId, taskId },
     };
     this.room.send("action", message);
   }

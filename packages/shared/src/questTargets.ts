@@ -11,6 +11,16 @@ import {
 import { isInBirchportBarracks } from "./birchportBarracks.js";
 import { PLAYER_SPAWN_HUB_NAME } from "./constants.js";
 import {
+  generateInteriorContent,
+  interiorDimensions,
+  interiorExitForBuildingAt,
+  isSupplyFridge,
+  isSupplyShelf,
+  searchableFootprint,
+} from "./interior.js";
+import { isLootContainerType } from "./items.js";
+import { floodExteriorReachableTiles } from "./sealedRegion.js";
+import {
   getPlayerSpawnFootprint,
   getBuildingAt,
   getCityName,
@@ -20,6 +30,7 @@ import {
   settlementCellsInRegion,
   SETTLEMENT_CELL_SIZE,
   type BuildingInfo,
+  type BuildingType,
 } from "./worldgen.js";
 
 export type QuestTargetExclude = {
@@ -57,6 +68,111 @@ function collectBuildingsInRect(
 function pickFrom(pool: BuildingInfo[]): BuildingInfo | null {
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)] ?? null;
+}
+
+function shuffleBuildings(pool: readonly BuildingInfo[]): BuildingInfo[] {
+  const order = pool.slice();
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = order[i]!;
+    order[i] = order[j]!;
+    order[j] = tmp;
+  }
+  return order;
+}
+
+/**
+ * Try buildings until one can actually host the job.
+ * Interior generation is accept-time only, and stops at the first match.
+ */
+function pickFirstThatFits(
+  pool: readonly BuildingInfo[],
+  fits?: (bld: BuildingInfo) => boolean,
+  maxChecks = 16,
+): BuildingInfo | null {
+  if (pool.length === 0) return null;
+  if (!fits) return pickFrom(pool.slice());
+  const order = shuffleBuildings(pool);
+  const limit = Math.min(order.length, maxChecks);
+  for (let i = 0; i < limit; i++) {
+    const bld = order[i];
+    if (bld && fits(bld)) return bld;
+  }
+  return null;
+}
+
+type InteriorQuestFit = {
+  lootFurniture: number;
+  shelves: number;
+  fridges: number;
+  standingTiles: number;
+};
+
+const interiorFitByOrigin = new Map<string, InteriorQuestFit>();
+
+/** What a freshly generated interior can actually support. Layouts are seeded. */
+function interiorQuestFit(bx: number, by: number): InteriorQuestFit {
+  const key = `${bx},${by}`;
+  const cached = interiorFitByOrigin.get(key);
+  if (cached) return cached;
+
+  const generated = generateInteriorContent(bx, by);
+  let lootFurniture = 0;
+  let shelves = 0;
+  let fridges = 0;
+  for (const obj of generated.furnitures) {
+    if (obj.kind !== "furniture" || !obj.objectType) continue;
+    if (isLootContainerType(obj.objectType)) lootFurniture++;
+    if (isSupplyShelf(obj.objectType)) shelves++;
+    if (isSupplyFridge(obj.objectType)) fridges++;
+  }
+
+  const { iW, iH } = interiorDimensions(bx, by);
+  const exit = interiorExitForBuildingAt(bx, by);
+  const exitX = exit.insideX;
+  const exitY = exit.insideY;
+  const clearFrontX = exit.face === "SE" ? exit.insideX - 1 : exit.insideX;
+  const clearFrontY = exit.face === "SW" ? exit.insideY - 1 : exit.insideY;
+  const blocked = new Set<string>();
+  for (const wall of generated.walls) blocked.add(`${wall.x},${wall.y}`);
+  for (const door of generated.doors) blocked.add(`${door.x},${door.y}`);
+  for (const obj of generated.furnitures) {
+    if (obj.kind !== "furniture") continue;
+    const { w, h } = searchableFootprint(obj);
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const fx = obj.x + dx;
+        const fy = obj.y + dy;
+        if (fx < 0 || fy < 0 || fx >= iW || fy >= iH) continue;
+        blocked.add(`${fx},${fy}`);
+      }
+    }
+  }
+  const reachable = floodExteriorReachableTiles({
+    minTX: 0,
+    minTY: 0,
+    maxTX: iW - 1,
+    maxTY: iH - 1,
+    isSealBlocked: (tx, ty) => blocked.has(`${tx},${ty}`),
+    seeds: [
+      { x: exitX, y: exitY },
+      { x: clearFrontX, y: clearFrontY },
+    ],
+  });
+  let standingTiles = 0;
+  for (let ty = 0; ty < iH; ty++) {
+    for (let tx = 0; tx < iW; tx++) {
+      if (tx === exitX && ty === exitY) continue;
+      if (tx === clearFrontX && ty === clearFrontY) continue;
+      const tile = `${tx},${ty}`;
+      if (blocked.has(tile) || !reachable.has(tile)) continue;
+      standingTiles++;
+    }
+  }
+
+  const fit = { lootFurniture, shelves, fridges, standingTiles };
+  interiorFitByOrigin.set(key, fit);
+  return fit;
 }
 
 function notExcluded(
@@ -135,19 +251,51 @@ export function pickMissingPairMotel(): BuildingInfo | null {
   return best;
 }
 
+function questBuildingKind(type: BuildingType | undefined): string {
+  switch (type) {
+    case "motel":
+      return "motel";
+    case "house":
+      return "house";
+    case "supermarket":
+      return "supermarket";
+    case "warehouse":
+      return "warehouse";
+    case "apartment":
+      return "apartment";
+    case "office":
+      return "office";
+    case "diner":
+      return "diner";
+    case "gun_shop":
+      return "gun shop";
+    case "large_retail":
+      return "store";
+    case "police_station":
+      return "police station";
+    case "hospital":
+      return "hospital";
+    default:
+      return "building";
+  }
+}
+
+function cityNameAt(x: number, y: number): string | null {
+  const cx = Math.floor(x / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
+  const cy = Math.floor(y / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
+  if (getSettlementType(cx, cy) !== "city") return null;
+  const name = getCityName(cx, cy).trim();
+  return name.length > 0 ? name : null;
+}
+
 export function questTargetBuildingLabel(ox: number, oy: number): string {
   const bld = getBuildingAt(ox, oy);
-  const kind =
-    bld?.buildingType === "motel"
-      ? "motel"
-      : bld?.buildingType === "house"
-        ? "house"
-        : bld?.buildingType === "supermarket"
-          ? "supermarket"
-          : bld?.buildingType === "warehouse"
-            ? "warehouse"
-            : "building";
-  return `${kind} at ${ox}, ${oy}`;
+  const kind = questBuildingKind(bld?.buildingType);
+  const cx = bld ? bld.ox + bld.w / 2 : ox;
+  const cy = bld ? bld.oy + bld.h / 2 : oy;
+  const city = cityNameAt(cx, cy);
+  const place = city ? ` in ${city}` : "";
+  return `${kind} at ${ox}, ${oy}${place}`;
 }
 
 /** Rings around Birchport. Near first, then a wider pass if the near ring is empty. */
@@ -167,6 +315,7 @@ function buildingsAroundBirchport(pad: number): BuildingInfo[] {
 function pickOutsideBirchport(
   type: BuildingInfo["buildingType"],
   exclude?: QuestTargetExclude,
+  fits?: (bld: BuildingInfo) => boolean,
 ): BuildingInfo | null {
   for (const pad of [QUEST_NEAR_PAD, QUEST_FAR_PAD]) {
     const pool = buildingsAroundBirchport(pad).filter(
@@ -175,7 +324,7 @@ function pickOutsideBirchport(
         !isBuildingInBirchport(bld.ox, bld.oy) &&
         notExcluded(bld, exclude),
     );
-    const picked = pickFrom(pool);
+    const picked = pickFirstThatFits(pool, fits, 24);
     if (picked) return picked;
   }
   return null;
@@ -218,8 +367,16 @@ function supermarketsInCity(
  */
 export function pickAisleCheckSupermarket(
   exclude?: QuestTargetExclude,
+  extras?: { fridges?: number },
 ): BuildingInfo | null {
-  const near = pickOutsideBirchport("supermarket", exclude);
+  const needFridges = extras?.fridges ?? 0;
+  const fits = (bld: BuildingInfo) => {
+    const fit = interiorQuestFit(bld.ox, bld.oy);
+    if (fit.shelves < 3) return false;
+    if (needFridges > 0 && fit.fridges < needFridges) return false;
+    return true;
+  };
+  const near = pickOutsideBirchport("supermarket", exclude, fits);
   if (near) return near;
 
   const hub = birchportCityCell();
@@ -234,7 +391,7 @@ export function pickAisleCheckSupermarket(
       pool.push(bld);
     }
   }
-  return pickFrom(pool);
+  return pickFirstThatFits(pool, fits, 24);
 }
 
 /** Rings for the starter job: close to town first so new players don't trek far. */
@@ -271,7 +428,11 @@ export function pickFirstSweepHouse(
 export function pickClarkHouse(
   exclude?: QuestTargetExclude,
 ): BuildingInfo | null {
-  return pickOutsideBirchport("house", exclude);
+  return pickOutsideBirchport(
+    "house",
+    exclude,
+    (bld) => interiorQuestFit(bld.ox, bld.oy).lootFurniture >= 1,
+  );
 }
 
 /**
@@ -293,4 +454,95 @@ export function pickFloorSpaceWarehouse(
     if (picked) return picked;
   }
   return null;
+}
+
+/**
+ * Any building outside Birchport. Type does not matter.
+ * The furniture check drops empty shells (gun shop, diner, apartment today).
+ * The trader market stays off the board.
+ */
+function isOtherCityBuilding(bld: BuildingInfo): boolean {
+  return (
+    bld.buildingType !== "none" &&
+    !isBuildingInBirchport(bld.ox, bld.oy) &&
+    !isAshenTraderWarehouse(bld.ox, bld.oy)
+  );
+}
+
+function buildingsInCityCell(
+  cx: number,
+  cy: number,
+  exclude?: QuestTargetExclude,
+): BuildingInfo[] {
+  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
+  const cellMax = SETTLEMENT_CELL_SIZE - 1;
+  return listBuildingsInRect(
+    cx - spill,
+    cx + cellMax + spill,
+    cy - spill,
+    cy + cellMax + spill,
+  ).filter((bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude));
+}
+
+/** Cities other than Birchport. Road links first, then any city in the far ring. */
+function otherCityCells(): { cx: number; cy: number }[] {
+  const hub = birchportCityCell();
+  const cells: { cx: number; cy: number }[] = [];
+  const seen = new Set<string>();
+  const push = (cx: number, cy: number) => {
+    if (hub && cx === hub.cx && cy === hub.cy) return;
+    if (getSettlementType(cx, cy) !== "city") return;
+    const key = `${cx},${cy}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    cells.push({ cx, cy });
+  };
+  if (hub) {
+    for (const city of getCityRoadLinks(hub.cx, hub.cy)) push(city.cx, city.cy);
+  }
+  if (cells.length > 0) return cells;
+  const f = getPlayerSpawnFootprint();
+  for (const cell of settlementCellsInRegion(
+    f.minX - QUEST_FAR_PAD,
+    f.maxX + QUEST_FAR_PAD,
+    f.minY - QUEST_FAR_PAD,
+    f.maxY + QUEST_FAR_PAD,
+  )) {
+    push(cell.cx, cell.cy);
+  }
+  return cells;
+}
+
+/**
+ * A furnished building in a city other than Birchport.
+ * Any type qualifies once the interior actually has searchable furniture.
+ * `standingTiles` is for the missing-caravan body, which needs open floor.
+ */
+export function pickOtherCityBuilding(
+  exclude?: QuestTargetExclude,
+  needs?: { standingTiles?: number },
+): BuildingInfo | null {
+  const needTiles = needs?.standingTiles ?? 0;
+  const fits = (bld: BuildingInfo) => {
+    const fit = interiorQuestFit(bld.ox, bld.oy);
+    if (fit.lootFurniture < 1) return false;
+    if (needTiles > 0 && fit.standingTiles < needTiles) return false;
+    return true;
+  };
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of otherCityCells()) {
+    for (const bld of buildingsInCityCell(city.cx, city.cy, exclude)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  const picked = pickFirstThatFits(pool, fits, pool.length);
+  if (picked) return picked;
+  const far = buildingsAroundBirchport(QUEST_FAR_PAD).filter(
+    (bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude),
+  );
+  return pickFirstThatFits(far, fits, far.length);
 }

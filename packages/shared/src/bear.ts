@@ -13,9 +13,9 @@ export const BEAR_CELL = 160;
 export const BEAR_SPAWN_CHANCE = 0.4;
 /** Bears inside this Chebyshev distance of an outdoor player wake up. */
 export const BEAR_ACTIVATE_RADIUS = 72;
-/** Wake stays until every player is farther than this from the den. */
+/** Wake stays until every player is farther than this from the bear. */
 export const BEAR_DEACTIVATE_RADIUS = 120;
-/** Casual wandering stays inside this radius of the den. */
+/** Casual wandering stays inside this radius of wherever they last settled. */
 export const BEAR_HOME_RADIUS = 12;
 
 /** Lumber. Slower than a person walking. */
@@ -30,8 +30,9 @@ export const BEAR_MAX_HEALTH = 400;
 /** Aggressive bears notice players and guards inside this Chebyshev distance. Zombies are ignored until one hits the bear. */
 export const BEAR_AGGRO_RADIUS = 20;
 /**
- * Once chasing, they keep going until the target is this far from the bear.
- * Far enough that a rifle shot still pulls them, and a sprint can break it.
+ * Once chasing, they keep going until the target is this far away or
+ * out of sight. Far enough that a rifle shot still pulls them, and a
+ * sprint can break it.
  */
 export const BEAR_CHASE_RADIUS = 64;
 /** Body reach for a swipe. Larger than a zombie's grab. */

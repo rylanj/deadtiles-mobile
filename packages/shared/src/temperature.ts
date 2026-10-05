@@ -8,7 +8,7 @@ import {
 import { clothingInsulation, getEntryWetness, isClothingItem, setEntryWetness } from "./items.js";
 import type { Inventory } from "./items.js";
 import { getBuildingAt, type BuildingType } from "./worldgen.js";
-import { isBirchportHospital } from "./birchport.js";
+import { isAshenTraderWarehouse, isBirchportHospital } from "./birchport.js";
 import { isBirchportBarracksMessHall } from "./birchportBarracks.js";
 
 /** Core body temperature at spawn / respawn (°C). */
@@ -173,9 +173,13 @@ export function applyConsumeCoreTemperature(
   );
 }
 
-/** Birchport hospital and barracks hall: lights and HVAC stay on. */
+/** Birchport hospital, barracks hall, and Ashen market: lights and HVAC stay on. */
 export function buildingInteriorIsPowered(bx: number, by: number): boolean {
-  return isBirchportHospital(bx, by) || isBirchportBarracksMessHall(bx, by);
+  return (
+    isBirchportHospital(bx, by) ||
+    isBirchportBarracksMessHall(bx, by) ||
+    isAshenTraderWarehouse(bx, by)
+  );
 }
 
 export function indoorFloorCForBuilding(

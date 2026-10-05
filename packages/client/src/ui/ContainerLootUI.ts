@@ -1,5 +1,8 @@
 import {
+  backpackContentsHaveItems,
+  backpackHoldsItems,
   backpackOverflowWorsened,
+  loadedBackpackStowBlocked,
   sealedBackpackStackCount,
   BACKPACK_SLOT_INDEX,
   BACKPACK_STORAGE_START,
@@ -609,13 +612,14 @@ export class ContainerLootUI {
 
       const takeToInventory = () => {
         if (source !== "container") return;
-        const toSlot = this.findFirstFittingPlayerSlot(slot.id);
+        const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
         if (toSlot < 0) return;
         this.handlers.onTakeFromContainer(containerId, index, toSlot);
       };
 
       const storeToBox = () => {
         if (source !== "player" || this.storageBoxSlots() == null) return;
+        if (backpackHoldsItems(this.playerInventory, index)) return;
         const toSlot = this.findFirstStorageBoxSlot(slot.id);
         if (toSlot < 0) return;
         this.handlers.onStoreInContainer(this.containerId, index, toSlot);
@@ -663,7 +667,7 @@ export class ContainerLootUI {
               )
             );
           }
-          return this.canDrop(source, slot.id, toSource, toSlot);
+          return this.canDrop(source, slot, toSource, toSlot);
         },
         shiftGhostQuantity: (shift) => {
           if (!shift || source !== "player") return null;
@@ -689,7 +693,7 @@ export class ContainerLootUI {
             return;
           }
           if (shift && !(source === "player" && toSource === "player")) return;
-          if (!this.canDrop(source, slot.id, toSource, toSlot)) return;
+          if (!this.canDrop(source, slot, toSource, toSlot)) return;
 
           if (source === "container" && toSource === "player") {
             this.handlers.onTakeFromContainer(containerId, index, toSlot);
@@ -737,12 +741,14 @@ export class ContainerLootUI {
 
   private canDrop(
     fromSource: DragSource,
-    itemId: string,
+    entry: { id: string; quantity: number; contents?: ({ id: string; quantity: number } | null)[] },
     toSource: DragSource,
     toSlot: number,
   ): boolean {
+    const itemId = entry.id;
     const access = inventorySlotAccess(this.playerInventory, this.extraPockets);
     if (fromSource === "container" && toSource === "player") {
+      if (loadedBackpackStowBlocked(entry, toSlot)) return false;
       if (!itemFitsInSlot(itemId, toSlot, access)) return false;
       if (toSlot === BACKPACK_SLOT_INDEX && isBackpackItem(itemId)) return true;
       const next = this.playerInventory.map((slot) => (slot ? { ...slot } : null));
@@ -768,10 +774,11 @@ export class ContainerLootUI {
       toSlot >= 0 &&
       toSlot < (this.storageBoxSlots() ?? 0)
     ) {
+      const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
+      if (backpackHoldsItems(this.playerInventory, fromSlot)) return false;
       const dest = this.containerInventory[toSlot];
       if (!dest) return true;
       if (dest.id === itemId && maxStackForItem(itemId) > 1) return true;
-      const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
       return itemFitsInSlot(dest.id, fromSlot, access);
     }
     return false;
@@ -811,9 +818,13 @@ export class ContainerLootUI {
     return -1;
   }
 
-  private findFirstFittingPlayerSlot(itemId: string): number {
+  private findFirstFittingPlayerSlot(
+    itemId: string,
+    entry?: { id: string; contents?: ({ id: string; quantity: number } | null)[] },
+  ): number {
     const maxStack = maxStackForItem(itemId);
     const access = inventorySlotAccess(this.playerInventory, this.extraPockets);
+    const loadedPack = backpackContentsHaveItems(entry);
     const dedicated = isBackpackItem(itemId)
       ? BACKPACK_SLOT_INDEX
       : itemId === WATCH_ITEM_ID
@@ -840,6 +851,7 @@ export class ContainerLootUI {
 
     for (let i = 0; i < this.playerInventory.length; i++) {
       if (this.playerInventory[i]) continue;
+      if (loadedPack && loadedBackpackStowBlocked(entry, i)) continue;
       if (itemFitsInSlot(itemId, i, access)) return i;
     }
     return -1;

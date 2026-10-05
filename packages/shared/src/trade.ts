@@ -107,6 +107,8 @@ export const ITEM_TRADE_VALUES: Record<string, number> = {
   gold_chain: 250,
   gold_earrings: 180,
   clarks_earrings: 0,
+  caravan_manifest: 0,
+  wagon_note: 0,
   gold_ring: 150,
   silver_chain: 150,
   silver_ring: 90,
@@ -160,6 +162,9 @@ export const ITEM_TRADE_VALUES: Record<string, number> = {
 /** Ashen Traders faction display name. */
 export const ASHEN_TRADERS_FACTION = "Ashen Traders";
 
+/** Birchport market ledger. Road caravans are not him. */
+export const ASHEN_MARKET_TRADER_NAME = "Kevin";
+
 export type AshenDialogLine = {
   id: string;
   /** Player speech option. */
@@ -170,6 +175,8 @@ export type AshenDialogLine = {
   npcGuard?: readonly string[];
   /** Opens the trader shop, or the Birchport player board. */
   action?: "trade" | "board";
+  /** Kevin at the Birchport market, when he should not sound like a road caravan. */
+  npcMarket?: readonly string[];
 };
 
 /** Talk options for TraderMan / TraderGuard caravans. */
@@ -181,6 +188,10 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
       "Ashen Traders. We barter through Ashen County.",
       "Ashen Traders. We move through Ashen County picking up what we can and bartering with whoever's still standing. If you need something, we probably have it, or know who does.",
       "Ashen Traders. Road caravan. We scavenge, buy from survivors, and sell on through Ashen County. Ask if you need stock; if we don't have it, we often know the next stop that might.",
+    ],
+    npcMarket: [
+      "Ashen Traders. I keep the book for this stall.",
+      "Ashen Traders. Caravans pass through Birchport. I stay with the ledger and the board.",
     ],
     npcGuard: [
       "Ashen Traders. He's the ledger. We keep the goods moving.",
@@ -217,12 +228,28 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     action: "board",
   },
   {
+    id: "jobs",
+    player: "Got any work?",
+    npcMan: [
+      "Buyer jobs are with Kevin at the Birchport market.",
+      "Not on the road. Kevin posts buyer work at the Birchport stall.",
+    ],
+    npcGuard: [
+      "Jobs are Kevin's. I watch the door.",
+      "Talk to Kevin if you want work. I don't keep the book.",
+    ],
+    npcMarket: [
+      "Look at the list. Banknotes for stock I can move, and a few stops outside town.",
+      "Yes. Shells, road food, crate parts, and a couple of pages that walked off. I pay in banknotes.",
+    ],
+  },
+  {
     id: "join",
     player: "Can I join you guys?",
     npcMan: [
       "Not taking people on. Try an Ashen Militia settlement for work.",
       "We're not taking new people on the road. Too many mouths, too little trust. If you want work, ask around at an Ashen Militia settlement. They post jobs when they need hands.",
-      "Caravan's full. Trust's thin on the road anyway. Militia settlements post paid work when they need hands. Birchport's a fair place to ask.",
+      "Caravan's full. Trust's thin on the road anyway. Militia settlements post paid work when they need hands. Buyer jobs are with Kevin at the Birchport market.",
     ],
     npcGuard: [
       "Full caravan. Try the militia for paid work.",
