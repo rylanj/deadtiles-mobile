@@ -145,6 +145,9 @@ export class BootScene extends Phaser.Scene {
     if (!groundTextureIsLoaded(this, "tile-office")) {
       createFallbackTile(this, "tile-office", 0x8d8d90);
     }
+    if (!groundTextureIsLoaded(this, "tile-retail")) {
+      createFallbackTile(this, "tile-retail", 0x765836);
+    }
 
     // Re-bake after fallbacks so source cache + display textures exist.
     bakeIsoGroundTextures(this);

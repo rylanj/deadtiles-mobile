@@ -4,6 +4,7 @@ import {
   WALL_DEPTH,
   WAREHOUSE_ROOF_PEAK_HEIGHT,
   MOTEL_ROOF_PEAK_HEIGHT,
+  MOTEL_PARAPET_HEIGHT,
   TENT_ROOF_PEAK_HEIGHT,
   POLICE_ROOF_LIP_HEIGHT,
   POLICE_ROOF_PROP_HEIGHT,
@@ -12,6 +13,7 @@ import {
   HOUSE_CHIMNEY_HEIGHT,
   TILE_WIDTH,
   buildingEntranceFace,
+  buildingEntranceRun,
   buildingEntranceSpan,
   buildingWallScreenDepth,
   cartesianToIso,
@@ -27,6 +29,8 @@ import {
   buildingDoor2Key,
   buildingDoor4Key,
   buildingDoor5Key,
+  buildingDoor6Key,
+  buildingDoor7Key,
   BUILDING_DOOR_POLICE_KEY,
   BUILDING_WALL_BLANK_KEY,
   BUILDING_WALL_HOUSE_KEYS,
@@ -106,8 +110,10 @@ const WAREHOUSE_ROOF_LIP_FACE = "#484848";
 const WAREHOUSE_ROOF_LIP_INSET = 2.5;
 /** House eave overhang past the wall top (px at 1× draw scale). */
 const HOUSE_ROOF_OVERHANG = 3.5;
-/** Motel porch / eave overhang past the wall top (match house scale). */
-const MOTEL_ROOF_OVERHANG = 3.5;
+/** Shallow motel eave. The street face rises into a parapet instead of a gable. */
+const MOTEL_ROOF_OVERHANG = 3;
+/** How thick the street false-front reads in screen pixels. */
+const MOTEL_PARAPET_THICK = 6;
 
 /** Weathered roadside stucco — dusty peach, fits outskirts brick/cream palette. */
 const MOTEL_WALL_FRONT = "#c4a882";
@@ -116,10 +122,14 @@ const MOTEL_WALL_SIDE = "#a88f6c";
 /** Muted taupe trim / cladding (not stark white). */
 const MOTEL_TRIM = "#8f816e";
 const MOTEL_TRIM_SIDE = "#7a6e5c";
-/** Warm asphalt shingle deck (same family as house roofs). */
+/** Warm asphalt deck. Flat, not a shingle gable. */
 const MOTEL_ROOF_DECK = "#5c4a3e";
-/** Gable end reads as stucco, not metal. */
-const MOTEL_GABLE = "#9a8468";
+/** Street false-front, a step darker than the wall it rises from. */
+const MOTEL_PARAPET_FACE = "#998365";
+const MOTEL_PARAPET_FACE_SIDE = "#837054";
+/** Cap along the top of the false-front. The sign sits on this. */
+const MOTEL_PARAPET_CAP = "#a58e70";
+const MOTEL_PARAPET_CAP_SIDE = "#8c775c";
 /** Olive drab canvas — SW face (camera-front). */
 const TENT_WALL_FRONT = "#4a5a32";
 /** Slightly deeper SE face for iso shading. */
@@ -148,6 +158,14 @@ const MOTEL_SIGN_DISPLAY_W = TILE_WIDTH * 1.85;
  * the door (PNG visual mass sits slightly right of the canvas midpoint).
  */
 const MOTEL_SIGN_NUDGE_X_FRAC = 0.08;
+/**
+ * Bottom edge of MotelSign_SE under the door anchor (source x at 0.5 + nudge,
+ * pixel row 168 of 256). The near bracket is lower; pinning that instead
+ * floats the word above the parapet.
+ */
+const MOTEL_SIGN_BOTTOM_FRAC = 168 / 256;
+/** Sink the sign into the cap so the brackets read as mounted, not floating. */
+const MOTEL_SIGN_SEAT_PX = 3;
 /** Extra AABB pad so the roof sign is not clipped from the cuboid canvas. */
 const MOTEL_SIGN_BOUNDS_PAD = Math.ceil(MOTEL_SIGN_DISPLAY_W * 0.55);
 
@@ -272,6 +290,33 @@ const CLADDING_SIDE = "#c9c0b0";
 const SUPERMARKET_WALL_FRONT = "#e8dcc8";
 /** Supermarket exterior — slightly deeper SE face for iso shading. */
 const SUPERMARKET_WALL_SIDE = "#d4c4a8";
+
+/** Department store concrete. SW face is the lit iso wall. */
+const RETAIL_WALL_FRONT = "#d5d8dc";
+const RETAIL_WALL_SIDE = "#c4c8ce";
+/** Fascia band, same family as the pale yellow-green roof. */
+const RETAIL_FASCIA_FRONT = "#c8cc91";
+const RETAIL_FASCIA_SIDE = "#b7bc80";
+/** Share of one storey taken by the fascia. Windows stop at its underside. */
+const RETAIL_FASCIA_FRAC = 0.16;
+
+/** Office concrete, a step darker than the department store. */
+const OFFICE_WALL_FRONT = "#b7bcc2";
+const OFFICE_WALL_SIDE = "#a7adb4";
+const OFFICE_GLASS = "#b7d4e7";
+/** Lighter inner reveal on the lit jamb and sill. */
+const OFFICE_GLASS_DEPTH = "#c2dced";
+/** Jamb thickness as a fraction of one wall tile. */
+const OFFICE_GLASS_JAMB = 0.16;
+/** Sill thickness as a fraction of one storey. */
+const OFFICE_GLASS_SILL = 0.07;
+const OFFICE_FRAME = "#8e949c";
+const OFFICE_MULLION = "#c5cad0";
+/** Warm off-white parapet, a step off the deck so the roof is not a clean white. */
+const OFFICE_ROOF_LIP = "#ddd4c4";
+const OFFICE_ROOF_LIP_FACE = "#c4b8a6";
+const RETAIL_ROOF_LIP = "#d4d89e";
+const RETAIL_ROOF_LIP_FACE = "#aeb478";
 /** Supermarket roof parapet top / rim. */
 const SUPERMARKET_ROOF_LIP = "#7a6c5a";
 /** Supermarket roof parapet outer faces (SE / SW). */
@@ -574,6 +619,7 @@ function drawDoorOnEntranceFace(
  * wall (same crop / U-flip as the door, but lifted off the ground).
  * `heightFrac` is the fraction of one storey the window occupies (default 0.75).
  * `storeyIndex` lifts the window to that storey (0 = ground).
+ * `grounded` sits the sill on the wall base instead of centring the pane.
  */
 function drawSuperWindowOnWallFace(
   ctx: CanvasRenderingContext2D,
@@ -584,6 +630,7 @@ function drawSuperWindowOnWallFace(
   flipU = true,
   heightFrac = 0.75,
   storeyIndex = 0,
+  grounded = false,
 ) {
   const edgeLen = Math.hypot(
     bottomRight.x - bottomLeft.x,
@@ -592,7 +639,7 @@ function drawSuperWindowOnWallFace(
   if (edgeLen < 1 || wallDepth < 1) return;
   const storeyDepth = Math.min(WALL_DEPTH, wallDepth);
   const windowDepth = storeyDepth * heightFrac;
-  const lift = (storeyDepth - windowDepth) / 2;
+  const lift = grounded ? 0 : (storeyDepth - windowDepth) / 2;
   const storeyLift = storeyIndex * WALL_DEPTH;
 
   const cropped = cropDoorContent(art.src, art.srcW, art.srcH);
@@ -715,6 +762,20 @@ function resolveDoorSource(
           buildingDoor5Key(doorFace === "SW" ? "SE" : "SW"),
           buildingDoor5Key("SE"),
           buildingDoor5Key("SW"),
+        ]
+      : []),
+    ...(bld.buildingType === "large_retail"
+      ? [
+          buildingDoor6Key(doorFace === "SW" ? "SE" : "SW"),
+          buildingDoor6Key("SE"),
+          buildingDoor6Key("SW"),
+        ]
+      : []),
+    ...(bld.buildingType === "office"
+      ? [
+          buildingDoor7Key(doorFace === "SW" ? "SE" : "SW"),
+          buildingDoor7Key("SE"),
+          buildingDoor7Key("SW"),
         ]
       : []),
     ...(bld.buildingType === "tent" ? [BUILDING_TENT_FLAP_KEY] : []),
@@ -1211,20 +1272,29 @@ function entranceWallEdge(
   const ex = bld.entranceX;
   const ey = bld.entranceY;
   if (ex === undefined || ey === undefined) return null;
-  const span = buildingEntranceSpan(bld);
+  const run = buildingEntranceRun({
+    ox,
+    oy,
+    w,
+    h,
+    entranceX: ex,
+    entranceY: ey,
+    entranceSpan: bld.entranceSpan,
+    buildingType: bld.buildingType,
+  });
 
   // East face (NE→SE).
-  if (ex === ox + w - 1 && ey >= oy && ey + span <= oy + h) {
+  if (run.face === "SE" && run.y >= oy && run.y + run.span <= oy + h) {
     return {
-      bottomLeft: offset(cartesianToIso(ox + w, ey)),
-      bottomRight: offset(cartesianToIso(ox + w, ey + span)),
+      bottomLeft: offset(cartesianToIso(ox + w, run.y)),
+      bottomRight: offset(cartesianToIso(ox + w, run.y + run.span)),
     };
   }
   // South face (SW→SE).
-  if (ey === oy + h - 1 && ex >= ox && ex + span <= ox + w) {
+  if (run.face === "SW" && run.x >= ox && run.x + run.span <= ox + w) {
     return {
-      bottomLeft: offset(cartesianToIso(ex, oy + h)),
-      bottomRight: offset(cartesianToIso(ex + span, oy + h)),
+      bottomLeft: offset(cartesianToIso(run.x, oy + h)),
+      bottomRight: offset(cartesianToIso(run.x + run.span, oy + h)),
     };
   }
   return null;
@@ -1638,6 +1708,93 @@ function fillSupermarketRoof(
   drawSupermarketRoofProps(ctx, nw, ne, se, sw, depth, bld);
 }
 
+/** Flat retail roof: parapet plus one rooftop unit. */
+function fillRetailRoof(
+  ctx: CanvasRenderingContext2D,
+  nw: Point,
+  ne: Point,
+  se: Point,
+  sw: Point,
+  depth: number,
+  bld: BuildingFootprint,
+) {
+  fillParapetRoof(
+    ctx,
+    nw,
+    ne,
+    se,
+    sw,
+    depth,
+    roofColorForType("large_retail"),
+    RETAIL_ROOF_LIP,
+    RETAIL_ROOF_LIP_FACE,
+    POLICE_ROOF_LIP_HEIGHT,
+    WAREHOUSE_ROOF_LIP_INSET,
+    bld,
+    "large_retail",
+  );
+  drawRoofPropBox(
+    ctx,
+    nw,
+    ne,
+    se,
+    sw,
+    depth,
+    0.14,
+    0.12,
+    0.36,
+    0.32,
+    Math.round(SUPERMARKET_ROOF_PROP_HEIGHT * 0.75),
+    "#9aa2aa",
+    "#6a727a",
+    "#7e868e",
+  );
+}
+
+/** Flat office roof. Two-storey blocks get one small rooftop unit. */
+function fillOfficeRoof(
+  ctx: CanvasRenderingContext2D,
+  nw: Point,
+  ne: Point,
+  se: Point,
+  sw: Point,
+  depth: number,
+  bld: BuildingFootprint,
+) {
+  fillParapetRoof(
+    ctx,
+    nw,
+    ne,
+    se,
+    sw,
+    depth,
+    roofColorForType("office"),
+    OFFICE_ROOF_LIP,
+    OFFICE_ROOF_LIP_FACE,
+    POLICE_ROOF_LIP_HEIGHT,
+    WAREHOUSE_ROOF_LIP_INSET,
+    bld,
+    "office",
+  );
+  if ((bld.exteriorLevels ?? 1) < 2) return;
+  drawRoofPropBox(
+    ctx,
+    nw,
+    ne,
+    se,
+    sw,
+    depth,
+    0.16,
+    0.14,
+    0.32,
+    0.3,
+    POLICE_ROOF_PROP_HEIGHT,
+    "#9aa2aa",
+    "#6a727a",
+    "#7e868e",
+  );
+}
+
 /**
  * Sparse supermarket roof clutter: one RTU, optional condenser, hatch,
  * one skylight, and a vent — corners + gaps so the deck reads open.
@@ -1910,6 +2067,16 @@ function fillRoof(
     return;
   }
 
+  if (buildingType === "large_retail") {
+    fillRetailRoof(ctx, nw, ne, se, sw, depth, bld!);
+    return;
+  }
+
+  if (buildingType === "office") {
+    fillOfficeRoof(ctx, nw, ne, se, sw, depth, bld!);
+    return;
+  }
+
   if (buildingType === "hospital") {
     fillParapetRoof(
       ctx,
@@ -2021,7 +2188,75 @@ function fillWarehouseRoof(
   }
 }
 
-/** Warm asphalt gable — same language as house roofs, quieter than metal. */
+/** Flat motel deck at the wall plate, pushed out by the shallow eave. */
+function motelFlatDeck(
+  nw: Point,
+  ne: Point,
+  se: Point,
+  sw: Point,
+  depth: number,
+): [Point, Point, Point, Point] {
+  const wallDeck: [Point, Point, Point, Point] = [
+    { x: nw.x, y: nw.y - depth },
+    { x: ne.x, y: ne.y - depth },
+    { x: se.x, y: se.y - depth },
+    { x: sw.x, y: sw.y - depth },
+  ];
+  return outsetRoofQuad(wallDeck, MOTEL_ROOF_OVERHANG) as [
+    Point,
+    Point,
+    Point,
+    Point,
+  ];
+}
+
+/**
+ * Street false-front on the outer eave. `topA` is the north (SE door) or
+ * west (SW door) end, matching door-centre interpolation along the façade.
+ */
+function motelStreetParapet(
+  deck: [Point, Point, Point, Point],
+  face: "SE" | "SW",
+): {
+  front: Point[];
+  cap: Point[];
+  returnA: Point[];
+  returnB: Point[];
+  topA: Point;
+  topB: Point;
+} {
+  const [dNw, dNe, dSe, dSw] = deck;
+  const a = face === "SE" ? dNe : dSw;
+  const b = dSe;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const cx = (dNw.x + dNe.x + dSe.x + dSw.x) / 4;
+  const cy = (dNw.y + dNe.y + dSe.y + dSw.y) / 4;
+  const mid = lerpPoint(a, b, 0.5);
+  let ox = -dy / len;
+  let oy = dx / len;
+  if (ox * (mid.x - cx) + oy * (mid.y - cy) < 0) {
+    ox = -ox;
+    oy = -oy;
+  }
+  const inA = { x: a.x - ox * MOTEL_PARAPET_THICK, y: a.y - oy * MOTEL_PARAPET_THICK };
+  const inB = { x: b.x - ox * MOTEL_PARAPET_THICK, y: b.y - oy * MOTEL_PARAPET_THICK };
+  const topA = raisePoint(a, MOTEL_PARAPET_HEIGHT);
+  const topB = raisePoint(b, MOTEL_PARAPET_HEIGHT);
+  const inTopA = raisePoint(inA, MOTEL_PARAPET_HEIGHT);
+  const inTopB = raisePoint(inB, MOTEL_PARAPET_HEIGHT);
+  return {
+    front: [a, b, topB, topA],
+    cap: [topA, topB, inTopB, inTopA],
+    returnA: [a, inA, inTopA, topA],
+    returnB: [b, inB, inTopB, topB],
+    topA,
+    topB,
+  };
+}
+
+/** Low asphalt deck plus a street false-front. No house gable. */
 function fillMotelRoof(
   ctx: CanvasRenderingContext2D,
   nw: Point,
@@ -2031,9 +2266,6 @@ function fillMotelRoof(
   depth: number,
   bld: BuildingFootprint,
 ) {
-  const peak = MOTEL_ROOF_PEAK_HEIGHT;
-  const lightSlope = shadeHex(MOTEL_ROOF_DECK, 1.06);
-  const darkSlope = shadeHex(MOTEL_ROOF_DECK, 0.82);
   const fascia = shadeHex(MOTEL_ROOF_DECK, 0.55);
   const wallDeck: [Point, Point, Point, Point] = [
     { x: nw.x, y: nw.y - depth },
@@ -2041,32 +2273,29 @@ function fillMotelRoof(
     { x: se.x, y: se.y - depth },
     { x: sw.x, y: sw.y - depth },
   ];
-  const deck = outsetRoofQuad(wallDeck, MOTEL_ROOF_OVERHANG) as [
-    Point,
-    Point,
-    Point,
-    Point,
-  ];
+  const deck = motelFlatDeck(nw, ne, se, sw, depth);
   const [dNw, dNe, dSe, dSw] = deck;
 
   fillPoly(ctx, [wallDeck[3]!, wallDeck[2]!, dSe, dSw], fascia);
   fillPoly(ctx, [wallDeck[1]!, wallDeck[2]!, dSe, dNe], fascia);
+  fillPoly(ctx, deck, shadeHex(MOTEL_ROOF_DECK, 1.04));
+  paintRoofDecals(ctx, [deck], roofWearKey(bld, "flat"), "motel");
 
-  if (gableRidgeAxis(bld) === "EW") {
-    const ridgeW = raisePoint(lerpPoint(dNw, dSw, 0.5), peak);
-    const ridgeE = raisePoint(lerpPoint(dNe, dSe, 0.5), peak);
-    fillPoly(ctx, [dNw, dNe, ridgeE, ridgeW], lightSlope);
-    fillPoly(ctx, [dSw, dSe, ridgeE, ridgeW], darkSlope);
-    fillPoly(ctx, [dNe, dSe, ridgeE], MOTEL_GABLE);
-    paintGableRoofWear(ctx, [dNw, dNe, ridgeE, ridgeW], [dSw, dSe, ridgeE, ridgeW], bld, "motel");
-  } else {
-    const ridgeN = raisePoint(lerpPoint(dNw, dNe, 0.5), peak);
-    const ridgeS = raisePoint(lerpPoint(dSw, dSe, 0.5), peak);
-    fillPoly(ctx, [dNw, dSw, ridgeS, ridgeN], lightSlope);
-    fillPoly(ctx, [dNe, dSe, ridgeS, ridgeN], darkSlope);
-    fillPoly(ctx, [dSw, dSe, ridgeS], MOTEL_GABLE);
-    paintGableRoofWear(ctx, [dNw, dSw, ridgeS, ridgeN], [dNe, dSe, ridgeS, ridgeN], bld, "motel");
-  }
+  if (bld.entranceX == null || bld.entranceY == null) return;
+  const face = buildingEntranceFace({
+    ox: bld.ox,
+    oy: bld.oy,
+    w: bld.w,
+    h: bld.h,
+    entranceX: bld.entranceX,
+    entranceY: bld.entranceY,
+  });
+  const para = motelStreetParapet(deck, face);
+  const faceColor = face === "SE" ? MOTEL_PARAPET_FACE_SIDE : MOTEL_PARAPET_FACE;
+  fillPoly(ctx, para.returnA, MOTEL_PARAPET_CAP_SIDE);
+  fillPoly(ctx, para.returnB, MOTEL_PARAPET_CAP_SIDE);
+  fillPoly(ctx, para.front, faceColor);
+  fillPoly(ctx, para.cap, MOTEL_PARAPET_CAP);
 }
 
 /** Steep olive canvas gable — same language as the motel roof, military palette. */
@@ -2401,8 +2630,8 @@ function paintMotelBuilding(
 }
 
 /**
- * Pre-isometric MotelSign_SE — SE-entrance motels only, drawn above the roof
- * deck on the street façade (no wall projection).
+ * Pre-isometric MotelSign_SE. SE-entrance motels only. The brackets sit on
+ * the street parapet, centred on the office door.
  */
 function drawMotelSign(
   ctx: CanvasRenderingContext2D,
@@ -2424,28 +2653,28 @@ function drawMotelSign(
   const sign = artSource(scene, BUILDING_MOTEL_SIGN_SE_KEY);
   if (!sign) return;
 
-  const street = motelStreetFace(bld, offset);
-  if (!street) return;
-
-  // Align with door centre along the SE façade.
-  const faceLen = Math.max(1, bld.h);
-  const doorStart = bld.entranceY - bld.oy;
+  const { ox, oy, w, h } = bld;
+  const deck = motelFlatDeck(
+    offset(cartesianToIso(ox, oy)),
+    offset(cartesianToIso(ox + w, oy)),
+    offset(cartesianToIso(ox + w, oy + h)),
+    offset(cartesianToIso(ox, oy + h)),
+    wallDepth,
+  );
+  const para = motelStreetParapet(deck, "SE");
+  const faceLen = Math.max(1, h);
+  const doorStart = bld.entranceY - oy;
   const doorT = (doorStart + buildingEntranceSpan(bld) * 0.5) / faceLen;
-  const mid = lerpPoint(street.a, street.b, doorT);
-  const roof = {
-    x: mid.x + street.out.x * 3,
-    y: mid.y + street.out.y * 3 - wallDepth - MOTEL_ROOF_PEAK_HEIGHT * 0.35,
-  };
+  const seat = lerpPoint(para.topA, para.topB, doorT);
   const scale = MOTEL_SIGN_DISPLAY_W / sign.srcW;
   const dw = sign.srcW * scale;
   const dh = sign.srcH * scale;
   const prevSmooth = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
-  // Anchor near roof; nudge left so the art sits over the door centre.
   ctx.drawImage(
     sign.src,
-    roof.x - dw * 0.5 - dw * MOTEL_SIGN_NUDGE_X_FRAC,
-    roof.y - dh * 0.755,
+    seat.x - dw * 0.5 - dw * MOTEL_SIGN_NUDGE_X_FRAC,
+    seat.y - dh * MOTEL_SIGN_BOTTOM_FRAC + MOTEL_SIGN_SEAT_PX,
     dw,
     dh,
   );
@@ -2625,7 +2854,7 @@ function buildingIsoBounds(bld: BuildingFootprint): {
       : isMessHall
         ? MOTEL_ROOF_PEAK_HEIGHT
       : isMotel
-        ? MOTEL_ROOF_PEAK_HEIGHT +
+        ? MOTEL_PARAPET_HEIGHT +
           (bld.entranceX != null &&
           bld.entranceY != null &&
           buildingEntranceFace({
@@ -2642,7 +2871,12 @@ function buildingIsoBounds(bld: BuildingFootprint): {
           ? POLICE_ROOF_LIP_HEIGHT + POLICE_ROOF_PROP_HEIGHT
           : bld.buildingType === "supermarket"
             ? POLICE_ROOF_LIP_HEIGHT + SUPERMARKET_ROOF_PROP_HEIGHT
-            : bld.buildingType === "hospital"
+            : bld.buildingType === "large_retail"
+              ? POLICE_ROOF_LIP_HEIGHT + Math.round(SUPERMARKET_ROOF_PROP_HEIGHT * 0.75)
+              : bld.buildingType === "office"
+                ? POLICE_ROOF_LIP_HEIGHT +
+                  ((bld.exteriorLevels ?? 1) >= 2 ? POLICE_ROOF_PROP_HEIGHT : 0)
+                : bld.buildingType === "hospital"
               ? POLICE_ROOF_LIP_HEIGHT
               : isHouse
                 ? HOUSE_ROOF_PEAK_HEIGHT + HOUSE_CHIMNEY_HEIGHT
@@ -2664,7 +2898,26 @@ function buildingIsoBounds(bld: BuildingFootprint): {
     { x: sw.x, y: sw.y - d - roofExtra },
   ];
 
-  if (isHouse || isWarehouse || isMotel || isTent || isMessHall) {
+  if (isMotel) {
+    const deck = motelFlatDeck(nw, ne, se, sw, d);
+    points.push(...deck);
+    if (bld.entranceX != null && bld.entranceY != null) {
+      const para = motelStreetParapet(
+        deck,
+        buildingEntranceFace({
+          ox: bld.ox,
+          oy: bld.oy,
+          w: bld.w,
+          h: bld.h,
+          entranceX: bld.entranceX,
+          entranceY: bld.entranceY,
+        }),
+      );
+      points.push(para.topA, para.topB, ...para.cap);
+    }
+  }
+
+  if (isHouse || isWarehouse || isTent || isMessHall) {
     const wallDeck: [Point, Point, Point, Point] = [
       { x: nw.x, y: nw.y - d },
       { x: ne.x, y: ne.y - d },
@@ -2674,9 +2927,7 @@ function buildingIsoBounds(bld: BuildingFootprint): {
     const deck = (
       isHouse
         ? outsetRoofQuad(wallDeck, HOUSE_ROOF_OVERHANG)
-        : isMotel
-          ? outsetRoofQuad(wallDeck, MOTEL_ROOF_OVERHANG)
-          : isTent
+        : isTent
             ? outsetRoofQuad(wallDeck, TENT_ROOF_OVERHANG)
           : isMessHall
             ? outsetRoofQuad(wallDeck, MESS_HALL_ROOF_OVERHANG)
@@ -2687,7 +2938,7 @@ function buildingIsoBounds(bld: BuildingFootprint): {
       ? WAREHOUSE_ROOF_PEAK_HEIGHT
       : isTent
         ? TENT_ROOF_PEAK_HEIGHT
-      : isMotel || isMessHall
+      : isMessHall
         ? MOTEL_ROOF_PEAK_HEIGHT
         : HOUSE_ROOF_PEAK_HEIGHT;
     points.push(dNw, dNe, dSe, dSw);
@@ -2731,6 +2982,250 @@ function buildingIsoBounds(bld: BuildingFootprint): {
   maxY = Math.ceil(maxY) + pad;
 
   return { minX, minY, maxX, maxY, d, nw, ne, se, sw };
+}
+
+function facadeSpanEdge(
+  bld: BuildingFootprint,
+  face: "SE" | "SW",
+  along: number,
+  span: number,
+  offset: (p: Point) => Point,
+): { bottomLeft: Point; bottomRight: Point } | null {
+  const { ox, oy, w, h } = bld;
+  if (span < 1) return null;
+  if (face === "SE") {
+    if (along < oy || along + span > oy + h) return null;
+    return {
+      bottomLeft: offset(cartesianToIso(ox + w, along)),
+      bottomRight: offset(cartesianToIso(ox + w, along + span)),
+    };
+  }
+  if (along < ox || along + span > ox + w) return null;
+  return {
+    bottomLeft: offset(cartesianToIso(along, oy + h)),
+    bottomRight: offset(cartesianToIso(along + span, oy + h)),
+  };
+}
+
+/** Rectangle on one wall face, fractions of a storey up from that storey's floor. */
+function fillWallBand(
+  ctx: CanvasRenderingContext2D,
+  bottomLeft: Point,
+  bottomRight: Point,
+  bottomFrac: number,
+  topFrac: number,
+  storeyIndex: number,
+  color: string,
+) {
+  const yAt = (p: Point, frac: number): Point => ({
+    x: p.x,
+    y: p.y - storeyIndex * WALL_DEPTH - WALL_DEPTH * frac,
+  });
+  fillPoly(
+    ctx,
+    [
+      yAt(bottomLeft, bottomFrac),
+      yAt(bottomRight, bottomFrac),
+      yAt(bottomRight, topFrac),
+      yAt(bottomLeft, topFrac),
+    ],
+    color,
+  );
+}
+
+/** Colored strip under the roof line. Height is a fraction of one storey. */
+function fillWallCap(
+  ctx: CanvasRenderingContext2D,
+  bottomLeft: Point,
+  bottomRight: Point,
+  depth: number,
+  capFrac: number,
+  color: string,
+) {
+  const cap = WALL_DEPTH * capFrac;
+  fillPoly(
+    ctx,
+    [
+      { x: bottomLeft.x, y: bottomLeft.y - depth },
+      { x: bottomRight.x, y: bottomRight.y - depth },
+      { x: bottomRight.x, y: bottomRight.y - depth + cap },
+      { x: bottomLeft.x, y: bottomLeft.y - depth + cap },
+    ],
+    color,
+  );
+}
+
+function drawGlassPanel(
+  ctx: CanvasRenderingContext2D,
+  bottomLeft: Point,
+  bottomRight: Point,
+  bottomFrac: number,
+  topFrac: number,
+  storeyIndex: number,
+  frame: string,
+  glass: string,
+  mullion: string,
+  split: boolean,
+  rail: boolean,
+  /**
+   * Inner reveal on the glass. `start` is the bottomLeft end of the wall
+   * edge: screen-left on a SW face, screen-right on an SE face.
+   */
+  reveal: "start" | "end" | null = null,
+) {
+  fillWallBand(ctx, bottomLeft, bottomRight, bottomFrac, topFrac, storeyIndex, frame);
+  const bl = lerpPoint(bottomLeft, bottomRight, 0.08);
+  const br = lerpPoint(bottomLeft, bottomRight, 0.92);
+  const glassBottom = bottomFrac + 0.025;
+  const glassTop = topFrac - 0.02;
+  if (glassTop <= glassBottom) return;
+  fillWallBand(ctx, bl, br, glassBottom, glassTop, storeyIndex, glass);
+  if (reveal) {
+    const jambEnd = Math.min(0.92, 0.08 + OFFICE_GLASS_JAMB);
+    const sideA = lerpPoint(
+      bottomLeft,
+      bottomRight,
+      reveal === "start" ? 0.08 : 1 - jambEnd,
+    );
+    const sideB = lerpPoint(
+      bottomLeft,
+      bottomRight,
+      reveal === "start" ? jambEnd : 0.92,
+    );
+    fillWallBand(ctx, sideA, sideB, glassBottom, glassTop, storeyIndex, OFFICE_GLASS_DEPTH);
+    const sillTop = Math.min(glassTop, glassBottom + OFFICE_GLASS_SILL);
+    fillWallBand(ctx, bl, br, glassBottom, sillTop, storeyIndex, OFFICE_GLASS_DEPTH);
+  }
+  if (split) {
+    const ml = lerpPoint(bottomLeft, bottomRight, 0.46);
+    const mr = lerpPoint(bottomLeft, bottomRight, 0.54);
+    fillWallBand(ctx, ml, mr, glassBottom, glassTop, storeyIndex, mullion);
+  }
+  if (rail) {
+    const mid = (glassBottom + glassTop) / 2;
+    fillWallBand(ctx, bl, br, mid - 0.012, mid + 0.012, storeyIndex, mullion);
+  }
+}
+
+function retailEntrance(
+  bld: BuildingFootprint,
+): ReturnType<typeof buildingEntranceRun> | null {
+  if (bld.entranceX == null || bld.entranceY == null) return null;
+  return buildingEntranceRun({
+    ox: bld.ox,
+    oy: bld.oy,
+    w: bld.w,
+    h: bld.h,
+    entranceX: bld.entranceX,
+    entranceY: bld.entranceY,
+    entranceSpan: bld.entranceSpan,
+    buildingType: bld.buildingType,
+  });
+}
+
+/**
+ * Department store: BigWindow1 flanking the door and one on the other face.
+ * Each pane runs from the wall base up to the underside of the fascia.
+ */
+function drawRetailFacade(
+  ctx: CanvasRenderingContext2D,
+  scene: Phaser.Scene,
+  bld: BuildingFootprint,
+  offset: (p: Point) => Point,
+  depth: number,
+  oSw: Point,
+  oSe: Point,
+  oNe: Point,
+) {
+  const run = retailEntrance(bld);
+  if (run) {
+    const winSpan = 2;
+    const gap = 2;
+    const windowFrac = 1 - RETAIL_FASCIA_FRAC;
+    const drawWindow = (face: "SE" | "SW", along: number) => {
+      const art = resolveBigWindow1Source(scene, face);
+      const edge = facadeSpanEdge(bld, face, along, winSpan, offset);
+      if (!art || !edge) return;
+      drawSuperWindowOnWallFace(
+        ctx,
+        art,
+        edge.bottomLeft,
+        edge.bottomRight,
+        depth,
+        face === "SE",
+        windowFrac,
+        0,
+        true,
+      );
+    };
+    const doorMin = run.face === "SE" ? run.y : run.x;
+    const doorMax = doorMin + run.span - 1;
+    for (const along of [doorMin - gap - (winSpan - 1), doorMax + gap]) {
+      drawWindow(run.face, along);
+    }
+    const sideFace: "SE" | "SW" = run.face === "SE" ? "SW" : "SE";
+    const faceLen = sideFace === "SE" ? bld.h : bld.w;
+    const origin = sideFace === "SE" ? bld.oy : bld.ox;
+    drawWindow(sideFace, origin + Math.floor((faceLen - winSpan) / 2));
+  }
+  fillWallCap(ctx, oSw, oSe, depth, RETAIL_FASCIA_FRAC, RETAIL_FASCIA_FRONT);
+  fillWallCap(ctx, oNe, oSe, depth, RETAIL_FASCIA_FRAC, RETAIL_FASCIA_SIDE);
+}
+
+/** Punched window on every visible tile, both floors. Ground floor skips the door. */
+function drawOfficeWindows(
+  ctx: CanvasRenderingContext2D,
+  bld: BuildingFootprint,
+  offset: (p: Point) => Point,
+) {
+  const run = retailEntrance(bld);
+  if (!run) return;
+  const levels = Math.max(1, bld.exteriorLevels ?? 1);
+  for (const face of ["SW", "SE"] as const) {
+    const faceLen = face === "SE" ? bld.h : bld.w;
+    const origin = face === "SE" ? bld.oy : bld.ox;
+    const doorHere = face === run.face;
+    const doorStart = doorHere ? (face === "SE" ? run.y : run.x) - origin : -1;
+    for (let level = 0; level < levels; level++) {
+      for (let i = 0; i < faceLen; i++) {
+        if (
+          level === 0 &&
+          doorHere &&
+          i >= doorStart &&
+          i < doorStart + run.span
+        ) {
+          continue;
+        }
+        const edge = facadeSpanEdge(bld, face, origin + i, 1, offset);
+        if (!edge) continue;
+        fillWallBand(
+          ctx,
+          edge.bottomLeft,
+          edge.bottomRight,
+          0.2,
+          0.24,
+          level,
+          OFFICE_MULLION,
+        );
+        drawGlassPanel(
+          ctx,
+          edge.bottomLeft,
+          edge.bottomRight,
+          0.24,
+          0.72,
+          level,
+          OFFICE_FRAME,
+          OFFICE_GLASS,
+          OFFICE_MULLION,
+          false,
+          false,
+          // SW wants the screen-left jamb, SE the screen-right jamb.
+          // Both are the start of this wall edge.
+          "start",
+        );
+      }
+    }
+  }
 }
 
 /** Paint a building into an already-sized canvas context (origin at iso min). */
@@ -2798,6 +3293,29 @@ function paintBuildingOntoContext(
       ],
       SUPERMARKET_WALL_SIDE,
     );
+  } else if (bld.buildingType === "large_retail" || bld.buildingType === "office") {
+    const front = bld.buildingType === "large_retail" ? RETAIL_WALL_FRONT : OFFICE_WALL_FRONT;
+    const side = bld.buildingType === "large_retail" ? RETAIL_WALL_SIDE : OFFICE_WALL_SIDE;
+    fillPoly(
+      ctx,
+      [
+        oSw,
+        oSe,
+        { x: oSe.x, y: oSe.y - d },
+        { x: oSw.x, y: oSw.y - d },
+      ],
+      front,
+    );
+    fillPoly(
+      ctx,
+      [
+        oNe,
+        oSe,
+        { x: oSe.x, y: oSe.y - d },
+        { x: oNe.x, y: oNe.y - d },
+      ],
+      side,
+    );
   } else {
     drawTexturedWallFace(ctx, src, oSw, oSe, d, srcW, srcH);
     drawTexturedWallFace(ctx, src, oNe, oSe, d, srcW, srcH);
@@ -2819,6 +3337,10 @@ function paintBuildingOntoContext(
       WAREHOUSE_ROOF_LIP,
       WAREHOUSE_ROOF_LIP_FACE,
     );
+  } else if (bld.buildingType === "large_retail") {
+    drawRetailFacade(ctx, scene, bld, offset, d, oSw, oSe, oNe);
+  } else if (bld.buildingType === "office") {
+    drawOfficeWindows(ctx, bld, offset);
   }
 
   const door = resolveDoorSource(scene, bld);
@@ -2835,15 +3357,25 @@ function paintBuildingOntoContext(
             entranceY: bld.entranceY,
           })
         : null;
-    // Police / supermarket: SE keeps the default U-flip; SW mirrors the other way.
+    // Face-specific doors: SE keeps the default U-flip; SW uses the art as drawn.
     const flipU =
       (bld.buildingType === "police_station" ||
-        bld.buildingType === "supermarket") &&
+        bld.buildingType === "supermarket" ||
+        bld.buildingType === "large_retail" ||
+        bld.buildingType === "office") &&
       doorFace != null
         ? doorFace === "SE"
         : true;
-    // Door4 (supermarket) reads taller on the façade than residential doors.
-    const heightFrac = bld.buildingType === "supermarket" ? 0.95 : 0.75;
+    // Door4 includes the supermarket header, so it sits taller than Door6.
+    // Door7 is a single door. 0.69 keeps that aspect on the 1-tile office span.
+    const heightFrac =
+      bld.buildingType === "supermarket"
+        ? 0.95
+        : bld.buildingType === "large_retail"
+          ? 0.8
+          : bld.buildingType === "office"
+            ? 0.69
+            : 0.75;
     drawDoorOnEntranceFace(
       ctx,
       door,
@@ -3360,9 +3892,45 @@ function drawBuildingRoofSilhouette(
   const isParapet =
     bld.buildingType === "police_station" ||
     bld.buildingType === "supermarket" ||
-    bld.buildingType === "hospital";
+    bld.buildingType === "hospital" ||
+    bld.buildingType === "large_retail" ||
+    bld.buildingType === "office";
 
-  if (isHouse || isWarehouse || isMotel || isTent || isMessHall) {
+  if (isMotel) {
+    const deck = motelFlatDeck(nw, ne, se, sw, wallDepth);
+    const mono = colors.flat === 0xffffff;
+    const paint = (pts: Point[], hex: string) => {
+      fillPolyGraphics(g, pts, mono ? 0xffffff : Number.parseInt(hex.slice(1), 16));
+    };
+    const wallDeck: [Point, Point, Point, Point] = [
+      { x: nw.x, y: nw.y - wallDepth },
+      { x: ne.x, y: ne.y - wallDepth },
+      { x: se.x, y: se.y - wallDepth },
+      { x: sw.x, y: sw.y - wallDepth },
+    ];
+    const [, dNe, dSe, dSw] = deck;
+    paint([wallDeck[3]!, wallDeck[2]!, dSe, dSw], MOTEL_ROOF_DECK);
+    paint([wallDeck[1]!, wallDeck[2]!, dSe, dNe], MOTEL_ROOF_DECK);
+    paint(deck, MOTEL_ROOF_DECK);
+    if (bld.entranceX != null && bld.entranceY != null) {
+      const face = buildingEntranceFace({
+        ox: bld.ox,
+        oy: bld.oy,
+        w: bld.w,
+        h: bld.h,
+        entranceX: bld.entranceX,
+        entranceY: bld.entranceY,
+      });
+      const para = motelStreetParapet(deck, face);
+      paint(para.returnA, MOTEL_PARAPET_CAP_SIDE);
+      paint(para.returnB, MOTEL_PARAPET_CAP_SIDE);
+      paint(para.front, face === "SE" ? MOTEL_PARAPET_FACE_SIDE : MOTEL_PARAPET_FACE);
+      paint(para.cap, MOTEL_PARAPET_CAP);
+    }
+    return;
+  }
+
+  if (isHouse || isWarehouse || isTent || isMessHall) {
     // Peak only — chimney / HVAC props are small and drawn separately on the
     // real building; inflating the whole roof to clear them recreates the bug.
     const peak = isHouse
@@ -3371,8 +3939,6 @@ function drawBuildingRoofSilhouette(
         ? WAREHOUSE_ROOF_PEAK_HEIGHT
         : isTent
           ? TENT_ROOF_PEAK_HEIGHT
-          : isMessHall
-            ? MOTEL_ROOF_PEAK_HEIGHT
           : MOTEL_ROOF_PEAK_HEIGHT;
     const axis = gableRidgeAxis(bld);
     const wallDeck: [Point, Point, Point, Point] = [
@@ -3384,10 +3950,8 @@ function drawBuildingRoofSilhouette(
     const deck = (
       isHouse
         ? outsetRoofQuad(wallDeck, HOUSE_ROOF_OVERHANG)
-        : isMotel
-          ? outsetRoofQuad(wallDeck, MOTEL_ROOF_OVERHANG)
-          : isTent
-            ? outsetRoofQuad(wallDeck, TENT_ROOF_OVERHANG)
+        : isTent
+          ? outsetRoofQuad(wallDeck, TENT_ROOF_OVERHANG)
           : isMessHall
             ? outsetRoofQuad(wallDeck, MESS_HALL_ROOF_OVERHANG)
           : wallDeck

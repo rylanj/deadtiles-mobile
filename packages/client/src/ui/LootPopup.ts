@@ -14,9 +14,36 @@ export type LootPopupOptions = {
   header?: string;
   /** When set, header is name on the left and this glyph on the right. */
   arrow?: string;
-  /** How long the card stays before fading. Default 2.4s. */
+  /**
+   * Minimum time before the card fades.
+   * Longer text stays past this. When omitted, short lines stay 2.4s.
+   */
   durationMs?: number;
 };
+
+/** Short loot lines. Longer quest notes scale up from here. */
+const LOOT_POPUP_MIN_MS = 2400;
+/** Cap so a long note does not sit on screen forever. */
+const LOOT_POPUP_MAX_MS = 11000;
+/** Time to notice the card before reading starts. */
+const LOOT_POPUP_NOTICE_MS = 900;
+/** About one second of read time per 17 characters, after a short beat to notice the card. */
+const LOOT_POPUP_MS_PER_CHAR = 60;
+/** A short line is already covered by an explicit floor, such as a radio ping. */
+const LOOT_POPUP_FLOOR_CHARS = 36;
+
+function lootPopupDurationMs(text: string, floorMs?: number): number {
+  const chars = text.replace(/\s+/g, " ").trim().length;
+  const scaled = LOOT_POPUP_NOTICE_MS + chars * LOOT_POPUP_MS_PER_CHAR;
+  const natural = Math.max(
+    LOOT_POPUP_MIN_MS,
+    Math.min(LOOT_POPUP_MAX_MS, scaled),
+  );
+  if (floorMs == null || !(floorMs > 0)) return natural;
+  const extended =
+    floorMs + Math.max(0, chars - LOOT_POPUP_FLOOR_CHARS) * LOOT_POPUP_MS_PER_CHAR;
+  return Math.min(LOOT_POPUP_MAX_MS, Math.max(natural, extended));
+}
 
 /**
  * Displays a brief loot overlay (search results, task rewards, etc.).
@@ -92,8 +119,7 @@ export class LootPopup {
     // Trigger entrance animation on next frame
     requestAnimationFrame(() => card.classList.add("loot-card--visible"));
 
-    // Begin exit: fade out after 2.4 s, then remove element
-    const SHOW_MS = opts?.durationMs ?? 2400;
+    const SHOW_MS = lootPopupDurationMs(card.textContent ?? "", opts?.durationMs);
     const FADE_MS = 400;
     setTimeout(() => {
       card.classList.add("loot-card--hiding");

@@ -42,6 +42,10 @@ import {
   searchableFootprint,
   buildingKey,
   computePlayerSkillMods,
+  canPickLockAtLevel,
+  findUsableLockpickSlot,
+  pickableLockDifficulty,
+  LOCKPICK_TARGET_PREFIX,
   type PlayerSkillMods,
   craftDurationForSkill,
   ACTION_SFX_HEAR_RADIUS,
@@ -51,6 +55,7 @@ import {
   isAshenTraderWarehouse,
   ashenMarketApproachPoint,
   weaponIndexFromItemId,
+  equippedJewelrySkillXp,
   parseInventory,
   countItemInInventory,
   PLAYER_MAX_HEALTH,
@@ -116,6 +121,12 @@ import {
   BEAR_WALK_FRAMES,
   CROW_DIE_ANIM_MS,
   CROW_DIE_FRAMES,
+  RABBIT_DIE_ANIM_MS,
+  RABBIT_DIE_FRAMES,
+  RABBIT_RENDER_HEIGHT,
+  RABBIT_TILES_PER_FLEE_FRAME,
+  RABBIT_TILES_PER_WALK_FRAME,
+  RABBIT_WALK_FRAMES,
   CROW_FLY_RENDER_HEIGHT,
   CROW_RENDER_HEIGHT,
   crowFlightLiftPx,
@@ -222,6 +233,7 @@ import {
   listNewlyCompletedQuestStages,
   stepBirchportMapChart,
   type QuestMapMarker,
+  buildingEntranceRun,
 } from "@zombie/shared";
 import {
   drawProceduralWorld,
@@ -306,6 +318,7 @@ import {
   ZOMBIE_CRAWL_TILE_DROP_PX,
   COYWOLF_TILE_DROP_PX,
   BEAR_TILE_DROP_PX,
+  RABBIT_TILE_DROP_PX,
   guardIdleAKKey,
   playerManIdleKey,
   resetTreeFallFrameRequests,
@@ -314,6 +327,7 @@ import {
   coywolfIdleKey,
   bearIdleKey,
   crowIdleKey,
+  rabbitIdleKey,
 } from "../sprites/EntitySprites";
 import { DamageOverlay } from "../ui/DamageOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
@@ -398,6 +412,7 @@ import {
   coywolfPackReady,
   bearPackReady,
   crowPackReady,
+  rabbitPackReady,
 } from "../sprites/EntityAssetLoader";
 import {
   hideWorldEntering,
@@ -621,7 +636,7 @@ const MISS_DUST_BY_WEAPON: Record<number, MissDustConfig> = {
   },
 };
 
-type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "crow";
+type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "rabbit";
 
 /** Un-built prefab tile — mirrors a server StructureRecord with status "prefab". */
 type StorageBoxTile = {
@@ -660,6 +675,7 @@ export class WorldScene extends Phaser.Scene {
   private coywolfSprites = new Map<string, EntitySprite>();
   private bearSprites = new Map<string, EntitySprite>();
   private crowSprites = new Map<string, EntitySprite>();
+  private rabbitSprites = new Map<string, EntitySprite>();
   private guardSprites = new Map<string, EntitySprite>();
   /** Local /godmode — sprite AABB + id overlay. */
   private godModeDebug = false;
@@ -980,8 +996,12 @@ export class WorldScene extends Phaser.Scene {
     json: string;
     inventory: ReturnType<typeof parseInventory>;
   } | null = null;
-  /** Memo for {@link localSkillMods}, keyed on the skill json. */
-  private cachedSkillMods: { json: string; mods: PlayerSkillMods } | null = null;
+  /** Memo for {@link localSkillMods}, keyed on skills plus worn jewelry. */
+  private cachedSkillMods: {
+    json: string;
+    inventoryJson: string;
+    mods: PlayerSkillMods;
+  } | null = null;
   /** Last values pushed to the HUD bars / labels (skip no-op DOM writes). */
   private lastHudBars = {
     healthPct: -1,
@@ -1053,7 +1073,7 @@ export class WorldScene extends Phaser.Scene {
   private hoveredSearchableId: string | null = null;
   /** Dead unlooted entity under the cursor (zombie, guard, or player corpse). */
   private hoveredLootableId: string | null = null;
-  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | null = null;
+  private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
   private searchProgressEl?: HTMLElement;
   private searchProgressLabel?: HTMLElement;
   private searchProgressFill?: HTMLElement;
@@ -1063,7 +1083,7 @@ export class WorldScene extends Phaser.Scene {
    * Avoids using server absolute end timestamps (latency makes the bar jump).
    */
   private localTimedAction: {
-    kind: "search" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build";
+    kind: "search" | "lockpick" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build";
     startedAt: number;
     durationMs: number;
     label: string;
@@ -1093,7 +1113,7 @@ export class WorldScene extends Phaser.Scene {
   private interactSprint = false;
   /** Double-click lootable — approach then auto-start search (no E required). */
   private lootTargetId: string | null = null;
-  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow" | null = null;
+  private lootTargetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
   private lootSprint = false;
   private lastPursuitMoveSentAt = 0;
   /** Double-click sprint detection (time-only — tiles shift under cursor while moving). */
@@ -2390,16 +2410,16 @@ export class WorldScene extends Phaser.Scene {
         } else if (msg.type === "tradeOpen") {
           this.openTraderUI(msg.payload);
         } else if (msg.type === "tradeSync") {
-          this.traderUI?.sync({
-            ...msg.payload,
-            barterT: this.localSkillMods().barterT,
-          });
           if (this.localInventorySync) {
             this.localInventorySync = {
               ...this.localInventorySync,
               inventoryJson: msg.payload.inventoryJson,
             };
           }
+          this.traderUI?.sync({
+            ...msg.payload,
+            barterT: this.localSkillMods(msg.payload.inventoryJson).barterT,
+          });
           this.lastInventoryRenderKey = "";
           this.lastHotbarRenderKey = "";
         } else if (msg.type === "marketOpen") {
@@ -3068,6 +3088,7 @@ export class WorldScene extends Phaser.Scene {
       this.coywolfSprites,
       this.bearSprites,
       this.crowSprites,
+      this.rabbitSprites,
       this.guardSprites,
     ]) {
       for (const sprite of map.values()) {
@@ -3997,6 +4018,9 @@ export class WorldScene extends Phaser.Scene {
 
         const searching =
           alive && !!player.searchTargetId && player.searchEndTime > now;
+        const lockpicking =
+          searching &&
+          player.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX);
 
         this.entityActionLabels.sync(
           id,
@@ -4015,7 +4039,14 @@ export class WorldScene extends Phaser.Scene {
         this.entityActionLabels.sync(
           id,
           "search",
-          searching,
+          searching && !lockpicking,
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "lockpick",
+          lockpicking,
           labelSprite,
           stackBelowPx,
         );
@@ -4878,6 +4909,7 @@ export class WorldScene extends Phaser.Scene {
       this.notifyTip("wet");
     }
     if (msg.equippedWeaponIndex >= 0) this.notifyTutorial("equip_weapon");
+    this.journalUI?.setJewelrySkillXp(equippedJewelrySkillXp(syncedInventory));
     this.refreshInventoryUI();
     this.refreshHotbar();
     this.containerLootUI?.syncPlayerInventory(
@@ -4993,7 +5025,13 @@ export class WorldScene extends Phaser.Scene {
     if (!me) return;
     const questsJson = this.localQuestsJson();
     const skillsJson = this.localSkillsJson;
-    this.journalUI?.render(questsJson, skillsJson);
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me.inventoryJson ?? "";
+    this.journalUI?.render(
+      questsJson,
+      skillsJson,
+      equippedJewelrySkillXp(parseInventory(inventoryJson)),
+    );
     const key = `${questsJson}|${skillsJson}`;
     if (key === this.lastQuestUiKey) return;
     this.lastQuestUiKey = key;
@@ -5213,7 +5251,12 @@ export class WorldScene extends Phaser.Scene {
   private currentSearchTargetIds(): Set<string> {
     const ids = new Set<string>();
     this.room?.state?.players?.forEach((player) => {
-      if (player.searchTargetId) ids.add(player.searchTargetId);
+      if (
+        player.searchTargetId &&
+        !player.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX)
+      ) {
+        ids.add(player.searchTargetId);
+      }
     });
     return ids;
   }
@@ -7280,6 +7323,13 @@ export class WorldScene extends Phaser.Scene {
     return true;
   }
 
+  private localHasUsableLockpick(): boolean {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const json = this.localInventorySync?.inventoryJson ?? me?.inventoryJson;
+    if (!json) return false;
+    return findUsableLockpickSlot(this.readLocalInventory(json)) >= 0;
+  }
+
   /**
    * If standing at the door-front tile centre, interact and clear the pursuit.
    * Returns false (without clearing) when not yet close enough.
@@ -7303,10 +7353,41 @@ export class WorldScene extends Phaser.Scene {
       return false;
     }
 
+    // In range but already busy: keep the current action. Returning true
+    // stops the click from sending a new move, which would cancel a pick.
+    const live = this.room.state?.players?.get(this.sessionId);
+    if (live && this.isBusyWithTimedAction(live)) return true;
+
     this.clearDoorTarget();
     this.stopPlayerMovement();
 
     if (!door.isOpen && door.isLocked) {
+      const bx = me.buildingX;
+      const by = me.buildingY;
+      const difficulty =
+        me.inInterior && bx != null && by != null
+          ? pickableLockDifficulty(bx, by, tx, ty, door.ownerWallet)
+          : null;
+      if (difficulty) {
+        const mods = this.localSkillMods();
+        if (
+          this.localHasUsableLockpick() &&
+          canPickLockAtLevel(mods.lockpickLevel, difficulty)
+        ) {
+          this.beginLocalTimedAction(
+            "lockpick",
+            mods.lockpickDurationMs,
+            "Picking lock",
+            true,
+          );
+        }
+        const message: ClientMessage = {
+          type: "lockpickStart",
+          payload: { x: tx, y: ty },
+        };
+        this.room.send("action", message);
+        return true;
+      }
       this.pendingDoorCodeTile = { x: tx, y: ty };
       this.doorCodeUI?.openEnter();
       this.notifyTip("locked_door");
@@ -9124,11 +9205,10 @@ export class WorldScene extends Phaser.Scene {
     } else if (isWallTile(clickTX, clickTY)) {
       const bld = getBuildingAt(clickTX, clickTY);
       if (bld) {
-        const span = Math.max(1, bld.entranceSpan ?? 1);
-        const mid = (span - 1) * 0.5;
-        const onSE = bld.entranceX === bld.ox + bld.w - 1;
-        tileX = bld.entranceX + 0.5 + (onSE ? 0 : mid);
-        tileY = bld.entranceY + 0.5 + (onSE ? mid : 0);
+        const run = buildingEntranceRun(bld);
+        const mid = (run.span - 1) * 0.5;
+        tileX = run.x + 0.5 + (run.face === "SE" ? 0 : mid);
+        tileY = run.y + 0.5 + (run.face === "SE" ? mid : 0);
       } else {
         const approach = blockedTileApproachGoal(
           me?.x ?? clickTX + 0.5,
@@ -9387,6 +9467,14 @@ export class WorldScene extends Phaser.Scene {
           data,
         );
       }
+      for (const [id, sprite] of this.rabbitSprites) {
+        considerSprite(
+          id,
+          sprite as unknown as Phaser.GameObjects.Sprite,
+          "rabbit",
+          sprite?.getData("server") as { isDead?: boolean; alive?: boolean } | undefined,
+        );
+      }
     } else if (!equippedWeapon) {
       // Hands empty — talkable NPCs (Traders / MilitiaGuard / Red Order).
       for (const [id, sprite] of this.guardSprites) {
@@ -9471,6 +9559,7 @@ export class WorldScene extends Phaser.Scene {
     if (kind === "coywolf") return this.coywolfSprites;
     if (kind === "bear") return this.bearSprites;
     if (kind === "crow") return this.crowSprites;
+    if (kind === "rabbit") return this.rabbitSprites;
     return this.guardSprites;
   }
 
@@ -9480,6 +9569,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.coywolfSprites.has(id)) return "coywolf";
     if (this.bearSprites.has(id)) return "bear";
     if (this.crowSprites.has(id)) return "crow";
+    if (this.rabbitSprites.has(id)) return "rabbit";
     if (this.guardSprites.has(id)) return "guard";
     return null;
   }
@@ -9491,6 +9581,7 @@ export class WorldScene extends Phaser.Scene {
       this.coywolfSprites.get(id) ??
       this.bearSprites.get(id) ??
       this.crowSprites.get(id) ??
+      this.rabbitSprites.get(id) ??
       this.guardSprites.get(id)
     );
   }
@@ -9763,7 +9854,7 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || !this.room) return "miss";
 
     let targetId: string | null = null;
-    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow" | null = null;
+    let targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
 
     const searchable = this.nearestSearchable();
     if (searchable) {
@@ -10047,6 +10138,28 @@ export class WorldScene extends Phaser.Scene {
       return true;
     }
 
+    if (this.lootTargetKind === "rabbit") {
+      const entitySprite = this.rabbitSprites.get(this.lootTargetId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined;
+      if (!entityData?.isDead || entityData.looted || me.inInterior) {
+        this.clearLootTarget();
+        return false;
+      }
+      if (!playerNearEntity(me.x, me.y, entityData.x, entityData.y)) return false;
+      this.stopPlayerMovement();
+      const rabbitId = this.lootTargetId;
+      this.clearLootTarget();
+      const message: ClientMessage = {
+        type: "lootRabbitStart",
+        payload: { rabbitId },
+      };
+      this.beginOptimisticSearch();
+      this.room.send("action", message);
+      return true;
+    }
+
     if (this.lootTargetKind === "player") {
       const entitySprite = this.corpseSprites.get(this.lootTargetId);
       const entityData = entitySprite?.getData("server") as
@@ -10133,7 +10246,7 @@ export class WorldScene extends Phaser.Scene {
       interiorLevel?: number;
     },
     targetId: string,
-    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "crow",
+    targetKind: "searchable" | "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit",
   ): { x: number; y: number } | null {
     if (targetKind === "searchable") {
       const target = this.searchablesCache.find((item) => {
@@ -10208,6 +10321,8 @@ export class WorldScene extends Phaser.Scene {
             ? this.bearSprites.get(targetId)
           : targetKind === "crow"
             ? this.crowSprites.get(targetId)
+          : targetKind === "rabbit"
+            ? this.rabbitSprites.get(targetId)
           : targetKind === "guard"
             ? this.guardSprites.get(targetId)
             : this.corpseSprites.get(targetId);
@@ -10498,6 +10613,8 @@ export class WorldScene extends Phaser.Scene {
             ? crowAirborne
               ? CROW_FLY_RENDER_HEIGHT
               : CROW_RENDER_HEIGHT
+          : kind === "rabbit"
+            ? RABBIT_RENDER_HEIGHT
           : zombie
             ? zombieRenderHeight(zombie.skin, isZombieCrawler(targetId, zombie.skin))
             : undefined,
@@ -10568,7 +10685,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Start / continue a local progress bar for a timed action (search, reload, consume, craft, clothing, build). */
   private beginLocalTimedAction(
-    kind: "search" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build",
+    kind: "search" | "lockpick" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build",
     durationMs: number,
     label: string,
     optimistic: boolean,
@@ -10627,12 +10744,22 @@ export class WorldScene extends Phaser.Scene {
    * uses): computing them parses the whole tree, and callers on the update loop
    * ask for them every frame while a timed action runs.
    */
-  private localSkillMods(): PlayerSkillMods {
+  private localSkillMods(inventoryJson?: string): PlayerSkillMods {
     const json = this.localSkillsJson;
+    const inv =
+      inventoryJson ??
+      this.localInventorySync?.inventoryJson ??
+      this.room?.state?.players?.get(this.sessionId)?.inventoryJson ??
+      "";
     const cache = this.cachedSkillMods;
-    if (cache && cache.json === json) return cache.mods;
-    const mods = computePlayerSkillMods(json);
-    this.cachedSkillMods = { json, mods };
+    if (cache && cache.json === json && cache.inventoryJson === inv) {
+      return cache.mods;
+    }
+    const mods = computePlayerSkillMods(
+      json,
+      equippedJewelrySkillXp(parseInventory(inv)),
+    );
+    this.cachedSkillMods = { json, inventoryJson: inv, mods };
     return mods;
   }
 
@@ -10702,7 +10829,7 @@ export class WorldScene extends Phaser.Scene {
    * Esc then cancels it automatically via {@link cancelProgressBarAction}.
    */
   private static readonly CANCELABLE_TIMED_CHANNELS: readonly {
-    localKind: "search" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build";
+    localKind: "search" | "lockpick" | "reload" | "unload" | "consume" | "craft" | "clothing" | "build";
     isActive: (me: PlayerSchema) => boolean;
     cancelType:
       | "searchCancel"
@@ -10714,8 +10841,17 @@ export class WorldScene extends Phaser.Scene {
       | "buildCancel";
   }[] = [
     {
+      localKind: "lockpick",
+      isActive: (me) =>
+        !!me.searchTargetId &&
+        me.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX),
+      cancelType: "searchCancel",
+    },
+    {
       localKind: "search",
-      isActive: (me) => !!me.searchTargetId,
+      isActive: (me) =>
+        !!me.searchTargetId &&
+        !me.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX),
       cancelType: "searchCancel",
     },
     {
@@ -10867,6 +11003,7 @@ export class WorldScene extends Phaser.Scene {
       const data = sprite?.getData("server") as { altitude?: number } | undefined;
       push(id, sprite, crowIsOutOfMeleeReach(data?.altitude ?? 0));
     }
+    for (const [id, sprite] of this.rabbitSprites) push(id, sprite);
     return targets;
   }
 
@@ -11538,7 +11675,7 @@ export class WorldScene extends Phaser.Scene {
     const cursorTY = Math.floor(cart.y);
 
     let bestId: string | null = null;
-    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | null = null;
+    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
     let bestTX = 0;
     let bestTY = 0;
     let bestEntityX = 0;
@@ -11629,6 +11766,25 @@ export class WorldScene extends Phaser.Scene {
         bestKind = "crow";
         bestTX = cTX;
         bestTY = cTY;
+        bestEntityX = data.x;
+        bestEntityY = data.y;
+        break;
+      }
+    }
+
+    if (!bestId && !me.inInterior) {
+      for (const [id, sprite] of this.rabbitSprites) {
+        const data = sprite?.getData("server") as
+          | { x: number; y: number; isDead?: boolean; looted?: boolean }
+          | undefined;
+        if (!data?.isDead || data.looted) continue;
+        const rTX = Math.floor(data.x);
+        const rTY = Math.floor(data.y);
+        if (cursorTX !== rTX || cursorTY !== rTY) continue;
+        bestId = id;
+        bestKind = "rabbit";
+        bestTX = rTX;
+        bestTY = rTY;
         bestEntityX = data.x;
         bestEntityY = data.y;
         break;
@@ -11906,6 +12062,30 @@ export class WorldScene extends Phaser.Scene {
         const message: ClientMessage = {
           type: "lootCrowStart",
           payload: { crowId: this.hoveredLootableId },
+        };
+        this.beginOptimisticSearch();
+        this.room.send("action", message);
+        started = true;
+      }
+    }
+
+    if (
+      !started &&
+      this.hoveredLootableId &&
+      this.hoveredLootableKind === "rabbit"
+    ) {
+      const entitySprite = this.rabbitSprites.get(this.hoveredLootableId);
+      const entityData = entitySprite?.getData("server") as
+        | { x: number; y: number }
+        | undefined;
+      if (
+        entityData &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, entityData.x, entityData.y)
+      ) {
+        const message: ClientMessage = {
+          type: "lootRabbitStart",
+          payload: { rabbitId: this.hoveredLootableId },
         };
         this.beginOptimisticSearch();
         this.room.send("action", message);
@@ -12452,6 +12632,8 @@ export class WorldScene extends Phaser.Scene {
     // even if a stale start-sync still says isReloading.
     const sync = this.localInventorySync;
     const searching = !!me.searchTargetId;
+    const lockpicking =
+      searching && me.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX);
     const syncConfirmsOptimisticReload =
       !!sync?.isReloading &&
       this.localTimedAction?.kind === "reload" &&
@@ -12467,7 +12649,14 @@ export class WorldScene extends Phaser.Scene {
     const changingClothes = !!me.isChangingClothes;
     const building = !!me.isBuilding;
 
-    if (searching) {
+    if (lockpicking) {
+      this.beginLocalTimedAction(
+        "lockpick",
+        this.localSkillMods().lockpickDurationMs,
+        "Picking lock",
+        false,
+      );
+    } else if (searching) {
       this.beginLocalTimedAction(
         "search",
         this.localSkillMods().searchDurationMs,
@@ -12524,7 +12713,18 @@ export class WorldScene extends Phaser.Scene {
     } else if (this.localTimedAction) {
       const action = this.localTimedAction;
       const age = Date.now() - action.startedAt;
-      if (action.kind === "search") {
+      if (action.kind === "lockpick") {
+        if (action.holdUntil != null) {
+          if (Date.now() >= action.holdUntil) this.localTimedAction = null;
+        } else if (action.optimistic && age < 2500) {
+          // Waiting for the server to accept the pick.
+        } else if (!action.optimistic && age >= action.durationMs - 750) {
+          action.startedAt = Date.now() - action.durationMs;
+          action.holdUntil = Date.now() + 220;
+        } else {
+          this.localTimedAction = null;
+        }
+      } else if (action.kind === "search") {
         if (action.optimistic && age < 2500) {
           // Waiting for server confirm.
         } else if (
@@ -13235,6 +13435,10 @@ export class WorldScene extends Phaser.Scene {
         ) => void;
         onRemove: (cb: (crow: unknown, id: string) => void) => void;
       };
+      rabbits?: {
+        onAdd: (cb: (rabbit: ZombieSchema, id: string) => void) => void;
+        onRemove: (cb: (rabbit: ZombieSchema, id: string) => void) => void;
+      };
       corpses: {
         onAdd: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
         onRemove: (cb: (corpse: PlayerCorpseSchema, id: string) => void) => void;
@@ -13421,6 +13625,12 @@ export class WorldScene extends Phaser.Scene {
     });
     state$.crows?.onRemove((_c, id) => this.removeEntity(this.crowSprites, id));
 
+    state$.rabbits?.onAdd((rabbit, id) => {
+      this.refreshRabbit(id, rabbit);
+      $(rabbit).onChange(() => this.refreshRabbit(id, rabbit));
+    });
+    state$.rabbits?.onRemove((_r, id) => this.removeEntity(this.rabbitSprites, id));
+
     if (state$.searchables) {
       state$.searchables.onAdd((item, id) => {
         refreshSearchables();
@@ -13552,7 +13762,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private entityVisible(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow" | "rabbit",
     data: {
       x?: number;
       y?: number;
@@ -13792,6 +14002,49 @@ export class WorldScene extends Phaser.Scene {
     this.applyCoywolfMotion(sprite, prev, next);
     sprite.setData("server", next);
     this.updateEntityFromState(sprite, "crow", id);
+  }
+
+  private refreshRabbit(
+    id: string,
+    data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
+  ) {
+    if (!this.entityVisible("rabbit", data, id)) {
+      const existing = this.rabbitSprites.get(id);
+      if (existing) {
+        existing.setData("server", {
+          ...data,
+          isDead: !!data.isDead,
+          looted: !!data.looted,
+        });
+        this.softHideEntitySprite(existing);
+      }
+      return;
+    }
+
+    const sprite = this.ensureEntity(this.rabbitSprites, id, "rabbit");
+    const prev = sprite.getData("server") as { isDead?: boolean; x?: number; y?: number; anim?: string } | undefined;
+    const next = {
+      x: data.x,
+      y: data.y,
+      facing: data.facing,
+      anim: data.anim,
+      animFrame: data.animFrame,
+      health: data.health,
+      isDead: !!data.isDead,
+      looted: !!data.looted,
+      alive: !data.isDead,
+    };
+    if (!prev && next.isDead) {
+      this.freezeEntityDieAnim(id);
+    } else if (prev && !prev.isDead && next.isDead) {
+      this.startEntityDieAnim(id);
+      sprite.setData("visualKey", "");
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+    }
+    this.applyCoywolfMotion(sprite, prev, next);
+    sprite.setData("server", next);
+    this.updateEntityFromState(sprite, "rabbit", id);
   }
 
   private applyCoywolfMotion(
@@ -14551,7 +14804,7 @@ export class WorldScene extends Phaser.Scene {
   private ensureEntity(
     map: Map<string, EntitySprite>,
     id: string,
-    kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow",
+    kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "rabbit",
   ) {
     let sprite = map.get(id);
     // Stale entries after kick/reconnect: GameObject destroyed, scene unset.
@@ -14579,6 +14832,10 @@ export class WorldScene extends Phaser.Scene {
                   ? crowIdleKey("S")
                   : kind === "crow"
                     ? "__DEFAULT"
+                : kind === "rabbit" && this.textures.exists(rabbitIdleKey("S"))
+                  ? rabbitIdleKey("S")
+                  : kind === "rabbit"
+                    ? "__DEFAULT"
                 : zombieIdleKey("S");
       sprite = this.add.sprite(0, 0, placeholder, 0) as EntitySprite;
       sprite.entityId = id;
@@ -14603,6 +14860,7 @@ export class WorldScene extends Phaser.Scene {
     this.tickZombieWalkAnims(delta / 1000);
     this.tickCoywolfWalkAnims(delta / 1000);
     this.tickBearWalkAnims(delta / 1000);
+    this.tickRabbitWalkAnims(delta / 1000);
     this.syncNearbyEntityAssets();
     this.ensureVisibleEntities();
     // Create any zombies queued by ensure (living flush already ran earlier).
@@ -14681,6 +14939,18 @@ export class WorldScene extends Phaser.Scene {
       this.updateEntityFromState(sprite, "crow", sprite.entityId);
     }
 
+    for (const sprite of this.rabbitSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; isDead?: boolean }
+        | undefined;
+      if (!data) continue;
+      if (!this.entityVisible("rabbit", data, sprite.entityId)) {
+        this.softHideEntitySprite(sprite);
+        continue;
+      }
+      this.updateEntityFromState(sprite, "rabbit", sprite.entityId);
+    }
+
     for (const sprite of this.guardSprites.values()) {
       const data = sprite.getData("server") as
         | { x?: number; y?: number; alive?: boolean; inInterior?: boolean }
@@ -14751,6 +15021,7 @@ export class WorldScene extends Phaser.Scene {
     for (const sprite of this.guardSprites.values()) draw(sprite, 0x44aaff);
     for (const sprite of this.coywolfSprites.values()) draw(sprite, 0xffaa33);
     for (const sprite of this.bearSprites.values()) draw(sprite, 0xc4783a);
+    for (const sprite of this.rabbitSprites.values()) draw(sprite, 0xd8d0c4);
 
     for (const [id, label] of this.entityBoundsLabels) {
       if (!seen.has(id)) {
@@ -14854,6 +15125,12 @@ export class WorldScene extends Phaser.Scene {
       if (!this.entityVisible("crow", crow, id)) return;
       this.refreshCrow(id, crow);
     });
+
+    state.rabbits?.forEach((rabbit, id) => {
+      if (this.rabbitSprites.has(id)) return;
+      if (!this.entityVisible("rabbit", rabbit, id)) return;
+      this.refreshRabbit(id, rabbit);
+    });
   }
 
   /** Lazy-load NPC sprite packs for entities near the local player. */
@@ -14935,6 +15212,13 @@ export class WorldScene extends Phaser.Scene {
         });
         return list;
       })(),
+      rabbits: (() => {
+        const list: { x: number; y: number }[] = [];
+        this.room.state.rabbits?.forEach((rabbit) => {
+          list.push({ x: rabbit.x, y: rabbit.y });
+        });
+        return list;
+      })(),
     });
   }
 
@@ -15007,6 +15291,41 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  /** Advance rabbit hops from rendered displacement. A bolt uses a longer stride. */
+  private tickRabbitWalkAnims(dtSec: number) {
+    if (dtSec <= 0) return;
+    for (const sprite of this.rabbitSprites.values()) {
+      const data = sprite.getData("server") as
+        | { x?: number; y?: number; anim?: string; isDead?: boolean }
+        | undefined;
+      if (!data || data.isDead) continue;
+      if (data.anim !== "walk") continue;
+      if (data.x == null || data.y == null || !this.tileManager?.isTileDrawn(Math.floor(data.x), Math.floor(data.y))) {
+        continue;
+      }
+      const rx = (sprite.getData("renderX") as number | undefined) ?? data.x;
+      const ry = (sprite.getData("renderY") as number | undefined) ?? data.y;
+      const prevRx = (sprite.getData("prevRenderX") as number | undefined) ?? rx;
+      const prevRy = (sprite.getData("prevRenderY") as number | undefined) ?? ry;
+      sprite.setData("prevRenderX", rx);
+      sprite.setData("prevRenderY", ry);
+      const dist = Math.hypot(rx - prevRx, ry - prevRy);
+      if (dist < 0.0005) continue;
+      const fleeing = dist / dtSec > 2.2;
+      const localAnimFrame =
+        (sprite.getData("localAnimFrame") as number | undefined) ?? 0;
+      sprite.setData(
+        "localAnimFrame",
+        advanceWalkAnimFrame(
+          localAnimFrame,
+          dist,
+          fleeing ? RABBIT_TILES_PER_FLEE_FRAME : RABBIT_TILES_PER_WALK_FRAME,
+          RABBIT_WALK_FRAMES,
+        ),
+      );
+    }
+  }
+
   /** Advance coywolf walk frames from rendered displacement, same idea as zombies. */
   private tickCoywolfWalkAnims(dtSec: number) {
     if (dtSec <= 0) return;
@@ -15043,7 +15362,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildEntityVisualKey(
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow" | "rabbit",
     data: {
       facing: number;
       anim: string;
@@ -15090,6 +15409,8 @@ export class WorldScene extends Phaser.Scene {
       packReady = bearPackReady() ? "1" : "0";
     } else if (kind === "crow") {
       packReady = crowPackReady() ? "1" : "0";
+    } else if (kind === "rabbit") {
+      packReady = rabbitPackReady() ? "1" : "0";
     }
 
     return [
@@ -15114,7 +15435,7 @@ export class WorldScene extends Phaser.Scene {
 
   private updateEntityFromState(
     sprite: EntitySprite,
-    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow",
+    kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow" | "rabbit",
     entityId: string,
   ) {
     let data = sprite.getData("server") as
@@ -15180,7 +15501,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const animFrame =
-      kind === "zombie" || kind === "coywolf" || kind === "bear"
+      kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "rabbit"
         ? Math.floor(
             (sprite.getData("localAnimFrame") as number | undefined) ??
               data.animFrame ??
@@ -15191,7 +15512,7 @@ export class WorldScene extends Phaser.Scene {
     const isDead =
       kind === "corpse"
         ? true
-        : kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow"
+        : kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow" || kind === "rabbit"
           ? this.isZombieDead(data)
           : kind === "guard"
             ? data.alive === false
@@ -15226,6 +15547,13 @@ export class WorldScene extends Phaser.Scene {
                 isDead,
                 CROW_DIE_FRAMES,
                 CROW_DIE_ANIM_MS,
+              )
+          : kind === "rabbit"
+            ? this.resolveDieFrame(
+                entityId,
+                isDead,
+                RABBIT_DIE_FRAMES,
+                RABBIT_DIE_ANIM_MS,
               )
           : kind === "guard"
             ? this.resolveDieFrame(
@@ -15317,7 +15645,7 @@ export class WorldScene extends Phaser.Scene {
     sprite.setVisible(true);
 
     const renderPos =
-      kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow"
+      kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow" || kind === "rabbit"
         ? this.getZombieRenderPosition(sprite, data.x, data.y)
         : kind === "player"
           ? this.getPlayerRenderPosition(sprite, data.x, data.y)
@@ -15349,6 +15677,7 @@ export class WorldScene extends Phaser.Scene {
     const crawlDrop = zombieCrawling && !isDead ? ZOMBIE_CRAWL_TILE_DROP_PX : 0;
     const coyoteDrop = kind === "coywolf" ? COYWOLF_TILE_DROP_PX : 0;
     const bearDrop = kind === "bear" ? BEAR_TILE_DROP_PX : 0;
+    const rabbitDrop = kind === "rabbit" ? RABBIT_TILE_DROP_PX : 0;
     const crowLift = kind === "crow" ? crowFlightLiftPx(data.altitude ?? 0) : 0;
     if (kind === "crow" && crowLift > 0) {
       // One (x+y) step is TILE_HEIGHT/2 pixels and 1024 depth, matching groundSortDepth.
@@ -15356,7 +15685,7 @@ export class WorldScene extends Phaser.Scene {
     }
     sprite.setPosition(
       iso.x,
-      entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop - crowLift,
+      entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop + rabbitDrop - crowLift,
     );
     sprite.setDepth(depth);
 
@@ -16410,7 +16739,7 @@ export class WorldScene extends Phaser.Scene {
       playerName: me?.name ?? "You",
       clothingSkin:
         this.localInventorySync?.clothingSkin ?? me?.clothingSkin ?? 1,
-      barterT: this.localSkillMods().barterT,
+      barterT: this.localSkillMods(payload.inventoryJson).barterT,
     });
     if (this.localInventorySync) {
       this.localInventorySync = {
@@ -17034,6 +17363,21 @@ export class WorldScene extends Phaser.Scene {
         !crowData.looted &&
         !me.inInterior &&
         playerNearEntity(me.x, me.y, crowData.x, crowData.y)
+      );
+    }
+
+    const rabbit = room.state.rabbits?.get(containerId);
+    const rabbitData =
+      rabbit ??
+      (this.rabbitSprites.get(containerId)?.getData("server") as
+        | { x: number; y: number; isDead?: boolean; looted?: boolean }
+        | undefined);
+    if (rabbitData) {
+      return (
+        !!rabbitData.isDead &&
+        !rabbitData.looted &&
+        !me.inInterior &&
+        playerNearEntity(me.x, me.y, rabbitData.x, rabbitData.y)
       );
     }
 

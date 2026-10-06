@@ -71,6 +71,14 @@ export function buildingDoor5Key(face: SuperWindowFace): string {
   return `building-door-5-${face.toLowerCase()}`;
 }
 
+export function buildingDoor6Key(face: SuperWindowFace): string {
+  return `building-door-6-${face.toLowerCase()}`;
+}
+
+export function buildingDoor7Key(face: SuperWindowFace): string {
+  return `building-door-7-${face.toLowerCase()}`;
+}
+
 export function buildingWindow1Key(face: SuperWindowFace): string {
   return `building-window-1-${face.toLowerCase()}`;
 }
@@ -126,6 +134,14 @@ function door5File(face: SuperWindowFace): string {
   return `Buildings/Door5_${face}.png`;
 }
 
+function door6File(face: SuperWindowFace): string {
+  return `Buildings/Door6_${face}.png`;
+}
+
+function door7File(face: SuperWindowFace): string {
+  return `Buildings/Door7_${face}.png`;
+}
+
 function window1File(face: SuperWindowFace): string {
   return `Buildings/Window1_${face}.png`;
 }
@@ -164,6 +180,8 @@ export function loadBuildingAssets(scene: Phaser.Scene) {
     scene.load.image(buildingDoor2Key(face), door2File(face));
     scene.load.image(buildingDoor4Key(face), door4File(face));
     scene.load.image(buildingDoor5Key(face), door5File(face));
+    scene.load.image(buildingDoor6Key(face), door6File(face));
+    scene.load.image(buildingDoor7Key(face), door7File(face));
     scene.load.image(buildingWindow1Key(face), window1File(face));
     scene.load.image(buildingBigWindow1Key(face), bigWindow1File(face));
   }
@@ -203,6 +221,10 @@ export function configureBuildingTextures(scene: Phaser.Scene) {
     buildingDoor4Key("SW"),
     buildingDoor5Key("SE"),
     buildingDoor5Key("SW"),
+    buildingDoor6Key("SE"),
+    buildingDoor6Key("SW"),
+    buildingDoor7Key("SE"),
+    buildingDoor7Key("SW"),
     buildingWindow1Key("SE"),
     buildingWindow1Key("SW"),
     buildingBigWindow1Key("SE"),
@@ -363,7 +385,7 @@ export function isRuralStyleBuilding(
   return isHouseStyleBuilding(bld);
 }
 
-/** Door texture for the building type (supermarket Door4 / hospital Door5 / tent flap). */
+/** Door texture for the building type (supermarket Door4 / hospital Door5 / retail Door6 / office Door7 / tent flap). */
 export function doorTextureKeyForBuilding(
   bld: Pick<BuildingInfo, "buildingType"> | { buildingType?: BuildingType },
   face?: SuperWindowFace,
@@ -377,6 +399,10 @@ export function doorTextureKeyForBuilding(
       return buildingDoor4Key(face ?? "SE");
     case "hospital":
       return buildingDoor5Key(face ?? "SE");
+    case "large_retail":
+      return buildingDoor6Key(face ?? "SE");
+    case "office":
+      return buildingDoor7Key(face ?? "SE");
     case "tent":
       return BUILDING_TENT_FLAP_KEY;
     case "mess_hall":
@@ -417,6 +443,6 @@ export function wallTextureKeyForBuilding(
   if (bld.buildingType === "warehouse") return BUILDING_WALL_WAREHOUSE_KEY;
   if (bld.buildingType === "police_station") return BUILDING_WALL_HOUSE_KEYS[0]!; // Wall1
   if (isHouseStyleBuilding(bld)) return houseWallTextureKeyForBuilding(bld);
-  // Office, supermarket, etc. — blank until dedicated walls exist.
+  // Office, retail, and supermarket paint their own walls and ignore this key.
   return BUILDING_WALL_BLANK_KEY;
 }

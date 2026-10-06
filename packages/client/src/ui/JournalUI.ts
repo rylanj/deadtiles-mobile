@@ -9,6 +9,7 @@ import {
   canAbandonQuest,
   listTrackedJournalQuests,
   parseQuestsJson,
+  buffedSubSkillLevel,
   parseSkillsJson,
   questAssignedLocationLabel,
   questCompletionsRemaining,
@@ -81,6 +82,8 @@ export class JournalUI {
   private tab: JournalTab = "quests";
   private questsJson = "";
   private skillsJson = "";
+  /** Temporary Bartering and Persuasion XP from worn jewelry. */
+  private jewelrySkillXp = 0;
   /** Quest id currently expanded (null = all collapsed). */
   private expandedQuestId: string | null = null;
   /** Parent skill currently expanded (null = all collapsed). */
@@ -166,13 +169,23 @@ export class JournalUI {
     return this.visible;
   }
 
-  render(questsJson: string, skillsJson: string) {
+  render(questsJson: string, skillsJson: string, jewelrySkillXp = this.jewelrySkillXp) {
     const questsChanged = questsJson !== this.questsJson;
     const skillsChanged = skillsJson !== this.skillsJson;
+    const jewelryChanged = jewelrySkillXp !== this.jewelrySkillXp;
     this.questsJson = questsJson;
     this.skillsJson = skillsJson;
+    this.jewelrySkillXp = jewelrySkillXp;
     if (!this.visible) return;
-    if (!questsChanged && !skillsChanged) return;
+    if (!questsChanged && !skillsChanged && !jewelryChanged) return;
+    this.renderBody();
+  }
+
+  /** Worn jewelry changed. Skills stay open on the real level plus the buff. */
+  setJewelrySkillXp(jewelrySkillXp: number) {
+    if (jewelrySkillXp === this.jewelrySkillXp) return;
+    this.jewelrySkillXp = jewelrySkillXp;
+    if (!this.visible || this.tab !== "skills") return;
     this.renderBody();
   }
 
@@ -545,6 +558,17 @@ export class JournalUI {
         parentLevel,
         PARENT_SKILL_LABELS[parentId],
       );
+      if (
+        this.jewelrySkillXp > 0 &&
+        (subId === "bartering" || subId === "persuasion")
+      ) {
+        const buffed = buffedSubSkillLevel(state, subId, this.jewelrySkillXp);
+        subMeta.append(document.createTextNode("  ·  "));
+        const buff = document.createElement("span");
+        buff.className = "journal-skill-buff";
+        buff.textContent = `Buffed ${buffed}`;
+        subMeta.append(buff);
+      }
       subHead.append(subName, subMeta);
       row.append(subHead, skillBar(sub, parentLevel));
       for (const line of SUB_SKILL_BENEFIT[subId]) {

@@ -83,13 +83,15 @@ export type AnimatedFurnitureType =
   | "retailshelf2"
   | "retailshelf3"
   | "retailcase1"
-  | "retailcase2";
+  | "retailcase2"
+  | "retailcheckout1";
 
-/** Idle-only SE/SW pair. Searched frames are omitted (frameCount 0). */
+/** SE/SW pair. `frameCount` 0 is idle-only; otherwise Searched_0001–N plays on search. */
 function idlePair(
   objectType: AnimatedFurnitureType,
   folder: string,
   filePrefix: string,
+  frameCount = 0,
 ): AnimatedFurnitureDef[] {
   return (["SE", "SW"] as const).map((facing) => ({
     objectType,
@@ -98,7 +100,7 @@ function idlePair(
     folder,
     filePrefix,
     facing,
-    frameCount: 0,
+    frameCount,
   }));
 }
 
@@ -1187,6 +1189,7 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
   ...idlePair("retailshelf1", "Furniture/RetailShelf1", "RetailShelf1"),
   ...idlePair("retailshelf2", "Furniture/RetailShelf2", "RetailShelf2"),
   ...idlePair("retailshelf3", "Furniture/RetailShelf3", "RetailShelf3"),
-  ...idlePair("retailcase1", "Furniture/RetailCase1", "RetailCase1"),
+  ...idlePair("retailcase1", "Furniture/RetailCase1", "RetailCase1", 9),
   ...idlePair("retailcase2", "Furniture/RetailCase2", "RetailCase2"),
+  ...idlePair("retailcheckout1", "Furniture/RetailCheckout1", "RetailCheckout1"),
 ];

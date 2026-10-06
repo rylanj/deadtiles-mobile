@@ -13,6 +13,7 @@ import {
   WALL_DEPTH,
   WAREHOUSE_ROOF_PEAK_HEIGHT,
   MOTEL_ROOF_PEAK_HEIGHT,
+  MOTEL_PARAPET_HEIGHT,
   TENT_ROOF_PEAK_HEIGHT,
   HOUSE_CHIMNEY_HEIGHT,
   HOUSE_CHIMNEY_CHANCE_RURAL,
@@ -203,7 +204,8 @@ export type CityBuildingSpec = {
 export const CITY_BUILDING_SPECS: Record<CityBuildingType, CityBuildingSpec> = {
   office: {
     zone: "downtown", minW: 6, maxW: 10, minH: 8, maxH: 12,
-    minLevels: 1, maxLevels: 2, maxPerCity: 3, weight: 3, roofColor: "#f0f0f0",
+    minLevels: 1, maxLevels: 2, maxPerCity: 3, weight: 3, roofColor: "#e6dfd2",
+    doorCentered: true,
   },
   police_station: {
     zone: "downtown", minW: 7, maxW: 7, minH: 7, maxH: 7,
@@ -218,6 +220,7 @@ export const CITY_BUILDING_SPECS: Record<CityBuildingType, CityBuildingSpec> = {
   large_retail: {
     zone: "downtown", minW: 10, maxW: 12, minH: 10, maxH: 12,
     minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 2, roofColor: "#c8cc91",
+    doorCentered: true, doorSpan: 2,
   },
   hospital: {
     zone: "downtown", minW: 8, maxW: 12, minH: 8, maxH: 12,
@@ -239,6 +242,7 @@ export const CITY_BUILDING_SPECS: Record<CityBuildingType, CityBuildingSpec> = {
     zone: "outskirts", minW: 4, maxW: 11, minH: 4, maxH: 11,
     longSide: { short: 4, minLong: 11, maxLong: 11 },
     minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 1, roofColor: "#5c4a3e",
+    // End tiles stay empty. The roof sign is wider than the door.
   },
   gun_shop: {
     zone: "outskirts", minW: 4, maxW: 6, minH: 4, maxH: 6,
@@ -296,7 +300,7 @@ export function buildingCuboidScreenDepth(
     bld?.buildingType === "warehouse"
       ? WAREHOUSE_ROOF_PEAK_HEIGHT
       : bld?.buildingType === "motel"
-        ? MOTEL_ROOF_PEAK_HEIGHT
+        ? MOTEL_PARAPET_HEIGHT
         : bld?.buildingType === "tent"
           ? TENT_ROOF_PEAK_HEIGHT
         : bld?.buildingType === "mess_hall"
@@ -305,7 +309,12 @@ export function buildingCuboidScreenDepth(
           ? POLICE_ROOF_LIP_HEIGHT + POLICE_ROOF_PROP_HEIGHT
           : bld?.buildingType === "supermarket"
             ? POLICE_ROOF_LIP_HEIGHT + SUPERMARKET_ROOF_PROP_HEIGHT
-            : bld?.buildingType === "hospital"
+            : bld?.buildingType === "large_retail"
+              ? POLICE_ROOF_LIP_HEIGHT + Math.round(SUPERMARKET_ROOF_PROP_HEIGHT * 0.75)
+              : bld?.buildingType === "office"
+                ? POLICE_ROOF_LIP_HEIGHT +
+                  (buildingExteriorLevels(bld) >= 2 ? POLICE_ROOF_PROP_HEIGHT : 0)
+                : bld?.buildingType === "hospital"
               ? POLICE_ROOF_LIP_HEIGHT
               : bld?.buildingType === "house"
                 ? HOUSE_ROOF_PEAK_HEIGHT + HOUSE_CHIMNEY_HEIGHT
@@ -336,25 +345,63 @@ export function buildingEntranceFace(
   return "SW";
 }
 
-/** Doorway width in façade tiles (defaults to 1). */
+/** Doorway width in façade tiles. Department stores are always 2 tiles. */
 export function buildingEntranceSpan(
-  bld: { entranceSpan?: number } | null | undefined,
+  bld: { entranceSpan?: number; buildingType?: BuildingType } | null | undefined,
 ): number {
-  return Math.max(1, bld?.entranceSpan ?? 1);
+  const span = Math.max(1, bld?.entranceSpan ?? 1);
+  if (bld?.buildingType === "large_retail") return Math.max(2, span);
+  return span;
+}
+
+type EntranceRunBuilding = {
+  ox: number;
+  oy: number;
+  w: number;
+  h: number;
+  entranceX: number;
+  entranceY: number;
+  entranceSpan?: number;
+  buildingType?: BuildingType;
+};
+
+/**
+ * Doorway start tile and span, shifted back when a wider door would hang
+ * off the end of the façade.
+ */
+export function buildingEntranceRun(bld: EntranceRunBuilding): {
+  x: number;
+  y: number;
+  span: number;
+  face: "SE" | "SW";
+} {
+  const face = buildingEntranceFace(bld);
+  let span = buildingEntranceSpan(bld);
+  const faceLen = face === "SE" ? bld.h : bld.w;
+  if (span > faceLen) span = Math.max(1, faceLen);
+  let x = bld.entranceX;
+  let y = bld.entranceY;
+  if (face === "SE") {
+    const maxStart = bld.oy + bld.h - span;
+    if (y > maxStart) y = maxStart;
+  } else {
+    const maxStart = bld.ox + bld.w - span;
+    if (x > maxStart) x = maxStart;
+  }
+  return { x, y, span, face };
 }
 
 /** All perimeter tiles covered by the doorway, ordered along the face. */
 export function buildingEntranceTiles(
-  bld: Pick<BuildingInfo, "ox" | "oy" | "w" | "h" | "entranceX" | "entranceY" | "entranceSpan">,
+  bld: EntranceRunBuilding,
 ): { x: number; y: number }[] {
-  const span = buildingEntranceSpan(bld);
-  const face = buildingEntranceFace(bld);
+  const run = buildingEntranceRun(bld);
   const tiles: { x: number; y: number }[] = [];
-  for (let i = 0; i < span; i++) {
-    if (face === "SE") {
-      tiles.push({ x: bld.entranceX, y: bld.entranceY + i });
+  for (let i = 0; i < run.span; i++) {
+    if (run.face === "SE") {
+      tiles.push({ x: run.x, y: run.y + i });
     } else {
-      tiles.push({ x: bld.entranceX + i, y: bld.entranceY });
+      tiles.push({ x: run.x + i, y: run.y });
     }
   }
   return tiles;
@@ -517,20 +564,16 @@ export const BUILDING_ENTRANCE_CLEARANCE_DEPTH = 2;
 export function tileInBuildingEntranceClearance(
   tx: number,
   ty: number,
-  bld: Pick<
-    BuildingInfo,
-    "ox" | "oy" | "w" | "h" | "entranceX" | "entranceY" | "entranceSpan"
-  >,
+  bld: EntranceRunBuilding,
 ): boolean {
-  const span = buildingEntranceSpan(bld);
-  const face = buildingEntranceFace(bld);
+  const run = buildingEntranceRun(bld);
   // SE doorways open east (+x) and run along y; SW open south (+y), run along x.
-  const depth = face === "SE" ? tx - bld.entranceX : ty - bld.entranceY;
+  const depth = run.face === "SE" ? tx - run.x : ty - run.y;
   if (depth < 0 || depth > BUILDING_ENTRANCE_CLEARANCE_DEPTH) return false;
   const spread = depth === 0 ? 0 : 1;
-  const along = face === "SE" ? ty : tx;
-  const start = face === "SE" ? bld.entranceY : bld.entranceX;
-  return along >= start - spread && along <= start + span - 1 + spread;
+  const along = run.face === "SE" ? ty : tx;
+  const start = run.face === "SE" ? run.y : run.x;
+  return along >= start - spread && along <= start + run.span - 1 + spread;
 }
 
 /** True when any nearby building's doorway apron covers this tile. */
@@ -585,6 +628,66 @@ function hasBuildingEntryApproach(
     if (!approaches.some((c) => !blocked(c.x, c.y))) return false;
   }
   return true;
+}
+
+/**
+ * Motel roof signs are wider than the door. A door on either end tile
+ * hangs the sign past the building and onto the street, so pull it one
+ * tile in when the new spot still has a way up to the door.
+ */
+function pullMotelEntranceOffCorners(
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+  entrance: { entranceX: number; entranceY: number; entranceSpan: number },
+  nearbyBuildings: BuildingInfo[],
+): { entranceX: number; entranceY: number; entranceSpan: number } {
+  const span = Math.max(1, entrance.entranceSpan);
+  const onEastWall = entrance.entranceX === ox + w - 1;
+  if (onEastWall) {
+    const minY = oy + 1;
+    const maxY = oy + h - span - 1;
+    if (maxY < minY) return entrance;
+    const y = Math.min(maxY, Math.max(minY, entrance.entranceY));
+    if (y === entrance.entranceY) return entrance;
+    if (
+      !hasBuildingEntryApproach(
+        entrance.entranceX,
+        y,
+        ox,
+        oy,
+        w,
+        h,
+        nearbyBuildings,
+        span,
+      )
+    ) {
+      return entrance;
+    }
+    return { ...entrance, entranceY: y };
+  }
+
+  const minX = ox + 1;
+  const maxX = ox + w - span - 1;
+  if (maxX < minX) return entrance;
+  const x = Math.min(maxX, Math.max(minX, entrance.entranceX));
+  if (x === entrance.entranceX) return entrance;
+  if (
+    !hasBuildingEntryApproach(
+      x,
+      entrance.entranceY,
+      ox,
+      oy,
+      w,
+      h,
+      nearbyBuildings,
+      span,
+    )
+  ) {
+    return entrance;
+  }
+  return { ...entrance, entranceX: x };
 }
 
 type EntranceOptions = {
@@ -706,6 +809,10 @@ function makeBuilding(
     entranceOpts.span = typeSpec.doorSpan;
   }
   const entrance = pickBuildingEntrance(ox, oy, w, h, rng, nearbyBuildings, entranceOpts);
+  const placedEntrance =
+    buildingType === "motel"
+      ? pullMotelEntranceOffCorners(ox, oy, w, h, entrance, nearbyBuildings)
+      : entrance;
   const chimneyChance = options.chimneyChance ?? HOUSE_CHIMNEY_CHANCE_CITY;
   const chimney =
     buildingType === "house" && rng() < chimneyChance
@@ -717,7 +824,7 @@ function makeBuilding(
     buildingType,
     exteriorLevels: options.exteriorLevels ?? 1,
     houseRooms: options.houseRooms ?? false,
-    ...entrance,
+    ...placedEntrance,
     ...chimney,
   };
 }
@@ -2656,6 +2763,74 @@ type Frontage = "E" | "S";
 
 /** Max placement attempts per frontage during the fill pass. */
 const FRONTAGE_FILL_ATTEMPTS = 24;
+/** A neighbour counts as beside the station when the alley is at most this wide. */
+const POLICE_SANDWICH_GAP = 1;
+
+function policeFacesEast(b: BuildingInfo): boolean {
+  return b.entranceX === b.ox + b.w - 1;
+}
+
+function rangesOverlap(
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  min: number,
+): boolean {
+  return Math.min(a1, b1) - Math.max(a0, b0) >= min;
+}
+
+/** True when a building sits on both the east and south streets of its lot. */
+function buildingOnLotCorner(b: BuildingInfo, lots: CityLot[]): boolean {
+  const lot = lots.find(
+    (l) =>
+      b.ox >= l.lx &&
+      b.ox + b.w <= l.lxEnd &&
+      b.oy >= l.ly &&
+      b.oy + b.h <= l.lyEnd,
+  );
+  if (!lot?.eastRange || !lot.southRange) return false;
+  const flushEast =
+    b.ox + b.w === lot.lxEnd &&
+    b.oy >= lot.eastRange[0] &&
+    b.oy + b.h <= lot.eastRange[1];
+  const flushSouth =
+    b.oy + b.h === lot.lyEnd &&
+    b.ox >= lot.southRange[0] &&
+    b.ox + b.w <= lot.southRange[1];
+  return flushEast && flushSouth;
+}
+
+/** True when another building sits on both sides along the station's street. */
+function policeSandwiched(police: BuildingInfo, buildings: BuildingInfo[]): boolean {
+  const beside = (near: number, otherFar: number) =>
+    otherFar <= near && near - otherFar <= POLICE_SANDWICH_GAP;
+  const others = buildings.filter((b) => b !== police);
+  if (policeFacesEast(police)) {
+    const north = others.some(
+      (b) =>
+        beside(police.oy, b.oy + b.h) &&
+        rangesOverlap(police.ox, police.ox + police.w, b.ox, b.ox + b.w, 3),
+    );
+    const south = others.some(
+      (b) =>
+        beside(b.oy, police.oy + police.h) &&
+        rangesOverlap(police.ox, police.ox + police.w, b.ox, b.ox + b.w, 3),
+    );
+    return north && south;
+  }
+  const west = others.some(
+    (b) =>
+      beside(police.ox, b.ox + b.w) &&
+      rangesOverlap(police.oy, police.oy + police.h, b.oy, b.oy + b.h, 3),
+  );
+  const east = others.some(
+    (b) =>
+      beside(b.ox, police.ox + police.w) &&
+      rangesOverlap(police.oy, police.oy + police.h, b.oy, b.oy + b.h, 3),
+  );
+  return west && east;
+}
 
 function gridBuildings(cx: number, cy: number): BuildingInfo[] {
   const layout = computeGridLayout(cx, cy, "city");
@@ -2725,8 +2900,16 @@ function gridBuildings(cx: number, cy: number): BuildingInfo[] {
   const buildings: BuildingInfo[] = [];
   const counts: Partial<Record<CityBuildingType, number>> = {};
 
-  const capLeft = (type: CityBuildingType): boolean =>
-    (counts[type] ?? 0) < CITY_BUILDING_SPECS[type].maxPerCity;
+  // Birchport turns the hospital-neighbor supermarket into a department
+  // store after this pass. Hold that slot out of the fill cap so the city
+  // still ends at maxPerCity, including that store.
+  const retailReserved = isPlayerSpawnHubCell(cx, cy) ? 1 : 0;
+
+  const capLeft = (type: CityBuildingType): boolean => {
+    const spec = CITY_BUILDING_SPECS[type];
+    const reserved = type === "large_retail" ? retailReserved : 0;
+    return (counts[type] ?? 0) < spec.maxPerCity - reserved;
+  };
 
   const overlapsPlaced = (bx: number, by: number, w: number, h: number, gap: number): boolean =>
     buildings.some(
@@ -2821,6 +3004,28 @@ function gridBuildings(cx: number, cy: number): BuildingInfo[] {
     return null;
   };
 
+  /** Flush the 7x7 station into the lot's street intersection. */
+  const tryPlacePoliceCorner = (lot: CityLot): BuildingInfo | null => {
+    if (lot.zone !== "downtown") return null;
+    if (!lot.eastRange || !lot.southRange) return null;
+    const spec = CITY_BUILDING_SPECS.police_station;
+    const w = spec.minW;
+    const h = spec.minH;
+    const bx = lot.lxEnd - w;
+    const by = lot.lyEnd - h;
+    if (bx < lot.lx || by < lot.ly) return null;
+    if (by < lot.eastRange[0] || by + h > lot.eastRange[1]) return null;
+    if (bx < lot.southRange[0] || bx + w > lot.southRange[1]) return null;
+    if (overlapsPlaced(bx, by, w, h, 1)) return null;
+    if (buildingFootprintBlockedByPlayerStructures(bx, by, w, h)) return null;
+    return makeBuilding(bx, by, w, h, rng, buildings, {
+      buildingType: "police_station",
+      exteriorLevels: spec.minLevels,
+      fillsLot: w >= lot.lxEnd - lot.lx && h >= lot.lyEnd - lot.ly,
+      entrance: { faces: ["SE", "SW"], centered: true, span: spec.doorSpan },
+    });
+  };
+
   const place = (bld: BuildingInfo, type: CityBuildingType): void => {
     buildings.push(bld);
     counts[type] = (counts[type] ?? 0) + 1;
@@ -2835,6 +3040,71 @@ function gridBuildings(cx: number, cy: number): BuildingInfo[] {
     shuffledLots[j] = tmp;
   }
 
+  /** Drop the station into a gap that already has a building on both sides. */
+  const tryPlacePoliceSandwich = (): BuildingInfo | null => {
+    const spec = CITY_BUILDING_SPECS.police_station;
+    const w = spec.minW;
+    const h = spec.minH;
+    const fitsBetween = (bx: number, by: number, face: "SE" | "SW"): boolean => {
+      if (overlapsPlaced(bx, by, w, h, 0)) return false;
+      if (buildingFootprintBlockedByPlayerStructures(bx, by, w, h)) return false;
+      const ghost = {
+        ox: bx,
+        oy: by,
+        w,
+        h,
+        entranceX: face === "SE" ? bx + w - 1 : bx,
+        entranceY: face === "SW" ? by + h - 1 : by,
+        buildingType: "police_station",
+      } as BuildingInfo;
+      return policeSandwiched(ghost, buildings);
+    };
+    const build = (bx: number, by: number, face: "SE" | "SW", lot: CityLot) =>
+      makeBuilding(bx, by, w, h, rng, buildings, {
+        buildingType: "police_station",
+        exteriorLevels: spec.minLevels,
+        fillsLot: w >= lot.lxEnd - lot.lx && h >= lot.lyEnd - lot.ly,
+        entrance: { faces: [face], centered: true, span: spec.doorSpan },
+      });
+    for (const lot of shuffledLots) {
+      if (lot.zone !== "downtown") continue;
+      if (lot.eastRange) {
+        const bx = lot.lxEnd - w;
+        if (bx >= lot.lx) {
+          for (let by = lot.eastRange[0]; by + h <= lot.eastRange[1]; by++) {
+            if (by < lot.ly || by + h > lot.lyEnd) continue;
+            if (fitsBetween(bx, by, "SE")) return build(bx, by, "SE", lot);
+          }
+        }
+      }
+      if (lot.southRange) {
+        const by = lot.lyEnd - h;
+        if (by >= lot.ly) {
+          for (let bx = lot.southRange[0]; bx + w <= lot.southRange[1]; bx++) {
+            if (bx < lot.lx || bx + w > lot.lxEnd) continue;
+            if (fitsBetween(bx, by, "SW")) return build(bx, by, "SW", lot);
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const seatPoliceStation = (): void => {
+    const index = buildings.findIndex((b) => b.buildingType === "police_station");
+    if (index < 0) return;
+    const current = buildings[index]!;
+    if (buildingOnLotCorner(current, lots) || policeSandwiched(current, buildings)) return;
+    buildings.splice(index, 1);
+    let next: BuildingInfo | null = null;
+    for (const lot of shuffledLots) {
+      next = tryPlacePoliceCorner(lot);
+      if (next) break;
+    }
+    if (!next) next = tryPlacePoliceSandwich();
+    buildings.push(next ?? current);
+  };
+
   // Civic anchors first (hospital / police), then the big-box types that eat
   // whole frontages, then the rest.
   const LANDMARK_ORDER: CityBuildingType[] = [
@@ -2845,6 +3115,19 @@ function gridBuildings(cx: number, cy: number): BuildingInfo[] {
   for (const type of LANDMARK_ORDER) {
     const spec = CITY_BUILDING_SPECS[type];
     if (!Number.isFinite(spec.maxPerCity)) continue;
+    // Claim a street corner before the block fills in. A later pass can still
+    // tuck the station between two buildings if every corner is taken.
+    if (type === "police_station") {
+      let corner: BuildingInfo | null = null;
+      for (const lot of shuffledLots) {
+        corner = tryPlacePoliceCorner(lot);
+        if (corner) break;
+      }
+      if (corner) {
+        place(corner, type);
+        continue;
+      }
+    }
     // Warehouses prefer the industrial wedge; fall back to any outskirts lot.
     const pools =
       type === "warehouse"
@@ -2916,10 +3199,13 @@ function gridBuildings(cx: number, cy: number): BuildingInfo[] {
   }
 
   // Birchport: swap the supermarket beside the hospital for large retail so
-  // the ward entrance isn't flanked by a Red Order market.
+  // the ward entrance isn't flanked by a Red Order market. One retail slot
+  // was held back above so this swap does not push the city over the cap.
   if (isPlayerSpawnHubCell(cx, cy)) {
     replaceBirchportHospitalNeighborSupermarket(buildings);
   }
+
+  seatPoliceStation();
 
   return buildings;
 }

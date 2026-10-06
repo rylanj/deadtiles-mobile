@@ -598,6 +598,33 @@ export type WorldRoomState = {
       ) => void,
     ): void;
   };
+  rabbits: {
+    get(id: string): {
+      x: number;
+      y: number;
+      facing: number;
+      anim: string;
+      animFrame: number;
+      health: number;
+      isDead: boolean;
+      looted?: boolean;
+    } | undefined;
+    forEach(
+      cb: (
+        rabbit: {
+          x: number;
+          y: number;
+          facing: number;
+          anim: string;
+          animFrame: number;
+          health: number;
+          isDead: boolean;
+          looted?: boolean;
+        },
+        id: string,
+      ) => void,
+    ): void;
+  };
   corpses: {
     get(id: string): PlayerCorpseSchema | undefined;
     forEach(cb: (corpse: PlayerCorpseSchema, id: string) => void): void;

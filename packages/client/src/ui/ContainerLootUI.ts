@@ -4,17 +4,25 @@ import {
   backpackOverflowWorsened,
   loadedBackpackStowBlocked,
   sealedBackpackStackCount,
+  ARMOR_SLOT_INDEX,
   BACKPACK_SLOT_INDEX,
   BACKPACK_STORAGE_START,
   BASE_INVENTORY_SLOTS,
   CLOTHING_SLOT_INDEX,
+  LEFT_HAND_SLOT_INDEX,
+  NECK_SLOT_INDEX,
+  RIGHT_HAND_SLOT_INDEX,
   POCKET_SLOT_COUNT,
   retiredPocketIndices,
   shownBackpackStorageCount,
   inventorySlotAccess,
+  isArmorSlot,
   isBackpackItem,
   isBackpackSlot,
   isBackpackStorageIndex,
+  isHandSlot,
+  isJewelrySlot,
+  isNeckSlot,
   moveInventorySlot,
   shownExtraPockets,
   CONTAINER_INVENTORY_SLOTS,
@@ -35,6 +43,7 @@ import {
   isWatchSlot,
   isMapSlot,
   itemFitsInSlot,
+  slotStackLimit,
   canSplitInventoryStackHalf,
   shiftSplitQuantity,
   maxStackForItem,
@@ -83,6 +92,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   watercooler: "Water Cooler",
   trashcan: "Trash Can",
   checkout: "Checkout",
+  retailcheckout1: "Checkout",
   supershelf1: "Shelf",
   supershelf2: "Shelf",
   superfridge1: "Fridge",
@@ -119,6 +129,8 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   guard: "Guard",
   coyote: "Coyote",
   bear: "Bear",
+  crow: "Crow",
+  rabbit: "Rabbit",
   storagebox: "Storage Box",
   storagebox2: "Storage Box 2",
 };
@@ -196,8 +208,9 @@ export class ContainerLootUI {
   private containerSlotsEl: HTMLElement;
   private playerSlotsEl: HTMLElement;
   private playerWeaponsEl: HTMLElement;
-  private playerRadioEl: HTMLElement;
+  private playerArmorEl: HTMLElement;
   private playerEquipmentEl: HTMLElement;
+  private playerJewelryEl: HTMLElement;
   private playerPocketsEl: HTMLElement;
   private playerBackpackSection: HTMLElement;
   private playerBackpackEl: HTMLElement;
@@ -249,7 +262,8 @@ export class ContainerLootUI {
     playerTitle.textContent = "Inventory";
     const playerHint = document.createElement("span");
     playerHint.className = "inventory-hint";
-    playerHint.textContent = "Weapons · Radio · Clothing · Backpack · Watch · Map · Pockets";
+    playerHint.textContent =
+      "Weapons · Armor · Clothing · Backpack · Watch · Radio · Neck · Hands · Map · Pockets";
     playerHeader.append(playerTitle, playerHint);
 
     const playerBody = document.createElement("div");
@@ -262,24 +276,24 @@ export class ContainerLootUI {
     const weaponsLabel = document.createElement("div");
     weaponsLabel.className = "inventory-section-label inventory-weapon-row-label";
     weaponsLabel.textContent = "Weapons";
-    const radioLabel = document.createElement("div");
-    radioLabel.className = "inventory-section-label inventory-radio-row-label";
-    radioLabel.textContent = "Radio";
-    weaponRowLabels.append(weaponsLabel, radioLabel);
+    const armorLabel = document.createElement("div");
+    armorLabel.className = "inventory-section-label inventory-radio-row-label";
+    armorLabel.textContent = "Armor";
+    weaponRowLabels.append(weaponsLabel, armorLabel);
     const weaponRow = document.createElement("div");
     weaponRow.className = "inventory-weapon-row";
     this.playerWeaponsEl = document.createElement("div");
     this.playerWeaponsEl.className = "inventory-grid inventory-grid--weapons";
-    this.playerRadioEl = document.createElement("div");
-    this.playerRadioEl.className = "inventory-grid inventory-grid--radio";
-    weaponRow.append(this.playerWeaponsEl, this.playerRadioEl);
+    this.playerArmorEl = document.createElement("div");
+    this.playerArmorEl.className = "inventory-grid inventory-grid--radio";
+    weaponRow.append(this.playerWeaponsEl, this.playerArmorEl);
     weaponsSection.append(weaponRowLabels, weaponRow);
 
     const equipmentSection = document.createElement("div");
     equipmentSection.className = "inventory-section";
     const equipmentLabels = document.createElement("div");
     equipmentLabels.className = "inventory-equipment-labels";
-    for (const text of ["Clothing", "Backpack", "Watch", "Map"]) {
+    for (const text of ["Clothing", "Backpack", "Watch", "Radio"]) {
       const lab = document.createElement("div");
       lab.className = "inventory-section-label";
       lab.textContent = text;
@@ -287,7 +301,22 @@ export class ContainerLootUI {
     }
     this.playerEquipmentEl = document.createElement("div");
     this.playerEquipmentEl.className = "inventory-grid inventory-grid--equipment";
-    equipmentSection.append(equipmentLabels, this.playerEquipmentEl);
+    const jewelryLabels = document.createElement("div");
+    jewelryLabels.className = "inventory-equipment-labels inventory-equipment-labels--next";
+    for (const text of ["Neck", "Left Hand", "Right Hand", "Map"]) {
+      const lab = document.createElement("div");
+      lab.className = "inventory-section-label";
+      lab.textContent = text;
+      jewelryLabels.appendChild(lab);
+    }
+    this.playerJewelryEl = document.createElement("div");
+    this.playerJewelryEl.className = "inventory-grid inventory-grid--equipment";
+    equipmentSection.append(
+      equipmentLabels,
+      this.playerEquipmentEl,
+      jewelryLabels,
+      this.playerJewelryEl,
+    );
 
     const pocketsSection = document.createElement("div");
     pocketsSection.className = "inventory-section";
@@ -450,8 +479,9 @@ export class ContainerLootUI {
       this.containerSlotsEl.appendChild(block);
     }
     this.playerWeaponsEl.replaceChildren();
-    this.playerRadioEl.replaceChildren();
+    this.playerArmorEl.replaceChildren();
     this.playerEquipmentEl.replaceChildren();
+    this.playerJewelryEl.replaceChildren();
     this.playerPocketsEl.replaceChildren();
     this.playerBackpackEl.replaceChildren();
 
@@ -460,11 +490,11 @@ export class ContainerLootUI {
         this.createCell("player", i, this.playerInventory[i] ?? null),
       );
     }
-    this.playerRadioEl.appendChild(
+    this.playerArmorEl.appendChild(
       this.createCell(
         "player",
-        RADIO_SLOT_INDEX,
-        this.playerInventory[RADIO_SLOT_INDEX] ?? null,
+        ARMOR_SLOT_INDEX,
+        this.playerInventory[ARMOR_SLOT_INDEX] ?? null,
       ),
     );
     this.playerEquipmentEl.append(
@@ -482,6 +512,28 @@ export class ContainerLootUI {
         "player",
         WATCH_SLOT_INDEX,
         this.playerInventory[WATCH_SLOT_INDEX] ?? null,
+      ),
+      this.createCell(
+        "player",
+        RADIO_SLOT_INDEX,
+        this.playerInventory[RADIO_SLOT_INDEX] ?? null,
+      ),
+    );
+    this.playerJewelryEl.append(
+      this.createCell(
+        "player",
+        NECK_SLOT_INDEX,
+        this.playerInventory[NECK_SLOT_INDEX] ?? null,
+      ),
+      this.createCell(
+        "player",
+        LEFT_HAND_SLOT_INDEX,
+        this.playerInventory[LEFT_HAND_SLOT_INDEX] ?? null,
+      ),
+      this.createCell(
+        "player",
+        RIGHT_HAND_SLOT_INDEX,
+        this.playerInventory[RIGHT_HAND_SLOT_INDEX] ?? null,
       ),
       this.createCell(
         "player",
@@ -539,6 +591,15 @@ export class ContainerLootUI {
     }
     if (source === "player" && isRadioSlot(index)) {
       cell.classList.add("inventory-cell--radio");
+    }
+    if (source === "player" && isArmorSlot(index)) {
+      cell.classList.add("inventory-cell--armor");
+    }
+    if (source === "player" && isNeckSlot(index)) {
+      cell.classList.add("inventory-cell--neck");
+    }
+    if (source === "player" && isHandSlot(index)) {
+      cell.classList.add("inventory-cell--hand");
     }
     if (source === "player" && isMapSlot(index)) {
       cell.classList.add("inventory-cell--map");
@@ -750,6 +811,10 @@ export class ContainerLootUI {
     if (fromSource === "container" && toSource === "player") {
       if (loadedBackpackStowBlocked(entry, toSlot)) return false;
       if (!itemFitsInSlot(itemId, toSlot, access)) return false;
+      if (isJewelrySlot(toSlot)) {
+        const dest = this.playerInventory[toSlot];
+        if (dest && (entry.quantity > 1 || dest.id === itemId)) return false;
+      }
       if (toSlot === BACKPACK_SLOT_INDEX && isBackpackItem(itemId)) return true;
       const next = this.playerInventory.map((slot) => (slot ? { ...slot } : null));
       next[toSlot] = { id: itemId, quantity: 1 };
@@ -845,7 +910,8 @@ export class ContainerLootUI {
         const slot = this.playerInventory[i];
         if (!slot || slot.id !== itemId) continue;
         if (!itemFitsInSlot(itemId, i, access)) continue;
-        if (slot.quantity < maxStack) return i;
+        const cap = slotStackLimit(itemId, i);
+        if (slot.quantity < cap) return i;
       }
     }
 

@@ -57,6 +57,10 @@ export type LootCrowMessage = {
   crowId: string;
 };
 
+export type LootRabbitMessage = {
+  rabbitId: string;
+};
+
 export type LootGuardMessage = {
   guardId: string;
 };
@@ -406,6 +410,7 @@ export type ClientMessage =
   | { type: "lootCoyoteStart"; payload: LootCoyoteMessage }
   | { type: "lootBearStart"; payload: LootBearMessage }
   | { type: "lootCrowStart"; payload: LootCrowMessage }
+  | { type: "lootRabbitStart"; payload: LootRabbitMessage }
   | { type: "lootGuardStart"; payload: LootGuardMessage }
   | { type: "lootPlayerStart"; payload: LootPlayerMessage }
   | { type: "equipWeapon"; payload: EquipWeaponMessage }
@@ -454,6 +459,7 @@ export type ClientMessage =
   | { type: "deconstructStart"; payload: DeconstructStartMessage }
   | { type: "deconstructClose" }
   | { type: "toggleDoor"; payload: ToggleDoorMessage }
+  | { type: "lockpickStart"; payload: ToggleDoorMessage }
   | { type: "setDoorCode"; payload: SetDoorCodeMessage }
   | { type: "enterDoorCode"; payload: EnterDoorCodeMessage }
   | { type: "enterBarracksBargate" }
@@ -588,6 +594,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     case "lootCrowStart": {
       if (!isIdString(p.crowId)) return null;
       return { type, payload: { crowId: p.crowId } };
+    }
+    case "lootRabbitStart": {
+      if (!isIdString(p.rabbitId)) return null;
+      return { type, payload: { rabbitId: p.rabbitId } };
     }
     case "lootGuardStart": {
       if (!isIdString(p.guardId)) return null;
@@ -785,7 +795,8 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (Math.abs(p.x) > 1e7 || Math.abs(p.y) > 1e7) return null;
       return { type, payload: { x: p.x, y: p.y } };
     }
-    case "toggleDoor": {
+    case "toggleDoor":
+    case "lockpickStart": {
       if (!isFiniteNum(p.x) || !isFiniteNum(p.y)) return null;
       if (!Number.isInteger(p.x) || !Number.isInteger(p.y)) return null;
       if (Math.abs(p.x) > 1e7 || Math.abs(p.y) > 1e7) return null;

@@ -1,4 +1,4 @@
-import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceSpan, getPlayerSpawnFootprint, houseChimneyInteriorTiles, seededRandom, type BuildingInfo } from "./worldgen.js";
+import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceRun, getPlayerSpawnFootprint, houseChimneyInteriorTiles, seededRandom, type BuildingInfo } from "./worldgen.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
 import {
   isAshenTraderWarehouse,
@@ -66,10 +66,11 @@ export type InteriorExit = {
 export function interiorExitForBuilding(bld: BuildingInfo): InteriorExit {
   const iW = bld.w * 2;
   const iH = bld.h * 2;
-  const lx = bld.entranceX - bld.ox;
-  const ly = bld.entranceY - bld.oy;
-  const span = buildingEntranceSpan(bld);
-  if (buildingEntranceFace(bld) === "SE") {
+  const run = buildingEntranceRun(bld);
+  const lx = run.x - bld.ox;
+  const ly = run.y - bld.oy;
+  const span = run.span;
+  if (run.face === "SE") {
     const alongMin = Math.max(0, ly * 2);
     const alongMax = Math.min(iH - 1, (ly + span) * 2 - 1);
     const iy = Math.max(alongMin, Math.min(alongMax, ly * 2 + 1));
@@ -246,6 +247,7 @@ export const FURNITURE_TYPES = [
   "retailshelf3",
   "retailcase1",
   "retailcase2",
+  "retailcheckout1",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -331,6 +333,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   retailshelf3: "Shelf",
   retailcase1: "Jewelry Case",
   retailcase2: "Watch Case",
+  retailcheckout1: "Checkout",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -565,20 +568,29 @@ export function furnitureFootprint(
         : furnitureFacing(objectType);
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
-  // RetailShelf1-3: aisle gondolas, same span as SuperShelf. SE 1x3, SW 3x1.
-  // RetailCase1/2: glass counters, same span. SE 1x3, SW 3x1.
+  // RetailShelf1-3: square aisle gondolas. Same span either facing.
   if (
     objectType === "retailshelf1" ||
     objectType === "retailshelf2" ||
-    objectType === "retailshelf3" ||
-    objectType === "retailcase1" ||
-    objectType === "retailcase2"
+    objectType === "retailshelf3"
   ) {
+    return { w: 2, h: 2 };
+  }
+  // RetailCheckout1: department-store register. SE 1x3, SW 3x1.
+  if (objectType === "retailcheckout1") {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing("retailcheckout1");
+    return f === "SE" ? { w: 1, h: 3 } : { w: 3, h: 1 };
+  }
+  // RetailCase1/2: glass counters. SE 1x2, SW 2x1.
+  if (objectType === "retailcase1" || objectType === "retailcase2") {
     const f =
       facing === "SE" || facing === "SW"
         ? facing
         : furnitureFacing(objectType);
-    return f === "SE" ? { w: 1, h: 3 } : { w: 3, h: 1 };
+    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
   // Stairs1 — 2×3, flush to a wall on the long side.
   // SE runs along X (3×2, north edge on the wall). SW runs along Y (2×3, west edge on the wall).
@@ -677,6 +689,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   retailshelf3: "SE",
   retailcase1: "SE",
   retailcase2: "SE",
+  retailcheckout1: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -828,6 +841,24 @@ export function isSupplyFridge(objectType: string): boolean {
   return SUPPLY_FRIDGE_TYPES.has(objectType);
 }
 
+/** Clothing racks a department-store scout can count. */
+const CLOTHING_RACK_TYPES = new Set([
+  "clothingrack1",
+  "clothingrack2",
+  "clothingrack3",
+]);
+
+export function isClothingRack(objectType: string): boolean {
+  return CLOTHING_RACK_TYPES.has(objectType);
+}
+
+/** Desk, cabinet, and bookshelf in a department-store manager's office. */
+const RETAIL_OFFICE_STASH_TYPES = new Set(["bookshelf", "cabinet", "desk3"]);
+
+export function isRetailOfficeStash(objectType: string): boolean {
+  return RETAIL_OFFICE_STASH_TYPES.has(objectType);
+}
+
 export function searchableFootprint(obj: {
   kind: string;
   objectType?: string;
@@ -878,12 +909,7 @@ export function furnitureFrontApproachTiles(obj: {
   // SuperShelf1/2: loot tile is only the middle front neighbour.
   if (
     obj.objectType === "supershelf1" ||
-    obj.objectType === "supershelf2" ||
-    obj.objectType === "retailshelf1" ||
-    obj.objectType === "retailshelf2" ||
-    obj.objectType === "retailshelf3" ||
-    obj.objectType === "retailcase1" ||
-    obj.objectType === "retailcase2"
+    obj.objectType === "supershelf2"
   ) {
     const mx = obj.x + Math.floor((w - 1) / 2);
     const my = obj.y + Math.floor((h - 1) / 2);
@@ -915,6 +941,114 @@ export function furnitureFrontApproachTiles(obj: {
     }
   }
   return out;
+}
+
+/**
+ * Tiles you can walk to from the building entrance. Room doors are gaps in
+ * `walls`, so this treats them as open: the player can open a closed door.
+ * Diagonal steps need both corners clear, so 4-connected reachability matches
+ * pathfinding.
+ */
+function tilesReachableFromEntrance(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  walls: readonly InteriorWallTile[] | undefined,
+  furnitures: readonly {
+    objectType?: string;
+    x: number;
+    y: number;
+    facing?: string;
+  }[],
+): Set<string> {
+  const wallSet = new Set<string>();
+  if (walls) {
+    for (const w of walls) wallSet.add(`${w.x},${w.y}`);
+  }
+  const blocked = new Set<string>();
+  for (const f of furnitures) {
+    if (f.objectType === "groundbackpack") continue;
+    const { w, h } = furnitureFootprint(f.objectType ?? "", f.facing);
+    for (let ty = f.y; ty < f.y + h; ty++) {
+      for (let tx = f.x; tx < f.x + w; tx++) blocked.add(`${tx},${ty}`);
+    }
+  }
+  const reachable = new Set<string>();
+  const queue: { x: number; y: number }[] = [];
+  const seed = (tx: number, ty: number) => {
+    if (tx < 0 || ty < 0 || tx >= iW || ty >= iH) return;
+    const key = `${tx},${ty}`;
+    if (reachable.has(key) || wallSet.has(key) || blocked.has(key)) return;
+    reachable.add(key);
+    queue.push({ x: tx, y: ty });
+  };
+  if (exit.face === "SE") {
+    for (let y = exit.alongMin; y <= exit.alongMax; y++) seed(exit.insideX, y);
+  } else {
+    for (let x = exit.alongMin; x <= exit.alongMax; x++) seed(x, exit.insideY);
+  }
+  seed(exit.insideX, exit.insideY);
+  for (let i = 0; i < queue.length; i++) {
+    const cur = queue[i]!;
+    seed(cur.x + 1, cur.y);
+    seed(cur.x - 1, cur.y);
+    seed(cur.x, cur.y + 1);
+    seed(cur.x, cur.y - 1);
+  }
+  return reachable;
+}
+
+function furnitureHasReachableApproach(
+  obj: { objectType?: string; x: number; y: number; facing?: string },
+  reachable: Set<string>,
+): boolean {
+  return furnitureApproachTiles({
+    kind: "furniture",
+    objectType: obj.objectType,
+    x: obj.x,
+    y: obj.y,
+    facing: obj.facing,
+  }).some((t) => reachable.has(`${t.x},${t.y}`));
+}
+
+/**
+ * A floor suitcase must not be the tile that cuts the entrance off from a
+ * piece of furniture. Furniture that was already unreachable stays that way.
+ * The suitcase's own search tile has to stay reachable too.
+ */
+function suitcasePreservesFurnitureAccess(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  walls: readonly InteriorWallTile[] | undefined,
+  furnitures: readonly SearchableObject[],
+  x: number,
+  y: number,
+  facing: FurnitureFacing,
+): boolean {
+  const exit = interiorExitForBuildingAt(bx, by);
+  const before = tilesReachableFromEntrance(iW, iH, exit, walls, furnitures);
+  const suitcase: SearchableObject = {
+    id: "",
+    kind: "furniture",
+    objectType: "suitcase",
+    x,
+    y,
+    facing,
+    searched: false,
+    buildingX: bx,
+    buildingY: by,
+  };
+  const after = tilesReachableFromEntrance(iW, iH, exit, walls, [
+    ...furnitures,
+    suitcase,
+  ]);
+  for (const f of furnitures) {
+    if (!furnitureHasReachableApproach(f, before)) continue;
+    if (!furnitureHasReachableApproach(f, after)) return false;
+  }
+  return furnitureHasReachableApproach(suitcase, after);
 }
 
 /**
@@ -1150,6 +1284,7 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   retailshelf3: 0,
   retailcase1: 0,
   retailcase2: 0,
+  retailcheckout1: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -1224,7 +1359,7 @@ export function isOfficeInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "office";
 }
 
-/** Department-store interiors: clothing, housewares, a small furniture display. */
+/** Department-store interiors: sales floor plus a corner manager's office. */
 export function isLargeRetailInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "large_retail";
 }
@@ -6252,6 +6387,14 @@ export function roomAtInteriorDoor(
   ) {
     return manager;
   }
+  const retailOffice = retailManagerRoomForBuilding(bx, by);
+  if (
+    retailOffice &&
+    tx === retailOffice.entranceX &&
+    ty === retailOffice.entranceY
+  ) {
+    return retailOffice;
+  }
   return null;
 }
 
@@ -8921,11 +9064,348 @@ const RETAIL_SHELVES = ["retailshelf1", "retailshelf2", "retailshelf3"] as const
 const RETAIL_MANNEQUINS = ["mannequin1", "mannequin2", "mannequin3"] as const;
 
 /**
+ * Home-furniture showroom, in tiles from the zone's north-west corner.
+ * Slots are authored for a 6×6 zone. Bed is SE only (west side of its
+ * footprint). Dresser is SW only.
+ */
+const RETAIL_SHOW_MIN = 6;
+const RETAIL_SHOW_NW: { type: FurnitureType; lx: number; ly: number; face: FurnitureFacing }[] = [
+  { type: "bookshelf", lx: 0, ly: 0, face: "SE" },
+  { type: "dresser", lx: 2, ly: 0, face: "SW" },
+  { type: "sofa", lx: 3, ly: 0, face: "SW" },
+  { type: "armchair", lx: 5, ly: 0, face: "SW" },
+  { type: "nightstand", lx: 0, ly: 2, face: "SE" },
+  { type: "bed", lx: 0, ly: 3, face: "SE" },
+  { type: "nightstand", lx: 0, ly: 4, face: "SE" },
+  { type: "bookshelf", lx: 0, ly: 5, face: "SE" },
+  { type: "armchair", lx: 5, ly: 5, face: "SW" },
+];
+/** South-west corner: gallery along the west wall, entrance from the north. */
+const RETAIL_SHOW_SW: { type: FurnitureType; lx: number; ly: number; face: FurnitureFacing }[] = [
+  { type: "bookshelf", lx: 0, ly: 0, face: "SE" },
+  { type: "nightstand", lx: 0, ly: 1, face: "SE" },
+  { type: "bed", lx: 0, ly: 2, face: "SE" },
+  { type: "nightstand", lx: 0, ly: 3, face: "SE" },
+  { type: "sofa", lx: 0, ly: 4, face: "SE" },
+  { type: "armchair", lx: 2, ly: 4, face: "SE" },
+  { type: "dresser", lx: 4, ly: 4, face: "SW" },
+  { type: "armchair", lx: 5, ly: 4, face: "SW" },
+];
+/** North-east corner: living set on the north wall, bed toward the east wall. */
+const RETAIL_SHOW_NE: { type: FurnitureType; lx: number; ly: number; face: FurnitureFacing }[] = [
+  { type: "dresser", lx: 1, ly: 0, face: "SW" },
+  { type: "sofa", lx: 3, ly: 0, face: "SW" },
+  { type: "bookshelf", lx: 5, ly: 0, face: "SW" },
+  { type: "nightstand", lx: 3, ly: 2, face: "SE" },
+  { type: "bed", lx: 3, ly: 3, face: "SE" },
+  { type: "nightstand", lx: 3, ly: 4, face: "SE" },
+  { type: "armchair", lx: 1, ly: 3, face: "SE" },
+  { type: "armchair", lx: 3, ly: 5, face: "SW" },
+];
+
+/** Walkable manager's office: 5 tiles along the back wall, 4 tiles deep. */
+const RETAIL_OFFICE_ALONG = 5;
+const RETAIL_OFFICE_DEEP = 4;
+
+/**
+ * Department-store manager's office. Two sides are the building shell.
+ * `facing` is the door wall: SE opens east, SW opens south.
+ */
+export type RetailManagerRoom = {
+  facing: "SE" | "SW";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  entranceX: number;
+  entranceY: number;
+  wallTiles: InteriorWallTile[];
+};
+
+export type RetailShowroomRect = {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  kind: "nw" | "sw" | "ne";
+};
+
+type RetailOfficeCorner = "nw" | "ne" | "sw";
+
+/**
+ * Furniture showroom in the back corner that has room. NW is the two-wall
+ * corner. If the aisle cuts that pocket, the other back corner is used.
+ */
+function layoutRetailShowroom(
+  doorEast: boolean,
+  iW: number,
+  iH: number,
+  aisle0: number,
+  aisle1: number,
+): RetailShowroomRect | null {
+  const SHOW_GAP = 1;
+  const fitSpan = (usable: number) =>
+    usable >= RETAIL_SHOW_MIN ? RETAIL_SHOW_MIN : 0;
+  if (doorEast) {
+    const nwSpan = fitSpan(aisle0 - SHOW_GAP);
+    const swSpan = fitSpan(iH - (aisle1 + 1 + SHOW_GAP));
+    if (nwSpan >= RETAIL_SHOW_MIN && nwSpan >= swSpan) {
+      return { x0: 0, y0: 0, x1: nwSpan - 1, y1: nwSpan - 1, kind: "nw" };
+    }
+    if (swSpan >= RETAIL_SHOW_MIN) {
+      const y1 = iH - 1;
+      return { x0: 0, y0: y1 - (swSpan - 1), x1: swSpan - 1, y1, kind: "sw" };
+    }
+    return null;
+  }
+  const nwSpan = fitSpan(aisle0 - SHOW_GAP);
+  const neSpan = fitSpan(iW - (aisle1 + 1 + SHOW_GAP));
+  if (nwSpan >= RETAIL_SHOW_MIN && nwSpan >= neSpan) {
+    return { x0: 0, y0: 0, x1: nwSpan - 1, y1: nwSpan - 1, kind: "nw" };
+  }
+  if (neSpan >= RETAIL_SHOW_MIN) {
+    const x1 = iW - 1;
+    return { x0: x1 - (neSpan - 1), y0: 0, x1, y1: neSpan - 1, kind: "ne" };
+  }
+  return null;
+}
+
+/** Carpeted home-furniture corner. Same rectangle the sales floor reserves. */
+export function retailShowroomBounds(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+): RetailShowroomRect | null {
+  return layoutRetailShowroom(
+    exit.face === "SE",
+    iW,
+    iH,
+    exit.alongMin,
+    exit.alongMax,
+  );
+}
+
+/**
+ * Back corner first, away from the showroom. A side corner is the fallback
+ * when that back corner sits on the entrance aisle.
+ */
+function retailOfficeCorners(
+  doorEast: boolean,
+  showroomKind: "nw" | "sw" | "ne" | null,
+): RetailOfficeCorner[] {
+  const ordered: RetailOfficeCorner[] = doorEast
+    ? showroomKind === "sw"
+      ? ["nw", "ne"]
+      : showroomKind === "nw"
+        ? ["sw", "ne"]
+        : ["sw", "nw", "ne"]
+    : showroomKind === "ne"
+      ? ["nw", "sw"]
+      : showroomKind === "nw"
+        ? ["ne", "sw"]
+        : ["ne", "nw", "sw"];
+  return ordered.filter((corner) => corner !== showroomKind);
+}
+
+/**
+ * Corner shell. West-wall rooms (door east) are 4 deep and 5 along.
+ * North-wall rooms (door south) are 5 along and 4 deep. The door is the
+ * middle tile of the wall that faces the sales floor.
+ */
+function retailOfficeShell(
+  iW: number,
+  iH: number,
+  doorEast: boolean,
+  corner: RetailOfficeCorner,
+): RetailManagerRoom | null {
+  const along = RETAIL_OFFICE_ALONG;
+  const deep = RETAIL_OFFICE_DEEP;
+  const wallSet = new Set<string>();
+  const add = (x: number, y: number) => {
+    wallSet.add(`${x},${y}`);
+  };
+  const onWest = corner === "sw" || (corner === "nw" && doorEast);
+  if (onWest) {
+    const x0 = 0;
+    const x1 = deep - 1;
+    const doorX = deep;
+    if (doorX + 1 >= iW) return null;
+    const y0 = corner === "nw" ? 0 : iH - along;
+    const y1 = y0 + along - 1;
+    if (y0 < 0 || y1 >= iH) return null;
+    const capY = corner === "nw" ? y1 + 1 : y0 - 1;
+    if (capY < 0 || capY >= iH) return null;
+    const doorY = y0 + Math.floor(along / 2);
+    for (let y = y0; y <= y1; y++) {
+      if (y === doorY) continue;
+      add(doorX, y);
+    }
+    for (let x = x0; x <= doorX; x++) add(x, capY);
+    return {
+      facing: "SE",
+      x0,
+      y0,
+      x1,
+      y1,
+      entranceX: doorX,
+      entranceY: doorY,
+      wallTiles: meetingRoomWalls(wallSet),
+    };
+  }
+
+  const y0 = 0;
+  const y1 = deep - 1;
+  const doorY = deep;
+  if (doorY + 1 >= iH) return null;
+  const x0 = corner === "ne" ? iW - along : 0;
+  const x1 = x0 + along - 1;
+  if (x0 < 0 || x1 >= iW) return null;
+  const capX = corner === "ne" ? x0 - 1 : x1 + 1;
+  if (capX < 0 || capX >= iW) return null;
+  const doorX = x0 + Math.floor(along / 2);
+  for (let x = x0; x <= x1; x++) {
+    if (x === doorX) continue;
+    add(x, doorY);
+  }
+  for (let y = y0; y <= doorY; y++) add(capX, y);
+  return {
+    facing: "SW",
+    x0,
+    y0,
+    x1,
+    y1,
+    entranceX: doorX,
+    entranceY: doorY,
+    wallTiles: meetingRoomWalls(wallSet),
+  };
+}
+
+function retailOfficeOutside(room: RetailManagerRoom): { x: number; y: number } {
+  return room.facing === "SE"
+    ? { x: room.entranceX + 1, y: room.entranceY }
+    : { x: room.entranceX, y: room.entranceY + 1 };
+}
+
+function retailOfficeHitsAisle(
+  room: RetailManagerRoom,
+  doorEast: boolean,
+  aisle0: number,
+  aisle1: number,
+): boolean {
+  const onAisle = (x: number, y: number) =>
+    doorEast ? y >= aisle0 && y <= aisle1 : x >= aisle0 && x <= aisle1;
+  for (let y = room.y0; y <= room.y1; y++) {
+    for (let x = room.x0; x <= room.x1; x++) {
+      if (onAisle(x, y)) return true;
+    }
+  }
+  for (const w of room.wallTiles) {
+    if (onAisle(w.x, w.y)) return true;
+  }
+  if (onAisle(room.entranceX, room.entranceY)) return true;
+  const outside = retailOfficeOutside(room);
+  return onAisle(outside.x, outside.y);
+}
+
+function retailOfficeHitsShowroom(
+  room: RetailManagerRoom,
+  showroom: RetailShowroomRect | null,
+): boolean {
+  if (!showroom) return false;
+  const hit = (x: number, y: number) =>
+    x >= showroom.x0 && x <= showroom.x1 && y >= showroom.y0 && y <= showroom.y1;
+  for (let y = room.y0; y <= room.y1; y++) {
+    for (let x = room.x0; x <= room.x1; x++) {
+      if (hit(x, y)) return true;
+    }
+  }
+  for (const w of room.wallTiles) {
+    if (hit(w.x, w.y)) return true;
+  }
+  if (hit(room.entranceX, room.entranceY)) return true;
+  const outside = retailOfficeOutside(room);
+  return hit(outside.x, outside.y);
+}
+
+function buildRetailManagerRoom(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  showroom: RetailShowroomRect | null,
+): RetailManagerRoom | null {
+  const doorEast = exit.face === "SE";
+  for (const corner of retailOfficeCorners(doorEast, showroom?.kind ?? null)) {
+    const room = retailOfficeShell(iW, iH, doorEast, corner);
+    if (!room) continue;
+    if (retailOfficeHitsAisle(room, doorEast, exit.alongMin, exit.alongMax)) continue;
+    if (retailOfficeHitsShowroom(room, showroom)) continue;
+    return room;
+  }
+  return null;
+}
+
+export function retailManagerRoomForBuilding(
+  bx: number,
+  by: number,
+): RetailManagerRoom | null {
+  if (!isLargeRetailInterior(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  const exit = interiorExitForBuildingAt(bx, by);
+  const showroom = layoutRetailShowroom(
+    exit.face === "SE",
+    iW,
+    iH,
+    exit.alongMin,
+    exit.alongMax,
+  );
+  return buildRetailManagerRoom(iW, iH, exit, showroom);
+}
+
+export function retailManagerRoomAtTile(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): RetailManagerRoom | null {
+  const room = retailManagerRoomForBuilding(bx, by);
+  if (!room) return null;
+  if (tx === room.entranceX && ty === room.entranceY) return room;
+  if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+    return room;
+  }
+  return null;
+}
+
+/** True when this piece sits in the department store's manager's office and can hide a page. */
+export function furnitureInRetailManagerOffice(
+  bx: number,
+  by: number,
+  obj: { x: number; y: number; objectType?: string; facing?: string },
+): boolean {
+  if (!obj.objectType || !isRetailOfficeStash(obj.objectType)) return false;
+  const room = retailManagerRoomForBuilding(bx, by);
+  if (!room) return false;
+  const { w, h } = furnitureFootprint(obj.objectType, obj.facing);
+  for (let ty = obj.y; ty < obj.y + h; ty++) {
+    for (let tx = obj.x; tx < obj.x + w; tx++) {
+      if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Department store. Gondolas run away from the door, with a clear aisle on
  * the door span. Housewares sit toward the back wall, clothing toward the
  * door. Checkouts flank the aisle. A jewelry case and a watch case sit on
- * the aisle just inside the registers. The back wall is a small furniture
- * display, with mannequins in the cross aisle and a few carts in the walks.
+ * the aisle just inside the registers. Home furniture is a showroom in a
+ * back corner. A manager's office with a 5 by 4 floor sits in another
+ * corner, door opening onto the sales floor. Coolers and a vending machine
+ * sit on outside walls outside those corners. A mannequin family stands with
+ * the clothing racks, two adults side by side and the child in front, with
+ * a few carts in the walks.
  */
 function placeLargeRetail(
   bx: number,
@@ -8936,10 +9416,13 @@ function placeLargeRetail(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
-): SearchableObject[] {
+): {
+  furnitures: SearchableObject[];
+  walls: InteriorWallTile[];
+  doors: { x: number; y: number }[];
+} {
   const doorEast = exit.face === "SE";
   const aisleFace: FurnitureFacing = doorEast ? "SW" : "SE";
-  const wallFace: FurnitureFacing = doorEast ? "SE" : "SW";
   const aisle0 = exit.alongMin;
   const aisle1 = exit.alongMax;
   const runN = doorEast ? iW : iH;
@@ -9066,58 +9549,215 @@ function placeLargeRetail(
     return true;
   };
 
-  // Back wall: coolers, a sofa, and a chair. Bed stays on the west wall
-  // because Bed1 only has SE art.
-  let cursor = doorEast ? 1 : 3;
-  const placeWallPiece = (type: FurnitureType) => {
-    const { w, h } = furnitureFootprint(type, wallFace);
-    const rowSize = doorEast ? h : w;
-    let steps = 0;
-    while (cursor + rowSize < rowN - 1 && steps < rowN) {
-      steps++;
-      const pos = toXY(0, cursor);
-      if (canPlace(type, pos.x, pos.y, wallFace)) {
-        push(type, pos.x, pos.y, wallFace);
-        cursor += rowSize + 1;
+  const showroom = layoutRetailShowroom(doorEast, iW, iH, aisle0, aisle1);
+  const office = buildRetailManagerRoom(iW, iH, exit, showroom);
+  let officeBlock: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  if (office) {
+    for (const w of office.wallTiles) occupied.add(`${w.x},${w.y}`);
+    occupied.add(`${office.entranceX},${office.entranceY}`);
+    const outside = retailOfficeOutside(office);
+    if (outside.x >= 0 && outside.y >= 0 && outside.x < iW && outside.y < iH) {
+      occupied.add(`${outside.x},${outside.y}`);
+    }
+    const inside =
+      office.facing === "SE"
+        ? { x: office.entranceX - 1, y: office.entranceY }
+        : { x: office.entranceX, y: office.entranceY - 1 };
+    occupied.add(`${inside.x},${inside.y}`);
+
+    const tryPut = (
+      type: FurnitureType,
+      x: number,
+      y: number,
+      face: FurnitureFacing,
+    ) => {
+      if (!canPlace(type, x, y, face)) return false;
+      push(type, x, y, face);
+      return true;
+    };
+    // Chair sits on a desk-front tile and faces the desk. The tile behind
+    // the chair stays empty so the chair can be searched.
+    const placeBossChair = (x: number, y: number, facing: FurnitureFacing) => {
+      const key = `${x},${y}`;
+      occupied.delete(key);
+      if (x < 0 || y < 0 || x >= iW || y >= iH || occupied.has(key)) {
+        occupied.add(key);
         return;
       }
-      cursor += 1;
-    }
-  };
-  placeWallPiece("superfridge1");
-  placeWallPiece("superfridge1");
-  placeWallPiece("sofa");
-  placeWallPiece("armchair");
-  if (doorEast) {
-    placeWallPiece("bed");
-    for (const x of [3, 5, 7, 9]) {
-      if (canPlace("dresser", x, 0, "SW")) {
-        push("dresser", x, 0, "SW");
-        break;
+      if (blocksEntry(x, y) || onAisle(x, y)) {
+        occupied.add(key);
+        return;
       }
+      const { dx, dy } = ISO_FACING_TILE_DELTA[facing];
+      const behindX = x - dx;
+      const behindY = y - dy;
+      const behindKey = `${behindX},${behindY}`;
+      if (
+        behindX < 0 ||
+        behindY < 0 ||
+        behindX >= iW ||
+        behindY >= iH ||
+        occupied.has(behindKey) ||
+        blocksEntry(behindX, behindY)
+      ) {
+        occupied.add(key);
+        return;
+      }
+      push("officechair", x, y, facing, false);
+      occupied.add(behindKey);
+    };
+
+    if (office.facing === "SE") {
+      tryPut("bookshelf", office.x0, office.y0, "SE");
+      tryPut("cabinet", office.x0, office.y0 + 3, "SE");
+      tryPut("watercooler", office.x0, office.y1, "SE");
+      if (tryPut("desk3", office.x0, office.y0 + 1, "SE")) {
+        placeBossChair(office.x0 + 1, office.y0 + 1, "NW");
+      }
+      tryPut("trashcan", office.x0 + 2, office.y1, "SE");
+    } else {
+      tryPut("bookshelf", office.x0, office.y0, "SW");
+      tryPut("cabinet", office.x0 + 3, office.y0, "SW");
+      tryPut("watercooler", office.x1, office.y0, "SW");
+      if (tryPut("desk3", office.x0 + 1, office.y0, "SW")) {
+        placeBossChair(office.x0 + 1, office.y0 + 1, "NE");
+      }
+      tryPut("trashcan", office.x1, office.y0 + 2, "SW");
     }
-  } else {
-    placeWallPiece("dresser");
-    for (let y = 2; y < iH - 2; y++) {
-      if (!canPlace("bed", 0, y, "SE")) continue;
-      push("bed", 0, y, "SE");
-      break;
+
+    for (let y = office.y0; y <= office.y1; y++) {
+      for (let x = office.x0; x <= office.x1; x++) occupied.add(`${x},${y}`);
+    }
+    let bx0 = office.x0;
+    let by0 = office.y0;
+    let bx1 = office.x1;
+    let by1 = office.y1;
+    const grow = (x: number, y: number) => {
+      bx0 = Math.min(bx0, x);
+      by0 = Math.min(by0, y);
+      bx1 = Math.max(bx1, x);
+      by1 = Math.max(by1, y);
+    };
+    for (const w of office.wallTiles) grow(w.x, w.y);
+    grow(office.entranceX, office.entranceY);
+    grow(outside.x, outside.y);
+    officeBlock = { x0: bx0, y0: by0, x1: bx1, y1: by1 };
+  }
+
+  if (showroom) {
+    const spanX = showroom.x1 - showroom.x0 + 1;
+    const spanY = showroom.y1 - showroom.y0 + 1;
+    const lxShift = showroom.kind === "ne" ? spanX - RETAIL_SHOW_MIN : 0;
+    const lyShift = showroom.kind === "sw" ? spanY - RETAIL_SHOW_MIN : 0;
+    const slots =
+      showroom.kind === "ne"
+        ? RETAIL_SHOW_NE
+        : showroom.kind === "sw"
+          ? RETAIL_SHOW_SW
+          : RETAIL_SHOW_NW;
+    for (const slot of slots) {
+      const lx = slot.lx + lxShift;
+      const ly = slot.ly + lyShift;
+      const { w, h } = furnitureFootprint(slot.type, slot.face);
+      if (lx < 0 || ly < 0 || lx + w > spanX || ly + h > spanY) continue;
+      const x = showroom.x0 + lx;
+      const y = showroom.y0 + ly;
+      if (!canPlace(slot.type, x, y, slot.face)) continue;
+      push(slot.type, x, y, slot.face);
+    }
+    for (let y = showroom.y0; y <= showroom.y1; y++) {
+      for (let x = showroom.x0; x <= showroom.x1; x++) occupied.add(`${x},${y}`);
     }
   }
 
-  const { w: cw, h: ch } = furnitureFootprint("checkout", aisleFace);
+  // Cooler bank on the back wall, centered on the stretch farthest from
+  // the showroom. VendingMachine1 only has SE/SW art, so it sits on the
+  // other outside wall, toward the door.
+  const distToShowroom = (x: number, y: number) => {
+    if (!showroom) return 0;
+    const cx = Math.max(showroom.x0, Math.min(x, showroom.x1));
+    const cy = Math.max(showroom.y0, Math.min(y, showroom.y1));
+    return Math.hypot(x - cx, y - cy);
+  };
+  const placeFridgePair = (
+    face: FurnitureFacing,
+    coords: (i: number) => { x: number; y: number },
+    length: number,
+  ) => {
+    const step = 2;
+    const valid: number[] = [];
+    for (let i = 0; i + step * 2 <= length; i++) {
+      const a = coords(i);
+      const b = coords(i + step);
+      if (!canPlace("superfridge1", a.x, a.y, face)) continue;
+      if (!canPlace("superfridge1", b.x, b.y, face)) continue;
+      valid.push(i);
+    }
+    const groups: number[][] = [];
+    for (const i of valid) {
+      const g = groups[groups.length - 1];
+      if (g && i === g[g.length - 1]! + 1) g.push(i);
+      else groups.push([i]);
+    }
+    let best: number[] | null = null;
+    let bestDist = -1;
+    for (const g of groups) {
+      const mid = g[Math.floor(g.length / 2)]!;
+      const p = coords(mid);
+      const dist = distToShowroom(p.x, p.y);
+      if (!best || dist > bestDist + 0.01 || (Math.abs(dist - bestDist) <= 0.01 && g.length > best.length)) {
+        best = g;
+        bestDist = dist;
+      }
+    }
+    if (!best) return;
+    const i = best[Math.floor(best.length / 2)]!;
+    const a = coords(i);
+    const b = coords(i + step);
+    push("superfridge1", a.x, a.y, face);
+    push("superfridge1", b.x, b.y, face);
+  };
+  if (doorEast) placeFridgePair("SE", (y) => ({ x: 0, y }), iH);
+  else placeFridgePair("SW", (x) => ({ x, y: 0 }), iW);
+
+  const nearFridge = (x: number, y: number) => {
+    for (const f of furnitures) {
+      if (f.objectType !== "superfridge1") continue;
+      const fp = furnitureFootprint("superfridge1", f.facing);
+      if (x >= f.x - 2 && x < f.x + fp.w + 2 && y >= f.y - 2 && y < f.y + fp.h + 2) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const tryVending = (x: number, y: number, face: FurnitureFacing) => {
+    if (nearFridge(x, y)) return false;
+    if (!canPlace("vendingmachine", x, y, face)) return false;
+    push("vendingmachine", x, y, face);
+    return true;
+  };
+  if (doorEast) {
+    let placedVend = false;
+    for (let x = iW - 2; x >= 1 && !placedVend; x--) placedVend = tryVending(x, 0, "SW");
+    for (let y = iH - 2; y >= 1 && !placedVend; y--) placedVend = tryVending(0, y, "SE");
+  } else {
+    let placedVend = false;
+    for (let y = iH - 2; y >= 1 && !placedVend; y--) placedVend = tryVending(0, y, "SE");
+    for (let x = iW - 2; x >= 1 && !placedVend; x--) placedVend = tryVending(x, 0, "SW");
+  }
+
+  const { w: cw, h: ch } = furnitureFootprint("retailcheckout1", aisleFace);
   const runSize = doorEast ? cw : ch;
   const rowSize = doorEast ? ch : cw;
   const doorRun = doorEast ? exit.insideX : exit.insideY;
   const checkoutRun = doorRun - 1 - runSize;
-  placeAt("checkout", checkoutRun, aisle0 - rowSize, aisleFace);
-  placeAt("checkout", checkoutRun, aisle1 + 1, aisleFace);
-  // Bins and a vending machine just behind the registers, before gondolas claim that run.
+  placeAt("retailcheckout1", checkoutRun, aisle0 - rowSize, aisleFace);
+  placeAt("retailcheckout1", checkoutRun, aisle1 + 1, aisleFace);
+  // Bins just behind the registers, before gondolas claim that run.
   const behind = checkoutRun - 1;
   if (behind >= runStart) {
     placeAt("trashcan", behind, aisle0 - rowSize, aisleFace);
     placeAt("trashcan", behind, aisle1 + rowSize, aisleFace);
-    placeAt("vendingmachine", behind, aisle0 - rowSize - 1, wallFace);
   }
 
   // Jewelry then watches, glass toward the aisle, just inside the registers.
@@ -9143,6 +9783,12 @@ function placeLargeRetail(
     gap0 = runStart + Math.floor(runSpan / 2) - 1;
     gap1 = gap0 + 2;
   }
+
+  const shelfFoot = furnitureFootprint("retailshelf1", aisleFace);
+  const shelfAlong = doorEast ? shelfFoot.w : shelfFoot.h;
+  const shelfDeep = doorEast ? shelfFoot.h : shelfFoot.w;
+  // Depth plus the old 2-tile walkway (approach, then a cart tile).
+  const rowPitch = shelfDeep + 2;
 
   let shelfVariant = Math.floor(rng() * RETAIL_SHELVES.length);
   let rackVariant = Math.floor(rng() * RETAIL_RACKS.length);
@@ -9171,16 +9817,42 @@ function placeLargeRetail(
     return count;
   };
 
-  const placeRow = (row: number) => {
+  // `row` is the aisle-side tile (where a 1-deep rack sits). Shelves are
+  // deeper, so on the low side their origin steps back and the front
+  // stays on that same line.
+  const blockedRects: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  if (showroom) blockedRects.push(showroom);
+  if (officeBlock) blockedRects.push(officeBlock);
+  // First free run past a showroom or the manager's office, plus a walkway.
+  const pastBlocked = (cross: number, deep: number) => {
+    let past = -1;
+    for (const block of blockedRects) {
+      const a0 = doorEast ? block.y0 : block.x0;
+      const a1 = doorEast ? block.y1 : block.x1;
+      if (cross > a1 || cross + deep - 1 < a0) continue;
+      const edge = (doorEast ? block.x1 : block.y1) + 2;
+      if (edge > past) past = edge;
+    }
+    return past;
+  };
+
+  const placeRow = (row: number, shelfRow: number) => {
     const mid = Math.floor((runStart + runLimit) / 2);
     const shelfEnd = gap0 >= 0 ? gap0 : mid;
-    const rackFrom = gap0 >= 0 ? gap1 : mid;
+    let rackFrom = gap0 >= 0 ? gap1 : mid;
+    let shelfFrom = runStart;
+    // Rows that cross the showroom or the office continue past them.
+    const rowPast = Math.max(pastBlocked(shelfRow, shelfDeep), pastBlocked(row, 1));
+    if (rowPast >= 0) {
+      shelfFrom = Math.max(shelfFrom, rowPast);
+      rackFrom = Math.max(rackFrom, rowPast);
+    }
     // Housewares toward the back wall, clothing toward the door.
     const shelves = placeRun(
-      row,
+      shelfRow,
       RETAIL_SHELVES,
-      3,
-      runStart,
+      shelfAlong,
+      shelfFrom,
       shelfEnd,
       { n: shelfVariant },
     );
@@ -9197,32 +9869,77 @@ function placeLargeRetail(
     if (shelves + racks > 0) placedRows.push(row);
   };
 
-  for (let row = aisle0 - 1; row >= 1; row -= 3) placeRow(row);
-  for (let row = aisle1 + 1; row + 1 <= rowN - 2; row += 3) placeRow(row);
-
-  if (gap0 >= 0) {
-    let m = 0;
-    for (const row of placedRows) {
-      if (m >= RETAIL_MANNEQUINS.length) break;
-      const type = RETAIL_MANNEQUINS[m]!;
-      if (placeAt(type, gap0, row, wallFace)) m++;
+  // Family display on a clothing-rack row, the side that faces the aisle.
+  // Mannequin1 and Mannequin2 stand side by side on the rack line. The
+  // child stands one tile toward the aisle, in front of them.
+  {
+    const mid = Math.floor((runStart + runLimit) / 2);
+    let along0 = gap0 >= 0 ? gap1 : mid;
+    const face = aisleFace;
+    let placedFamily = false;
+    for (
+      let row = aisle0 - 1;
+      !placedFamily && row - (shelfDeep - 1) >= 1;
+      row -= rowPitch
+    ) {
+      const childRow = row + 1;
+      let start = along0;
+      const familyPast = Math.max(pastBlocked(row, 1), pastBlocked(childRow, 1));
+      if (familyPast >= 0) start = Math.max(start, familyPast);
+      for (let along = start; along + 1 < runLimit && !placedFamily; along++) {
+        const group = [
+          { type: RETAIL_MANNEQUINS[0]!, run: along, row, approach: false },
+          { type: RETAIL_MANNEQUINS[1]!, run: along + 1, row, approach: false },
+          { type: RETAIL_MANNEQUINS[2]!, run: along, row: childRow, approach: true },
+        ] as const;
+        const fits = group.every((s) => {
+          const pos = toXY(s.run, s.row);
+          return canPlace(s.type, pos.x, pos.y, face, s.approach);
+        });
+        if (!fits) continue;
+        for (const s of group) placeAt(s.type, s.run, s.row, face, s.approach);
+        const beside = toXY(along + 1, childRow);
+        occupied.add(`${beside.x},${beside.y}`);
+        placedFamily = true;
+      }
     }
   }
 
+  for (
+    let row = aisle0 - 1;
+    row - (shelfDeep - 1) >= 1;
+    row -= rowPitch
+  ) {
+    placeRow(row, row - (shelfDeep - 1));
+  }
+  for (let row = aisle1 + 1; row + shelfDeep <= rowN - 2; row += rowPitch) {
+    placeRow(row, row);
+  }
+
   for (const row of placedRows) {
-    const cartRow = row + 2;
+    // One tile past the shelf front, so a cart does not cover the search tiles.
+    const facingAisle = row < aisle0;
+    const shelfFront = facingAisle ? row + 1 : row + shelfDeep;
+    const cartRow = shelfFront + 1;
     if (cartRow >= aisle0 && cartRow <= aisle1) continue;
     if (cartRow < 1 || cartRow >= rowN - 1) continue;
-    const type: FurnitureType = rng() < 0.5 ? "cart1" : "cart2";
-    const span = Math.max(1, runLimit - runStart);
+    const type: FurnitureType = "cart2";
+    let along0 = runStart;
+    const cartPast = pastBlocked(cartRow, 1);
+    if (cartPast >= 0) along0 = Math.max(along0, cartPast);
+    const span = Math.max(1, runLimit - along0);
     for (let n = 0; n < 5; n++) {
-      const along = runStart + Math.floor(rng() * span);
+      const along = along0 + Math.floor(rng() * span);
       if (gap0 >= 0 && along >= gap0 && along < gap1) continue;
       if (placeAt(type, along, cartRow, aisleFace, false)) break;
     }
   }
 
-  return furnitures;
+  return {
+    furnitures,
+    walls: office?.wallTiles ?? [],
+    doors: office ? [{ x: office.entranceX, y: office.entranceY }] : [],
+  };
 }
 
 export function generateInteriorContent(bx: number, by: number): {
@@ -9507,7 +10224,10 @@ export function generateInteriorContent(bx: number, by: number): {
     walls = placed.walls;
     doors = placed.doors;
   } else if (largeRetail) {
-    furnitures = placeLargeRetail(bx, by, iW, iH, exit, rng, occupied, 0);
+    const placed = placeLargeRetail(bx, by, iW, iH, exit, rng, occupied, 0);
+    furnitures = placed.furnitures;
+    walls = placed.walls;
+    doors = placed.doors;
   } else {
     // Gun shop, diner, apartment, and untyped shells stay empty until a layout is assigned.
     furnitures = [];

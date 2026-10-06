@@ -40,6 +40,7 @@ import {
 } from "./redOrder.js";
 import {
   CARAVAN_MANIFEST_ITEM_ID,
+  SUPPLY_LIST_ITEM_ID,
   WAGON_NOTE_ITEM_ID,
 } from "./items.js";
 import { questTargetBuildingLabel } from "./questTargets.js";
@@ -592,13 +593,18 @@ export const QUEST_ID_SCALING_UP = "ashen_trader_scaling_up";
 export const QUEST_ID_SHORT_CRATE = "ashen_trader_short_crate";
 export const QUEST_ID_X_MARKS = "ashen_trader_x_marks_the_spot";
 export const QUEST_ID_PAID_AHEAD = "ashen_trader_paid_ahead";
+export const QUEST_ID_FLOOR_MODEL = "ashen_trader_floor_model";
+export const QUEST_ID_LEFT_ON_THE_DESK = "ashen_trader_left_on_the_desk";
+export const QUEST_ID_BOTH_BARRELS = "ashen_trader_both_barrels";
 export const QUEST_SHORT_CRATE_FIND_OBJECTIVE = "find_manifest";
 export const QUEST_X_MARKS_FIND_OBJECTIVE = "find_note";
+export const QUEST_LEFT_ON_THE_DESK_FIND_OBJECTIVE = "find_supply_list";
 
 /**
  * Kevin's board at the Birchport market.
- * Repeatable rows are daily. One-time rows stay up until turned in.
- * Reputation is Ashen Traders, never the militia.
+ * Repeatable rows are daily and always posted.
+ * Two unfinished one-time rows show at a time, in the order below.
+ * Turning one in opens the next. Reputation is Ashen Traders, never the militia.
  */
 export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
   {
@@ -719,6 +725,34 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     ],
   },
   {
+    id: QUEST_ID_FLOOR_MODEL,
+    title: "Floor Model",
+    description:
+      "Kevin wants a department store counted before he sends a buyer. Search four shelves and two clothing racks, then tell him what is left. You keep what you pocket. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "map",
+    objectives: [
+      {
+        id: "search_shelves",
+        kind: "searchShelf",
+        label: "Search shelves in the marked department store",
+        count: 4,
+      },
+      {
+        id: "search_racks",
+        kind: "searchShelf",
+        label: "Search clothing racks in the marked department store",
+        count: 2,
+      },
+    ],
+    rewards: [
+      { banknotes: 140 },
+      { faction: "ashenTraders", reputation: 240 },
+    ],
+  },
+  {
     id: QUEST_ID_SCALING_UP,
     title: "Scaling Up",
     description:
@@ -770,6 +804,37 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     rewards: [
       { banknotes: 180 },
       { faction: "ashenTraders", reputation: 350 },
+    ],
+  },
+  {
+    id: QUEST_ID_LEFT_ON_THE_DESK,
+    title: "Left on the Desk",
+    description:
+      "A militia patrol will not radio a supply order. The Red Order and bandits listen. They left the list in the manager's office of a department store in another city. Find it in the office furniture and bring it to Kevin. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "journal",
+    objectives: [
+      {
+        id: QUEST_LEFT_ON_THE_DESK_FIND_OBJECTIVE,
+        kind: "haveItem",
+        label: "Find the supply list",
+        itemId: SUPPLY_LIST_ITEM_ID,
+        count: 1,
+      },
+      {
+        id: "turn_in_supply_list",
+        kind: "turnInItem",
+        label: "Hand the supply list to Kevin",
+        itemId: SUPPLY_LIST_ITEM_ID,
+        quantity: 1,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 180 },
+      { faction: "ashenTraders", reputation: 360 },
     ],
   },
   {
@@ -849,6 +914,62 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     rewards: [
       { banknotes: 220 },
       { faction: "ashenTraders", reputation: 400 },
+    ],
+  },
+  {
+    id: QUEST_ID_BOTH_BARRELS,
+    title: "Both Barrels",
+    description:
+      "Kevin wants to see every piece of a shotgun before the stall tries to make one. Accept the job, then bring a receiver, a barrel, a stock, a large spring, and a trigger. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "shotgun_receiver",
+    objectives: [
+      {
+        id: "turn_in_receiver",
+        kind: "turnInItem",
+        label: "Turn in a shotgun receiver",
+        itemId: "shotgun_receiver",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_barrel",
+        kind: "turnInItem",
+        label: "Turn in a shotgun barrel",
+        itemId: "shotgun_barrel",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_stock",
+        kind: "turnInItem",
+        label: "Turn in a shotgun stock",
+        itemId: "shotgun_stock",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_spring",
+        kind: "turnInItem",
+        label: "Turn in a large spring",
+        itemId: "large_spring",
+        quantity: 1,
+        count: 1,
+      },
+      {
+        id: "turn_in_trigger",
+        kind: "turnInItem",
+        label: "Turn in a shotgun trigger",
+        itemId: "shotgun_trigger",
+        quantity: 1,
+        count: 1,
+      },
+    ],
+    rewards: [
+      { banknotes: 260 },
+      { faction: "ashenTraders", reputation: 450 },
     ],
   },
 ];
@@ -1138,9 +1259,8 @@ export function questStatusOf(
 
 /**
  * Unfinished one-time jobs each giver posts at once. Repeatable jobs are not capped.
- * Clark posts three: Rag Bin, Before It Turns, and Don't Hock Them.
  */
-export const ONE_TIME_QUESTS_LISTED = 3;
+export const ONE_TIME_QUESTS_LISTED = 2;
 
 /**
  * Which one-time jobs to post, in catalog order.
@@ -1180,7 +1300,7 @@ export function listedOneTimeQuestIds(
   return selectListedOneTimeQuestIds(
     oneTime.map((q) => q.id),
     (id) => questStatusOf(state, id),
-    giver === "ashenTrader" ? ASHEN_TRADER_QUESTS.length : ONE_TIME_QUESTS_LISTED,
+    ONE_TIME_QUESTS_LISTED,
   );
 }
 

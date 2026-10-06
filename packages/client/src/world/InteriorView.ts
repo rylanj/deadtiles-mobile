@@ -14,8 +14,12 @@ import {
   officeMeetingRoomAtTile,
   officeManagerRoomForBuilding,
   officeManagerRoomAtTile,
+  retailManagerRoomForBuilding,
+  retailManagerRoomAtTile,
+  pickableLockDifficulty,
   interiorDimensions,
   interiorExitForBuildingAt,
+  retailShowroomBounds,
   interiorWallCornerDepthBias,
   interiorWallsForBuilding,
   searchableFootprint,
@@ -34,6 +38,7 @@ import {
   type InteriorWallTile,
   type MotelRoom,
   type OfficeMeetingRoom,
+  type RetailManagerRoom,
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
@@ -297,14 +302,20 @@ const SUPERSHELF_BOTTOM_PAD = Math.round(SUPERSHELF_RENDER_HEIGHT * 0.1);
 const CLOTHING_RACK_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.15);
 /** Drop the few transparent rows under the wheels. */
 const CLOTHING_RACK_BOTTOM_PAD = Math.round(CLOTHING_RACK_RENDER_HEIGHT * (8 / 256));
-/** Mannequin1-3: about player height. */
+/** Mannequin1/2: about player height. */
 const MANNEQUIN_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.1);
+/** Mannequin1/2 — raise by 10% of display height. */
+const MANNEQUIN_BOTTOM_PAD = -Math.round(MANNEQUIN_RENDER_HEIGHT * 0.1);
+/** Mannequin3: child, 30% smaller than the adult mannequins. */
+const MANNEQUIN_CHILD_RENDER_HEIGHT = Math.round(MANNEQUIN_RENDER_HEIGHT * 0.7);
+/** Mannequin3 — same 10% raise, scaled to the shorter sprite. */
+const MANNEQUIN_CHILD_BOTTOM_PAD = -Math.round(MANNEQUIN_CHILD_RENDER_HEIGHT * 0.1);
 /** Cart1/2: one tile. Slightly under generic so the basket stays on the diamond. */
 const CART_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.9);
-/** Drop the transparent rows under the cart wheels. */
-const CART_BOTTOM_PAD = Math.round(CART_RENDER_HEIGHT * (10 / 256));
-/** RetailCase1/2: 3-tile glass counter. Same canvas scale as a gondola, so the length matches. */
-const RETAIL_CASE_RENDER_HEIGHT = SUPERSHELF_RENDER_HEIGHT;
+/** Drop the transparent rows under the wheels, then raise 5% of display height. */
+const CART_BOTTOM_PAD = -Math.round(CART_RENDER_HEIGHT * 0.05);
+/** RetailCase1/2: 2×1 glass counter. Gondola canvas scale, then 20% smaller. */
+const RETAIL_CASE_RENDER_HEIGHT = Math.round(SUPERSHELF_RENDER_HEIGHT * 0.8);
 /** Feet sit 21px above the canvas bottom. */
 const RETAIL_CASE_BOTTOM_PAD = Math.round(RETAIL_CASE_RENDER_HEIGHT * (21 / 256));
 /** SuperFridge1 — commercial drink cooler bank. */
@@ -451,7 +462,9 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "suitcase") return SUITCASE_RENDER_HEIGHT;
   if (objectType === "watercooler") return WATERCOOLER_RENDER_HEIGHT;
   if (objectType === "trashcan") return TRASHCAN_RENDER_HEIGHT;
-  if (objectType === "checkout") return CHECKOUT_RENDER_HEIGHT;
+  if (objectType === "checkout" || objectType === "retailcheckout1") {
+    return CHECKOUT_RENDER_HEIGHT;
+  }
   if (objectType === "supershelf1" || objectType === "supershelf2") {
     return SUPERSHELF_RENDER_HEIGHT;
   }
@@ -469,13 +482,10 @@ function furnitureRenderHeight(objectType: string): number {
   ) {
     return CLOTHING_RACK_RENDER_HEIGHT;
   }
-  if (
-    objectType === "mannequin1" ||
-    objectType === "mannequin2" ||
-    objectType === "mannequin3"
-  ) {
+  if (objectType === "mannequin1" || objectType === "mannequin2") {
     return MANNEQUIN_RENDER_HEIGHT;
   }
+  if (objectType === "mannequin3") return MANNEQUIN_CHILD_RENDER_HEIGHT;
   if (objectType === "cart1" || objectType === "cart2") return CART_RENDER_HEIGHT;
   if (objectType === "retailcase1" || objectType === "retailcase2") {
     return RETAIL_CASE_RENDER_HEIGHT;
@@ -553,7 +563,9 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "suitcase") return SUITCASE_BOTTOM_PAD;
   if (objectType === "watercooler") return WATERCOOLER_BOTTOM_PAD;
   if (objectType === "trashcan") return TRASHCAN_BOTTOM_PAD;
-  if (objectType === "checkout") return CHECKOUT_BOTTOM_PAD;
+  if (objectType === "checkout" || objectType === "retailcheckout1") {
+    return CHECKOUT_BOTTOM_PAD;
+  }
   if (objectType === "supershelf1" || objectType === "supershelf2") {
     return SUPERSHELF_BOTTOM_PAD;
   }
@@ -571,6 +583,10 @@ function furnitureBottomPad(objectType: string): number {
   ) {
     return CLOTHING_RACK_BOTTOM_PAD;
   }
+  if (objectType === "mannequin1" || objectType === "mannequin2") {
+    return MANNEQUIN_BOTTOM_PAD;
+  }
+  if (objectType === "mannequin3") return MANNEQUIN_CHILD_BOTTOM_PAD;
   if (objectType === "cart1" || objectType === "cart2") return CART_BOTTOM_PAD;
   if (objectType === "retailcase1" || objectType === "retailcase2") {
     return RETAIL_CASE_BOTTOM_PAD;
@@ -654,7 +670,7 @@ export class InteriorView {
   private fadeComposite: Phaser.GameObjects.RenderTexture | null = null;
   /** Hospital cubicles + motel room bays — SW/SE faces fade while inside. */
   private fadeCubicles: Array<
-    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom
+    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom | RetailManagerRoom
   > = [];
   /** Last cubicle fade key — skip redundant rebuild when tile unchanged. */
   private lastCubicleFadeKey = "";
@@ -924,16 +940,18 @@ export class InteriorView {
   }
 
   private groundFadeCubicles(): Array<
-    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom
+    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom | RetailManagerRoom
   > {
     const officeRoom = officeMeetingRoomForBuilding(this.buildingX, this.buildingY);
     const managerRoom = officeManagerRoomForBuilding(this.buildingX, this.buildingY);
+    const retailOffice = retailManagerRoomForBuilding(this.buildingX, this.buildingY);
     return [
       ...hospitalCubiclesForBuilding(this.buildingX, this.buildingY),
       ...motelRoomsForBuilding(this.buildingX, this.buildingY),
       ...houseRoomsForBuilding(this.buildingX, this.buildingY),
       ...(officeRoom ? [officeRoom] : []),
       ...(managerRoom ? [managerRoom] : []),
+      ...(retailOffice ? [retailOffice] : []),
     ];
   }
 
@@ -1296,7 +1314,11 @@ export class InteriorView {
     faded.sort((a, b) => a.depth - b.depth);
     const g = this.scene.make.graphics({ x: 0, y: 0 }, false);
     for (const entry of faded) {
-      const door = this.extraDoors.find((d) => d.x === entry.x && d.y === entry.y);
+      const found = this.extraDoors.find((d) => d.x === entry.x && d.y === entry.y);
+      const door =
+        found && found.isLocked && !this.doorShowsCodeLock(found)
+          ? { ...found, isLocked: false }
+          : found;
       drawWallTile(
         g,
         entry.x,
@@ -2026,10 +2048,35 @@ export class InteriorView {
       tileCoords.push({ x: exitX, y: exitY });
     }
 
-    // Houses get wood; police → GroundTiles; hospital → GroundHospital;
-    // motel → GroundMotel carpet; office → GroundOffice carpet;
-    // tent → barracks gravel; else concrete.
+    // Houses get wood; large retail → laminate, with GroundMotel carpet on
+    // the home-furniture showroom; police → GroundTiles;
+    // hospital → GroundHospital; motel → GroundMotel carpet;
+    // office → GroundOffice carpet; tent → barracks gravel; else concrete.
     const bType = getBuildingAt(this.buildingX, this.buildingY)?.buildingType;
+    const showroom =
+      this.floorLevel === 0 && bType === "large_retail"
+        ? retailShowroomBounds(this.iW, this.iH, exit)
+        : null;
+    const carpetTiles = showroom
+      ? tileCoords.filter(
+          (t) =>
+            t.x >= showroom.x0 &&
+            t.x <= showroom.x1 &&
+            t.y >= showroom.y0 &&
+            t.y <= showroom.y1,
+        )
+      : [];
+    const salesTiles =
+      carpetTiles.length > 0
+        ? tileCoords.filter(
+            (t) =>
+              !showroom ||
+              t.x < showroom.x0 ||
+              t.x > showroom.x1 ||
+              t.y < showroom.y0 ||
+              t.y > showroom.y1,
+          )
+        : tileCoords;
     const floorKey =
       bType === "house" || bType === undefined
         ? "tile-wood"
@@ -2041,15 +2088,20 @@ export class InteriorView {
               ? "tile-motel"
               : bType === "office"
                 ? "tile-office"
-                : bType === "tent" || bType === "mess_hall"
-                  ? "tile-barracks"
-                  : "tile-concrete";
+                : bType === "large_retail"
+                  ? "tile-retail"
+                  : bType === "tent" || bType === "mess_hall"
+                    ? "tile-barracks"
+                    : "tile-concrete";
     const floor = createInteriorFloorImage(
       this.scene,
       this.buildingX,
       this.buildingY,
-      tileCoords,
+      salesTiles,
       floorKey,
+      carpetTiles.length > 0
+        ? { baseKey: "tile-motel", tiles: carpetTiles }
+        : undefined,
     );
     if (floor) {
       floor.setDepth(interiorFloorDepth(0, 0));
@@ -2267,6 +2319,8 @@ export class InteriorView {
     if (office) return office.facing;
     const manager = officeManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
     if (manager) return manager.facing;
+    const retailOffice = retailManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (retailOffice) return retailOffice.facing;
     return null;
   }
 
@@ -2335,6 +2389,23 @@ export class InteriorView {
   }
 
   /**
+   * Keypad art is only for a survivor's code lock. A door that is picked
+   * stays a plain closed door.
+   */
+  private doorShowsCodeLock(door: InteriorDoorTile): boolean {
+    if (!door.isLocked) return false;
+    return (
+      pickableLockDifficulty(
+        this.buildingX,
+        this.buildingY,
+        door.x,
+        door.y,
+        door.ownerWallet,
+      ) == null
+    );
+  }
+
+  /**
    * Bake the geometric door leaf and paint door art onto its main
    * camera-facing parallelogram (same affine mapping as exterior wall doors).
    */
@@ -2360,7 +2431,7 @@ export class InteriorView {
       door.y,
       axis,
       door.isOpen,
-      door.isLocked,
+      this.doorShowsCodeLock(door),
       artKey,
       hospital
         ? {

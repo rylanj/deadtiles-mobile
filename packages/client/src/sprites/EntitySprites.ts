@@ -47,6 +47,9 @@ import {
   CROW_FLY_RENDER_HEIGHT,
   CROW_FLY_FRAMES,
   CROW_DIE_FRAMES,
+  RABBIT_RENDER_HEIGHT,
+  RABBIT_WALK_FRAMES,
+  RABBIT_DIE_FRAMES,
   type DirectionLabel,
   type IdleWeaponKey,
 } from "@zombie/shared";
@@ -115,6 +118,8 @@ export const ZOMBIE_CRAWL_TILE_DROP_PX = TILE_HEIGHT * 0.2;
 export const COYWOLF_TILE_DROP_PX = TILE_HEIGHT * 0.2;
 /** Screen-Y drop so a bear's padded canvas sits on the tile. */
 export const BEAR_TILE_DROP_PX = TILE_HEIGHT * 0.16;
+/** Screen-Y drop so a rabbit's paws sit in the grass. */
+export const RABBIT_TILE_DROP_PX = TILE_HEIGHT * 0.06;
 const HUMAN_FEET_ORIGIN_Y = 0.95;
 const HUMAN_DIE_FEET_ORIGIN_Y = 0.95;
 /** Sit frame includes the campchair; match CampChair1 (raised 10% from the prior seat). */
@@ -222,12 +227,33 @@ export function crowSkinnedKey(dir: DirectionLabel) {
   return `crow-skinned-${dir}`;
 }
 
+export function rabbitIdleKey(dir: DirectionLabel) {
+  return `rabbit-idle-${dir}`;
+}
+
+export function rabbitWalkFrameKey(dir: DirectionLabel, frame: number) {
+  return `rabbit-walk-${dir}-${animFrameTag(frame)}`;
+}
+
+export function rabbitDieFrameKey(dir: DirectionLabel, frame: number) {
+  return `rabbit-die-${dir}-${animFrameTag(frame)}`;
+}
+
+export function rabbitSkinnedKey(dir: DirectionLabel) {
+  return `rabbit-skinned-${dir}`;
+}
+
 const COYWOLF_FEET_ORIGIN_Y = 0.92;
 /**
  * Idle art fills more of its canvas than walk, so the same height makes a
  * standing coyote look larger.
  */
 const COYWOLF_IDLE_RENDER_SCALE = 0.85;
+/**
+ * Skinned sheets use the idle canvas, but the carcass fills more of it than
+ * the death pose. The same height makes a looted coyote look larger.
+ */
+const COYWOLF_SKINNED_RENDER_SCALE = 0.85;
 
 function applyCoywolfFrame(
   sprite: Phaser.GameObjects.Sprite,
@@ -245,6 +271,11 @@ function applyCoywolfFrame(
 const BEAR_FEET_ORIGIN_Y = 0.86;
 /** Idle art fills a bit more of its canvas than the walk strip. */
 const BEAR_IDLE_RENDER_SCALE = 0.9;
+/**
+ * Skinned sheets use the idle canvas, but the carcass fills more of it than
+ * the death pose. The same height makes a looted bear look larger.
+ */
+const BEAR_SKINNED_RENDER_SCALE = 0.85;
 
 function applyBearFrame(
   sprite: Phaser.GameObjects.Sprite,
@@ -263,6 +294,36 @@ function applyBearFrame(
 const CROW_FEET_ORIGIN_Y = 0.88;
 const CROW_FLY_FEET_ORIGIN_Y = 0.78;
 const CROW_DIE_FEET_ORIGIN_Y = 0.85;
+
+const RABBIT_FEET_ORIGIN_Y = 0.94;
+/**
+ * Idle is a 128 canvas and the rabbit fills more of it than the walk sheets.
+ * South walk is 144, north walk is 160, so one scale would shrink the south
+ * view too far. These match each idle to that direction's tallest hop.
+ */
+const RABBIT_IDLE_RENDER_SCALE: Record<DirectionLabel, number> = {
+  N: 0.82,
+  NE: 0.79,
+  E: 0.88,
+  SE: 0.89,
+  S: 0.89,
+  SW: 0.89,
+  W: 0.87,
+  NW: 0.79,
+};
+
+function applyRabbitFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  textureKey: string,
+  renderHeight = RABBIT_RENDER_HEIGHT,
+) {
+  applyEntitySpriteFrame(
+    sprite,
+    textureKey,
+    RABBIT_FEET_ORIGIN_Y,
+    renderHeight,
+  );
+}
 
 function applyCrowFrame(
   sprite: Phaser.GameObjects.Sprite,
@@ -684,6 +745,7 @@ export function loadSurvivorAssets(scene: Phaser.Scene) {
   scene.load.image("tile-hospital", "GroundHospital.png");
   scene.load.image("tile-motel", "GroundMotel.png");
   scene.load.image("tile-office", "GroundOffice.png");
+  scene.load.image("tile-retail", "GroundRetail.png");
 
   // Standing sprite plus the resting frame of the fall, per variant.
   //
@@ -1396,7 +1458,7 @@ function resolvePlayerIdleWeapon(state: EntityVisualState): string | undefined {
 
 export function updateEntityVisual(
   sprite: Phaser.GameObjects.Sprite,
-  kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow",
+  kind: "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "rabbit",
   state: EntityVisualState,
 ) {
   const dir = DIRECTION_LABELS[((state.facing % 8) + 8) % 8]!;
@@ -1409,7 +1471,11 @@ export function updateEntityVisual(
 
   if (kind === "coywolf") {
     if (isDead && state.looted) {
-      applyCoywolfFrame(sprite, coywolfSkinnedKey(dir));
+      applyCoywolfFrame(
+        sprite,
+        coywolfSkinnedKey(dir),
+        COYWOLF_RENDER_HEIGHT * COYWOLF_SKINNED_RENDER_SCALE,
+      );
     } else if (isDead) {
       const frame = Math.min(9, Math.max(1, (state.dieFrame ?? 0) + 1));
       applyCoywolfFrame(sprite, coywolfDieFrameKey(dir, frame));
@@ -1471,9 +1537,37 @@ export function updateEntityVisual(
     return;
   }
 
+  if (kind === "rabbit") {
+    if (isDead && state.looted) {
+      applyRabbitFrame(sprite, rabbitSkinnedKey(dir));
+    } else if (isDead) {
+      const frame = Math.min(
+        RABBIT_DIE_FRAMES,
+        Math.max(1, (state.dieFrame ?? 0) + 1),
+      );
+      applyRabbitFrame(sprite, rabbitDieFrameKey(dir, frame));
+    } else if (isWalking) {
+      const frame = (Math.floor(state.animFrame) % RABBIT_WALK_FRAMES) + 1;
+      applyRabbitFrame(sprite, rabbitWalkFrameKey(dir, frame));
+    } else {
+      applyRabbitFrame(
+        sprite,
+        rabbitIdleKey(dir),
+        RABBIT_RENDER_HEIGHT * RABBIT_IDLE_RENDER_SCALE[dir],
+      );
+    }
+    sprite.setAngle(0);
+    sprite.setAlpha(1);
+    return;
+  }
+
   if (kind === "bear") {
     if (isDead && state.looted) {
-      applyBearFrame(sprite, bearSkinnedKey(dir));
+      applyBearFrame(
+        sprite,
+        bearSkinnedKey(dir),
+        BEAR_RENDER_HEIGHT * BEAR_SKINNED_RENDER_SCALE,
+      );
     } else if (isDead) {
       const frame = Math.min(9, Math.max(1, (state.dieFrame ?? 0) + 1));
       applyBearFrame(sprite, bearDieFrameKey(dir, frame));

@@ -33,8 +33,13 @@ export const WALL_DEPTH = 96;
 export const WAREHOUSE_ROOF_LIP_HEIGHT = 6;
 /** Extra screen-Y for a warehouse roof ridge above the deck. */
 export const WAREHOUSE_ROOF_PEAK_HEIGHT = 16;
-/** Extra screen-Y for a motel roof ridge above the deck. */
+/**
+ * Extra screen-Y for a pitched ridge. Mess halls still use this.
+ * Motels use {@link MOTEL_PARAPET_HEIGHT} instead of a gable.
+ */
 export const MOTEL_ROOF_PEAK_HEIGHT = 16;
+/** Street false-front above a motel's flat roof. The sign sits on this lip. */
+export const MOTEL_PARAPET_HEIGHT = 22;
 /** Extra screen-Y for a barracks tent canvas ridge above the wall plate. */
 export const TENT_ROOF_PEAK_HEIGHT = 18;
 /** Extra screen-Y for police-station roof parapet above the deck. */

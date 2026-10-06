@@ -478,6 +478,10 @@
         font: 12px/1.2 system-ui, sans-serif;
         font-variant-numeric: tabular-nums;
       }
+      .journal-skill-buff {
+        color: #e6c15a;
+        font-weight: 700;
+      }
       .journal-skill-benefit {
         margin: 4px 0 0;
         color: #8aa88a;
@@ -2577,12 +2581,12 @@
         scrollbar-color: rgba(126, 207, 126, 0.75) rgba(0, 0, 0, 0.28);
       }
       #inventory-overlay .inventory-carry-scroll {
-        max-height: min(50vh, calc(100vh - 440px));
-        max-height: min(50vh, calc(100dvh - 440px));
+        max-height: min(50vh, calc(100vh - 540px));
+        max-height: min(50vh, calc(100dvh - 540px));
       }
       #container-loot-overlay .inventory-carry-scroll {
-        max-height: min(42vh, calc(70vh - 240px));
-        max-height: min(42vh, calc(70dvh - 240px));
+        max-height: min(42vh, calc(70vh - 330px));
+        max-height: min(42vh, calc(70dvh - 330px));
       }
       #inventory-overlay .inventory-carry-scroll::-webkit-scrollbar,
       #container-loot-overlay .inventory-carry-scroll::-webkit-scrollbar {
@@ -2636,6 +2640,9 @@
       }
       .inventory-equipment-labels .inventory-section-label {
         margin-bottom: 0;
+      }
+      .inventory-equipment-labels--next {
+        margin-top: 10px;
       }
       .inventory-section-label {
         margin-bottom: 6px;

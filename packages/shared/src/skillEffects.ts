@@ -24,7 +24,16 @@ import {
 import { SEARCH_DURATION_MS } from "./interior.js";
 import { BASE_INVENTORY_SLOTS, MAGAZINE_READ_MS } from "./items.js";
 import {
+  LOCKPICK_CONSUME_AT_0,
+  LOCKPICK_CONSUME_AT_100,
+  LOCKPICK_DURATION_AT_0_MS,
+  LOCKPICK_DURATION_AT_100_MS,
+  LOCKPICK_NOISE_AT_0,
+  LOCKPICK_NOISE_AT_100,
+} from "./lockpick.js";
+import {
   awardSubSkillXp,
+  buffedSubSkillLevel,
   effectiveSubLevel,
   parentOfSub,
   parseSkillsJson,
@@ -84,6 +93,8 @@ export const SKILL_XP = {
   readCraft: 12,
   /** Reading XP from learning a weapon blueprint. */
   readBlueprint: 200,
+  /** Lockpicking XP from opening a lock. */
+  lockpick: 20,
 } as const;
 
 export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
@@ -97,8 +108,16 @@ export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
   accuracy: ["Bullet spread reduces"],
   crafting: ["Crafting time reduces"],
   scavenging: ["Searching time reduces"],
-  stealth: ["Zombies do not notice you as easily"],
+  stealth: [
+    "Zombies do not notice you as easily",
+    "Lockpicking noise carries less far",
+  ],
   cooking: ["Food and drink restore more"],
+  lockpicking: [
+    "Picking a lock takes less time",
+    "Lockpicks break less often",
+    "Medium locks need level 25. Hard locks need level 50",
+  ],
   medicine: ["Medicine is more effective and lasts longer"],
   reading: ["Magazine XP increases and reading time reduces"],
   bartering: ["Buy and sell prices improve"],
@@ -130,6 +149,14 @@ export type PlayerSkillMods = {
   reloadMs: number;
   craftDurationScale: number;
   searchDurationMs: number;
+  /** Time to finish picking a lock. */
+  lockpickDurationMs: number;
+  /** Chance a finished pick spends one lockpick use. */
+  lockpickConsumeChance: number;
+  /** Tiles that hear a lock being picked. */
+  lockpickNoiseTiles: number;
+  /** Effective lockpicking level (capped by Dexterity). */
+  lockpickLevel: number;
   stealthAggroRange: number;
   gunshotNoiseScale: number;
   foodRestoreScale: number;
@@ -144,6 +171,8 @@ export type PlayerSkillMods = {
   questRewardScale: number;
   questRepScale: number;
   carryingLevel: number;
+  /** Temporary Bartering and Persuasion XP from worn jewelry. 0 when bare. */
+  jewelrySkillXp: number;
 };
 
 function clamp01(n: number): number {
@@ -176,12 +205,21 @@ export function inventorySlotCountForCarrying(level: number): number {
   return BASE_INVENTORY_SLOTS + extraPocketSlotsForCarrying(level);
 }
 
+function lerpLevel(level: number, at0: number, at100: number): number {
+  const t = clamp01(level / SKILL_LEVEL_MAX);
+  return at0 + (at100 - at0) * t;
+}
+
 export function computePlayerSkillMods(
   skillsJson: string | null | undefined,
+  jewelrySkillXp = 0,
 ): PlayerSkillMods {
   const json = typeof skillsJson === "string" ? skillsJson : "";
   const state = parseSkillsJson(json);
   const carryingLevel = effectiveSubLevel(state, "carrying");
+  const bonus = Math.max(0, Math.floor(jewelrySkillXp) || 0);
+  const barterLevel = buffedSubSkillLevel(state, "bartering", bonus);
+  const persuasionLevel = buffedSubSkillLevel(state, "persuasion", bonus);
   return {
     json,
     meleeDamageScale: lerpSkill(state, "melee", 1, 1.2),
@@ -222,6 +260,27 @@ export function computePlayerSkillMods(
     searchDurationMs: Math.round(
       lerpSkill(state, "scavenging", SEARCH_DURATION_MS, 3_000),
     ),
+    lockpickDurationMs: Math.round(
+      lerpSkill(
+        state,
+        "lockpicking",
+        LOCKPICK_DURATION_AT_0_MS,
+        LOCKPICK_DURATION_AT_100_MS,
+      ),
+    ),
+    lockpickConsumeChance: lerpSkill(
+      state,
+      "lockpicking",
+      LOCKPICK_CONSUME_AT_0,
+      LOCKPICK_CONSUME_AT_100,
+    ),
+    lockpickNoiseTiles: lerpSkill(
+      state,
+      "stealth",
+      LOCKPICK_NOISE_AT_0,
+      LOCKPICK_NOISE_AT_100,
+    ),
+    lockpickLevel: effectiveSubLevel(state, "lockpicking"),
     stealthAggroRange: lerpSkill(state, "stealth", ZOMBIE_AGGRO_RANGE, 8),
     gunshotNoiseScale: 1,
     foodRestoreScale: lerpSkill(state, "cooking", 1, 1.2),
@@ -239,10 +298,11 @@ export function computePlayerSkillMods(
     magazineReadMs: Math.round(
       lerpSkill(state, "reading", MAGAZINE_READ_MS, 20_000),
     ),
-    barterT: skillT(state, "bartering"),
-    questRewardScale: lerpSkill(state, "persuasion", 1, 1.5),
-    questRepScale: lerpSkill(state, "persuasion", 1, 1.5),
+    barterT: clamp01(barterLevel / SKILL_LEVEL_MAX),
+    questRewardScale: lerpLevel(persuasionLevel, 1, 1.5),
+    questRepScale: lerpLevel(persuasionLevel, 1, 1.5),
     carryingLevel,
+    jewelrySkillXp: bonus,
   };
 }
 

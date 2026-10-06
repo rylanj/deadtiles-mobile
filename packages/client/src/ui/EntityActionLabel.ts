@@ -15,7 +15,8 @@ export type EntityActionKind =
   | "craft"
   | "build"
   | "wear"
-  | "remove";
+  | "remove"
+  | "lockpick";
 
 const ACTION_TEXT: Record<EntityActionKind, string> = {
   reload: "Reloading",
@@ -31,6 +32,7 @@ const ACTION_TEXT: Record<EntityActionKind, string> = {
   build: "Building",
   wear: "Wearing",
   remove: "Removing",
+  lockpick: "Picking lock",
 };
 
 const LABEL_DEPTH = 9_999_998;

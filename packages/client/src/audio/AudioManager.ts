@@ -748,7 +748,7 @@ export class AudioManager {
 
   /**
    * Search rummage. Furniture banks are Search1-19 by objectType.
-   * Corpses, dead officers, armchairs, and sofas use SearchBody1.
+   * Corpses, dead officers, armchairs, sofas, and clothing racks use SearchBody1.
    */
   playSearch(
     kind: "furniture" | "body",
@@ -2729,11 +2729,14 @@ const FURNITURE_SEARCH_BANK: Record<string, number> = {
   watercontainer: 10,
   trashcan: 11,
   checkout: 12,
+  retailcheckout1: 12,
   supershelf1: 13,
   supershelf2: 13,
   ivstand: 14,
   counter: 15,
   vendingmachine: 16,
+  retailcase1: 16,
+  retailcase2: 16,
   dinnertable: 17,
   canteentable1: 17,
   canteentable2: 17,
@@ -2782,7 +2785,10 @@ function usesBodySearchSound(objectType?: string): boolean {
   return (
     objectType === "deadofficer" ||
     objectType === "armchair" ||
-    objectType === "sofa"
+    objectType === "sofa" ||
+    objectType === "clothingrack1" ||
+    objectType === "clothingrack2" ||
+    objectType === "clothingrack3"
   );
 }
 

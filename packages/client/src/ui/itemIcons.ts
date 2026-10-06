@@ -72,6 +72,7 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   clarks_earrings: "/assets/UI/UI_gold_earrings.png",
   caravan_manifest: "/assets/UI/UI_journal.png",
   wagon_note: "/assets/UI/UI_journal.png",
+  supply_list: "/assets/UI/UI_journal.png",
   gold_ring: "/assets/UI/UI_gold_ring.png",
   silver_chain: "/assets/UI/UI_silver_chain.png",
   silver_ring: "/assets/UI/UI_silver_ring.png",
@@ -133,6 +134,8 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   magazine_reading: "/assets/UI/UI_magazine_reading.png",
   magazine_persuasion: "/assets/UI/UI_magazine_persuasion.png",
   magazine_bartering: "/assets/UI/UI_magazine_bartering.png",
+  magazine_lockpicking: "/assets/UI/UI_magazine_lockpicking.png",
+  lockpick: "/assets/UI/UI_lockpick.png",
 };
 
 export function getItemIconPath(itemId: string): string | undefined {

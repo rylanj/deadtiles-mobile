@@ -11,9 +11,11 @@ import {
 import { isInBirchportBarracks } from "./birchportBarracks.js";
 import { PLAYER_SPAWN_HUB_NAME } from "./constants.js";
 import {
+  furnitureInRetailManagerOffice,
   generateInteriorContent,
   interiorDimensions,
   interiorExitForBuildingAt,
+  isClothingRack,
   isSupplyFridge,
   isSupplyShelf,
   searchableFootprint,
@@ -105,6 +107,9 @@ type InteriorQuestFit = {
   lootFurniture: number;
   shelves: number;
   fridges: number;
+  racks: number;
+  /** Desk, cabinet, or bookshelf inside a department-store manager's office. */
+  managerStash: number;
   standingTiles: number;
 };
 
@@ -120,11 +125,15 @@ function interiorQuestFit(bx: number, by: number): InteriorQuestFit {
   let lootFurniture = 0;
   let shelves = 0;
   let fridges = 0;
+  let racks = 0;
+  let managerStash = 0;
   for (const obj of generated.furnitures) {
     if (obj.kind !== "furniture" || !obj.objectType) continue;
     if (isLootContainerType(obj.objectType)) lootFurniture++;
     if (isSupplyShelf(obj.objectType)) shelves++;
     if (isSupplyFridge(obj.objectType)) fridges++;
+    if (isClothingRack(obj.objectType)) racks++;
+    if (furnitureInRetailManagerOffice(bx, by, obj)) managerStash++;
   }
 
   const { iW, iH } = interiorDimensions(bx, by);
@@ -170,7 +179,7 @@ function interiorQuestFit(bx: number, by: number): InteriorQuestFit {
     }
   }
 
-  const fit = { lootFurniture, shelves, fridges, standingTiles };
+  const fit = { lootFurniture, shelves, fridges, racks, managerStash, standingTiles };
   interiorFitByOrigin.set(key, fit);
   return fit;
 }
@@ -518,12 +527,24 @@ function otherCityCells(): { cx: number; cy: number }[] {
  * Any type qualifies once the interior actually has searchable furniture.
  * `standingTiles` is for the missing-caravan body, which needs open floor.
  */
+function isBlockedOrigin(
+  bld: BuildingInfo,
+  blocked?: readonly { ox: number; oy: number }[],
+): boolean {
+  if (!blocked || blocked.length === 0) return false;
+  return blocked.some((b) => b.ox === bld.ox && b.oy === bld.oy);
+}
+
 export function pickOtherCityBuilding(
   exclude?: QuestTargetExclude,
-  needs?: { standingTiles?: number },
+  needs?: {
+    standingTiles?: number;
+    blocked?: readonly { ox: number; oy: number }[];
+  },
 ): BuildingInfo | null {
   const needTiles = needs?.standingTiles ?? 0;
   const fits = (bld: BuildingInfo) => {
+    if (isBlockedOrigin(bld, needs?.blocked)) return false;
     const fit = interiorQuestFit(bld.ox, bld.oy);
     if (fit.lootFurniture < 1) return false;
     if (needTiles > 0 && fit.standingTiles < needTiles) return false;
@@ -543,6 +564,89 @@ export function pickOtherCityBuilding(
   if (picked) return picked;
   const far = buildingsAroundBirchport(QUEST_FAR_PAD).filter(
     (bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude),
+  );
+  return pickFirstThatFits(far, fits, far.length);
+}
+
+function departmentStoresInCity(
+  cx: number,
+  cy: number,
+  blocked?: readonly { ox: number; oy: number }[],
+): BuildingInfo[] {
+  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
+  const cellMax = SETTLEMENT_CELL_SIZE - 1;
+  return listBuildingsInRect(
+    cx - spill,
+    cx + cellMax + spill,
+    cy - spill,
+    cy + cellMax + spill,
+  ).filter(
+    (bld) =>
+      bld.buildingType === "large_retail" &&
+      !isBuildingInBirchport(bld.ox, bld.oy) &&
+      !isBlockedOrigin(bld, blocked),
+  );
+}
+
+/**
+ * Department store outside Birchport with enough shelves and clothing racks
+ * for Kevin's floor count. Nearby cities are included when the near ring is empty.
+ */
+export function pickFloorModelStore(
+  blocked?: readonly { ox: number; oy: number }[],
+): BuildingInfo | null {
+  const fits = (bld: BuildingInfo) => {
+    if (isBlockedOrigin(bld, blocked)) return false;
+    const fit = interiorQuestFit(bld.ox, bld.oy);
+    return fit.shelves >= 4 && fit.racks >= 2;
+  };
+  const near = pickOutsideBirchport("large_retail", undefined, fits);
+  if (near) return near;
+
+  const hub = birchportCityCell();
+  if (!hub) return null;
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of getCityRoadLinks(hub.cx, hub.cy)) {
+    for (const bld of departmentStoresInCity(city.cx, city.cy, blocked)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  return pickFirstThatFits(pool, fits, 24);
+}
+
+/**
+ * Department store in a city other than Birchport whose manager's office
+ * has a desk, cabinet, or bookshelf that can hold the supply list.
+ */
+export function pickSupplyListStore(
+  blocked?: readonly { ox: number; oy: number }[],
+): BuildingInfo | null {
+  const fits = (bld: BuildingInfo) => {
+    if (bld.buildingType !== "large_retail") return false;
+    if (isBlockedOrigin(bld, blocked)) return false;
+    return interiorQuestFit(bld.ox, bld.oy).managerStash >= 1;
+  };
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of otherCityCells()) {
+    for (const bld of departmentStoresInCity(city.cx, city.cy, blocked)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  const picked = pickFirstThatFits(pool, fits, pool.length);
+  if (picked) return picked;
+  const far = buildingsAroundBirchport(QUEST_FAR_PAD).filter(
+    (bld) =>
+      bld.buildingType === "large_retail" &&
+      isOtherCityBuilding(bld) &&
+      !isBlockedOrigin(bld, blocked),
   );
   return pickFirstThatFits(far, fits, far.length);
 }

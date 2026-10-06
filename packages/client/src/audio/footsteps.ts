@@ -2,6 +2,9 @@ import {
   TileType,
   generateTile,
   getBuildingAt,
+  interiorDimensions,
+  interiorExitForBuildingAt,
+  retailShowroomBounds,
   type BuildingType,
 } from "@zombie/shared";
 
@@ -57,12 +60,14 @@ export const FOOTSTEP_FILE: Record<
 
 /**
  * Interior floors. Types not listed use {@link FOOTSTEP_DEFAULT_SURFACE}.
- * house = wood boards, motel = carpet. Hospital / police / tents / shops stay concrete.
+ * house = wood boards, department store = laminate (showroom carpet), motel = carpet.
+ * Hospital / police / tents / other shops stay concrete.
  */
 export const FOOTSTEP_INTERIOR_BY_BUILDING: Partial<
   Record<BuildingType, FootstepSurface>
 > = {
   house: "wood",
+  large_retail: "wood",
   motel: "carpet",
 };
 
@@ -76,6 +81,22 @@ export const FOOTSTEP_OVERWORLD_BY_TILE: Partial<
   [TileType.Floor]: "grass",
 };
 
+function retailShowroomCarpet(opts: {
+  x: number;
+  y: number;
+  buildingX?: number;
+  buildingY?: number;
+}): boolean {
+  const bx = opts.buildingX ?? 0;
+  const by = opts.buildingY ?? 0;
+  const { iW, iH } = interiorDimensions(bx, by);
+  const room = retailShowroomBounds(iW, iH, interiorExitForBuildingAt(bx, by));
+  if (!room) return false;
+  const tx = Math.floor(opts.x);
+  const ty = Math.floor(opts.y);
+  return tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1;
+}
+
 export function resolveFootstepSurface(opts: {
   x: number;
   y: number;
@@ -87,6 +108,7 @@ export function resolveFootstepSurface(opts: {
     const type = getBuildingAt(opts.buildingX ?? 0, opts.buildingY ?? 0)
       ?.buildingType;
     if (type) {
+      if (type === "large_retail" && retailShowroomCarpet(opts)) return "carpet";
       return FOOTSTEP_INTERIOR_BY_BUILDING[type] ?? FOOTSTEP_DEFAULT_SURFACE;
     }
     return FOOTSTEP_DEFAULT_SURFACE;

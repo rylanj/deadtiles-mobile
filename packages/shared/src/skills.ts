@@ -28,6 +28,7 @@ export const SUB_SKILLS_BY_PARENT = {
     "scavenging",
     "stealth",
     "cooking",
+    "lockpicking",
   ] as const,
   intelligence: ["medicine", "reading"] as const,
   charisma: ["bartering", "persuasion"] as const,
@@ -71,6 +72,7 @@ export const SUB_SKILL_LABELS: Record<SubSkillId, string> = {
   scavenging: "Scavenging",
   stealth: "Stealth",
   cooking: "Cooking",
+  lockpicking: "Lockpicking",
   medicine: "Medicine",
   reading: "Reading",
   bartering: "Bartering",
@@ -208,6 +210,34 @@ export function effectiveSubLevel(
   const parentLevel = getParentLevel(state, parentId);
   const subLevel = getSubLevel(state, subId);
   return Math.min(subLevel, parentLevel);
+}
+
+/** Stored progress plus temporary XP. Does not change the saved skill. */
+export function skillProgressWithBonusXp(
+  progress: SkillProgress,
+  bonusXp: number,
+): SkillProgress {
+  const bonus = Math.floor(bonusXp);
+  if (!(bonus > 0)) return { level: progress.level, xp: progress.xp };
+  return applyXpToProgress(progress, bonus);
+}
+
+/**
+ * Sub level after temporary XP (jewelry). The real level stays parent-capped.
+ * Bonus XP can raise Bartering and Persuasion above Charisma until it comes off.
+ */
+export function buffedSubSkillLevel(
+  state: PlayerSkillsState,
+  subId: SubSkillId,
+  bonusXp: number,
+): number {
+  const real = effectiveSubLevel(state, subId);
+  const bonus = Math.floor(bonusXp);
+  if (!(bonus > 0)) return real;
+  const parentId = parentOfSub(subId);
+  if (!parentId) return real;
+  const sub = state[parentId]?.subs?.[subId] ?? emptySkillProgress();
+  return skillProgressWithBonusXp(sub, bonus).level;
 }
 
 function applyXpToProgress(

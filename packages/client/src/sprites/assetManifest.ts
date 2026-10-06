@@ -10,6 +10,8 @@ import {
   BEAR_DIE_FRAMES,
   CROW_FLY_FRAMES,
   CROW_DIE_FRAMES,
+  RABBIT_WALK_FRAMES,
+  RABBIT_DIE_FRAMES,
   ZOMBIE_WALK_FRAMES,
   zombieHasCrawlVariant,
   zombieDieFrameCount,
@@ -45,7 +47,8 @@ export type EntityPackId =
   | "traderguard"
   | "coywolf"
   | "bear"
-  | "crow";
+  | "crow"
+  | "rabbit";
 
 /** Packs that are not entities but still benefit from atlasing. */
 export type ExtraPackId = "furniture";
@@ -158,6 +161,27 @@ function scheduleCrowPack(track: TrackFn) {
       );
     }
     track(`crow-skinned-${dir}`, `Crow1/Skinned/Crow1_Skinned_${dir}.png`);
+  }
+}
+
+function scheduleRabbitPack(track: TrackFn) {
+  for (const dir of DIRECTION_LABELS) {
+    track(`rabbit-idle-${dir}`, `Rabbit1/Idle/Rabbit1_Idle_${dir}.png`);
+    for (let f = 1; f <= RABBIT_WALK_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `rabbit-walk-${dir}-${tag}`,
+        `Rabbit1/Walk/Rabbit1_Walk_${dir}_${tag}.png`,
+      );
+    }
+    for (let f = 1; f <= RABBIT_DIE_FRAMES; f++) {
+      const tag = animFrameTag(f);
+      track(
+        `rabbit-die-${dir}-${tag}`,
+        `Rabbit1/Die/Rabbit1_Die_${dir}_${tag}.png`,
+      );
+    }
+    track(`rabbit-skinned-${dir}`, `Rabbit1/Skinned/Rabbit1_Skinned_${dir}.png`);
   }
 }
 
@@ -555,6 +579,8 @@ export function schedulePackTextures(id: PackId, track: TrackFn) {
     scheduleBearPack(track);
   } else if (id === "crow") {
     scheduleCrowPack(track);
+  } else if (id === "rabbit") {
+    scheduleRabbitPack(track);
   }
 }
 
@@ -574,7 +600,7 @@ export function allPackIds(): PackId[] {
   }
   for (let s = 1; s <= 4; s++) ids.push(`redman-${s}`);
   for (let s = 1; s <= 3; s++) ids.push(`player-${s}`);
-  ids.push("traderman", "traderguard", "coywolf", "bear", "crow", "furniture");
+  ids.push("traderman", "traderguard", "coywolf", "bear", "crow", "rabbit", "furniture");
   return ids;
 }
 

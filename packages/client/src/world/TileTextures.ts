@@ -18,6 +18,7 @@ const GROUND_TEXTURE_KEYS = [
   "tile-hospital",
   "tile-motel",
   "tile-office",
+  "tile-retail",
 ] as const;
 
 const GROUND_SOURCE_SUFFIX = "__source";
@@ -151,7 +152,7 @@ function canvasHasOpaquePixels(canvas: HTMLCanvasElement): boolean {
  * Bake a ground tile diamond.
  *
  * Square interior floors (`tile-wood`, `tile-ground-tiles`, `tile-hospital`,
- * `tile-motel`, `tile-office`, `tile-barracks`) map the PNG onto the iso diamond so PNG top → NW–NE edge
+ * `tile-motel`, `tile-office`, `tile-retail`, `tile-barracks`) map the PNG onto the iso diamond so PNG top → NW–NE edge
  * (isometric northeast), not screen-up:
  *   top-left  → NW (top vertex)
  *   top-right → NE (right vertex)
@@ -191,6 +192,7 @@ function bakeDiamondCanvas(
       baseKey === "tile-hospital" ||
       baseKey === "tile-motel" ||
       baseKey === "tile-office" ||
+      baseKey === "tile-retail" ||
       baseKey === "tile-barracks") &&
     isSquareSource(srcW, srcH);
   if (isoMapSquare) {
@@ -252,6 +254,49 @@ function stampDisplayDiamondsInChunk(
   }
 }
 
+/**
+ * Laminate repeats in world space, so a plank continues across the diamond
+ * edge instead of restarting. The bleed samples the neighbour's continuation,
+ * which keeps the join from looking stepped.
+ */
+function stampContinuousFloor(
+  ctx: CanvasRenderingContext2D,
+  originX: number,
+  originY: number,
+  tileCoords: readonly { x: number; y: number }[],
+  source: HTMLCanvasElement,
+) {
+  const srcW = source.width;
+  const srcH = source.height;
+  if (srcW <= 0 || srcH <= 0) return;
+  const hwTile = TILE_WIDTH / 2;
+  const hhTile = TILE_HEIGHT / 2;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  for (const { x, y } of tileCoords) {
+    const iso = cartesianToIso(x + 0.5, y + 0.5);
+    const cx = iso.x - originX;
+    const cy = iso.y - originY;
+    ctx.save();
+    clipIsoGroundDiamondAt(ctx, cx, cy);
+    ctx.translate(cx, cy);
+    ctx.transform(
+      hwTile / srcW,
+      hhTile / srcW,
+      -hwTile / srcH,
+      hhTile / srcH,
+      0,
+      -hhTile,
+    );
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        ctx.drawImage(source, ox * srcW, oy * srcH);
+      }
+    }
+    ctx.restore();
+  }
+}
+
 function ensureDisplayGroundTexture(
   scene: Phaser.Scene,
   baseKey: string,
@@ -285,6 +330,7 @@ export function renderGroundChunkCanvas(
   scene: Phaser.Scene,
   baseKey: string,
   tileCoords: readonly { x: number; y: number }[],
+  overlay?: { baseKey: string; tiles: readonly { x: number; y: number }[] },
 ): {
   canvas: HTMLCanvasElement;
   originX: number;
@@ -292,11 +338,31 @@ export function renderGroundChunkCanvas(
   width: number;
   height: number;
 } | null {
-  if (tileCoords.length === 0) return null;
+  let overlayTiles = overlay?.tiles ?? [];
+  if (tileCoords.length === 0 && overlayTiles.length === 0) return null;
+
+  const retailSource =
+    baseKey === "tile-retail" ? getGroundSource(scene, baseKey) : null;
 
   ensureDisplayDiamondCached(baseKey, scene);
-  const display = getDisplayDiamond(baseKey);
-  if (!display) return null;
+  const display = retailSource ? null : getDisplayDiamond(baseKey);
+  if (tileCoords.length > 0 && !retailSource && !display) return null;
+
+  const overlayRetail =
+    overlay && overlay.baseKey === "tile-retail"
+      ? getGroundSource(scene, overlay.baseKey)
+      : null;
+  if (overlay && overlay.baseKey !== "tile-retail" && overlayTiles.length > 0) {
+    ensureDisplayDiamondCached(overlay.baseKey, scene);
+  }
+  const overlayDisplay =
+    overlay && overlay.baseKey !== "tile-retail"
+      ? getDisplayDiamond(overlay.baseKey)
+      : null;
+  if (overlayTiles.length > 0 && !overlayRetail && !overlayDisplay) {
+    overlayTiles = [];
+  }
+  if (tileCoords.length === 0 && overlayTiles.length === 0) return null;
 
   const hw = (TILE_WIDTH + TILE_DISPLAY_BLEED) / 2;
   const hh = (TILE_HEIGHT + TILE_DISPLAY_BLEED) / 2;
@@ -305,7 +371,9 @@ export function renderGroundChunkCanvas(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const { x, y } of tileCoords) {
+  const boundCoords =
+    overlayTiles.length > 0 ? [...tileCoords, ...overlayTiles] : tileCoords;
+  for (const { x, y } of boundCoords) {
     const iso = cartesianToIso(x + 0.5, y + 0.5);
     minX = Math.min(minX, iso.x - hw);
     minY = Math.min(minY, iso.y - hh);
@@ -327,7 +395,20 @@ export function renderGroundChunkCanvas(
 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  stampDisplayDiamondsInChunk(ctx, originX, originY, tileCoords, display);
+  if (tileCoords.length > 0) {
+    if (retailSource) {
+      stampContinuousFloor(ctx, originX, originY, tileCoords, retailSource.canvas);
+    } else if (display) {
+      stampDisplayDiamondsInChunk(ctx, originX, originY, tileCoords, display);
+    }
+  }
+  if (overlayTiles.length > 0) {
+    if (overlayRetail) {
+      stampContinuousFloor(ctx, originX, originY, overlayTiles, overlayRetail.canvas);
+    } else if (overlayDisplay) {
+      stampDisplayDiamondsInChunk(ctx, originX, originY, overlayTiles, overlayDisplay);
+    }
+  }
 
   return { canvas, originX, originY, width, height };
 }
@@ -422,9 +503,16 @@ export function createInteriorFloorImage(
   _buildingY: number,
   tileCoords: readonly { x: number; y: number }[],
   baseKey = "tile-wood",
+  overlay?: { baseKey: string; tiles: readonly { x: number; y: number }[] },
 ): Phaser.GameObjects.Image | null {
   const key = pickGroundBaseKey(scene, baseKey);
-  const baked = renderGroundChunkCanvas(scene, key, tileCoords);
+  const overlayBake = overlay
+    ? {
+        baseKey: pickGroundBaseKey(scene, overlay.baseKey),
+        tiles: overlay.tiles,
+      }
+    : undefined;
+  const baked = renderGroundChunkCanvas(scene, key, tileCoords, overlayBake);
   if (!baked) return null;
 
   const texKey = INTERIOR_FLOOR_ACTIVE_KEY;

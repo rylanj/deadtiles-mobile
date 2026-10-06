@@ -23,9 +23,9 @@ export const RADIO_SLOT_COUNT = 1;
 export const MAP_SLOT_COUNT = 1;
 /** Watch cell. The dialog shows it on the gear row beside the backpack. */
 export const WATCH_SLOT_INDEX = CLOTHING_SLOT_INDEX + 1;
-/** Radio cell. The dialog shows it on the weapon row, separated from the guns. */
+/** Radio cell. The dialog shows it on the gear row after the watch. */
 export const RADIO_SLOT_INDEX = CLOTHING_SLOT_INDEX + 2;
-/** Map cell sits after the watch on the gear row. */
+/** Map cell sits on the second gear row. */
 export const MAP_SLOT_INDEX = CLOTHING_SLOT_INDEX + 3;
 export const WATCH_ITEM_ID = "watch";
 export const RADIO_ITEM_ID = "handheld_radio";
@@ -62,6 +62,15 @@ export const BACKPACK_HIKING_SLOTS = 28;
  * still has items past a reduced pack keeps those cells until they are emptied.
  */
 export const MAX_BACKPACK_STORAGE_SLOTS = 32;
+/**
+ * Armor, neck, and both hands sit after the full backpack range so older
+ * saves keep clothing, radio, map, and pack indices.
+ */
+export const ARMOR_SLOT_INDEX =
+  BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS;
+export const NECK_SLOT_INDEX = ARMOR_SLOT_INDEX + 1;
+export const LEFT_HAND_SLOT_INDEX = ARMOR_SLOT_INDEX + 2;
+export const RIGHT_HAND_SLOT_INDEX = ARMOR_SLOT_INDEX + 3;
 export const BACKPACK_FANNY_ID = "backpack_fanny";
 export const BACKPACK_UTILITY_ID = "backpack_utility";
 export const BACKPACK_SMALL_ID = "backpack_small";
@@ -70,8 +79,7 @@ export const BACKPACK_LEATHER_ID = "backpack_leather";
 export const BACKPACK_HIKING_ID = "backpack_hiking";
 /** Previous black pack. Loads as a Small Backpack. */
 export const LEGACY_BACKPACK_BLACK_ID = "backpack_black";
-export const MAX_INVENTORY_SLOTS =
-  BACKPACK_STORAGE_START + MAX_BACKPACK_STORAGE_SLOTS;
+export const MAX_INVENTORY_SLOTS = RIGHT_HAND_SLOT_INDEX + 1;
 /** @deprecated Use WEAPON_SLOT_COUNT — kept for transitional imports. */
 export const HOTBAR_SLOT_COUNT = WEAPON_SLOT_COUNT;
 /** Fixed slot grid for looted container contents (fits a full player inventory). */
@@ -250,6 +258,7 @@ export const SKILL_MAGAZINES = [
   { itemId: "magazine_reading", name: "The Book Club Magazine", skill: "reading", also: [] },
   { itemId: "magazine_persuasion", name: "Love Life Magazine", skill: "persuasion", also: [] },
   { itemId: "magazine_bartering", name: "Negotiation Power Magazine", skill: "bartering", also: [] },
+  { itemId: "magazine_lockpicking", name: "The Locksmith Magazine", skill: "lockpicking", also: ["stealth"] },
 ] as const satisfies readonly {
   itemId: string;
   name: string;
@@ -531,6 +540,7 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "banknote", name: "Banknote", category: "junk", stackable: true, weight: 0.01 },
   { id: "dogtag", name: "Dog Tag", category: "junk", stackable: true, weight: 0.02 },
   { id: "lighter", name: "Lighter", category: "junk", stackable: false, weight: 0.05, maxDurability: 20 },
+  { id: "lockpick", name: "Lockpick", category: "junk", stackable: false, weight: 0.05, maxDurability: 5 },
   { id: "blue_cigarettes", name: "Cigarettes (Blue)", category: "junk", stackable: true, weight: 0.05 },
   { id: "gold_chain", name: "Gold Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "gold_earrings", name: "Gold Earrings", category: "junk", stackable: true, weight: 0.05 },
@@ -552,6 +562,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   {
     id: "wagon_note",
     name: "Caravan Note",
+    category: "junk",
+    stackable: false,
+    weight: 0.02,
+  },
+  {
+    id: "supply_list",
+    name: "Supply List",
     category: "junk",
     stackable: false,
     weight: 0.02,
@@ -817,12 +834,15 @@ export const CLARKS_EARRINGS_ITEM_ID = "clarks_earrings";
 export const CARAVAN_MANIFEST_ITEM_ID = "caravan_manifest";
 /** Last word from a caravan that stopped answering the radio. Not for sale. */
 export const WAGON_NOTE_ITEM_ID = "wagon_note";
+/** Militia supply order left off the radio. Kevin wants the page. Not for sale. */
+export const SUPPLY_LIST_ITEM_ID = "supply_list";
 
 export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
   return (
     itemId === CLARKS_EARRINGS_ITEM_ID ||
     itemId === CARAVAN_MANIFEST_ITEM_ID ||
-    itemId === WAGON_NOTE_ITEM_ID
+    itemId === WAGON_NOTE_ITEM_ID ||
+    itemId === SUPPLY_LIST_ITEM_ID
   );
 }
 
@@ -911,6 +931,16 @@ export function maxStackForItem(itemId: string): number {
     return MAX_BULK_ITEM_STACK;
   }
   return MAX_ITEM_STACK;
+}
+
+/** How many of `itemId` fit in this slot. Neck and hands hold one piece. */
+export function slotStackLimit(itemId: string, slotIndex: number): number {
+  if (isJewelrySlot(slotIndex)) {
+    if (isNeckSlot(slotIndex) && isNeckItem(itemId)) return 1;
+    if (isHandSlot(slotIndex) && isRingItem(itemId)) return 1;
+    return 0;
+  }
+  return maxStackForItem(itemId);
 }
 
 /** Absolute max use-count durability, or null if the item does not wear. */
@@ -1109,13 +1139,16 @@ export function equippedBackpackStorageCount(inventory: Inventory): number {
   return backpackStorageCount(worn.id);
 }
 
-/** Array length that includes the backpack slot and the worn pack's storage. */
+/**
+ * Array length that includes worn backpack storage and the gear slots
+ * (armor, neck, hands) that sit after it.
+ */
 export function playerInventoryLength(backpackSlots: number): number {
   const pack = Math.max(
     0,
     Math.min(MAX_BACKPACK_STORAGE_SLOTS, Math.floor(backpackSlots) || 0),
   );
-  return BACKPACK_STORAGE_START + pack;
+  return Math.max(BACKPACK_STORAGE_START + pack, MAX_INVENTORY_SLOTS);
 }
 
 /** Channel duration for Wear / Remove clothing. */
@@ -1159,6 +1192,68 @@ export function isRadioSlot(slotIndex: number): boolean {
 
 export function isMapSlot(slotIndex: number): boolean {
   return slotIndex === MAP_SLOT_INDEX;
+}
+
+export function isArmorSlot(slotIndex: number): boolean {
+  return slotIndex === ARMOR_SLOT_INDEX;
+}
+
+export function isNeckSlot(slotIndex: number): boolean {
+  return slotIndex === NECK_SLOT_INDEX;
+}
+
+export function isLeftHandSlot(slotIndex: number): boolean {
+  return slotIndex === LEFT_HAND_SLOT_INDEX;
+}
+
+export function isRightHandSlot(slotIndex: number): boolean {
+  return slotIndex === RIGHT_HAND_SLOT_INDEX;
+}
+
+export function isHandSlot(slotIndex: number): boolean {
+  return isLeftHandSlot(slotIndex) || isRightHandSlot(slotIndex);
+}
+
+export function isJewelrySlot(slotIndex: number): boolean {
+  return isNeckSlot(slotIndex) || isHandSlot(slotIndex);
+}
+
+const NECK_ITEM_IDS = new Set(["gold_chain", "silver_chain", "dogtag"]);
+const RING_ITEM_IDS = new Set(["gold_ring", "silver_ring"]);
+
+export function isNeckItem(itemId: string): boolean {
+  return NECK_ITEM_IDS.has(itemId);
+}
+
+export function isRingItem(itemId: string): boolean {
+  return RING_ITEM_IDS.has(itemId);
+}
+
+/**
+ * Temporary Bartering and Persuasion XP while this piece is worn.
+ * Dog tags fit the neck and grant none.
+ */
+export const JEWELRY_SKILL_XP: Readonly<Record<string, number>> = {
+  gold_chain: 1000,
+  silver_chain: 500,
+  gold_ring: 300,
+  silver_ring: 150,
+};
+
+export function jewelrySkillXpForItem(itemId: string): number {
+  return JEWELRY_SKILL_XP[itemId] ?? 0;
+}
+
+/** Combined jewelry XP from the neck and both hands. One piece per slot. */
+export function equippedJewelrySkillXp(inventory: Inventory): number {
+  let xp = 0;
+  const neck = inventory[NECK_SLOT_INDEX];
+  if (neck && isNeckItem(neck.id)) xp += jewelrySkillXpForItem(neck.id);
+  const left = inventory[LEFT_HAND_SLOT_INDEX];
+  if (left && isRingItem(left.id)) xp += jewelrySkillXpForItem(left.id);
+  const right = inventory[RIGHT_HAND_SLOT_INDEX];
+  if (right && isRingItem(right.id)) xp += jewelrySkillXpForItem(right.id);
+  return xp;
 }
 
 export function isBackpackSlot(slotIndex: number): boolean {
@@ -1264,6 +1359,7 @@ function slotUnlocked(slotIndex: number, access: SlotAccess): boolean {
     return slotIndex < BASE_INVENTORY_SLOTS + access.extraPockets;
   }
   if (slotIndex === BACKPACK_SLOT_INDEX) return true;
+  if (isArmorSlot(slotIndex) || isJewelrySlot(slotIndex)) return true;
   return (
     slotIndex >= BACKPACK_STORAGE_START &&
     slotIndex < BACKPACK_STORAGE_START + access.backpackSlots
@@ -1286,6 +1382,9 @@ export function itemFitsInSlot(
   if (isWatchSlot(slotIndex)) return isWatchItem(itemId);
   if (isRadioSlot(slotIndex)) return isRadioItem(itemId);
   if (isMapSlot(slotIndex)) return isMapItem(itemId);
+  if (isArmorSlot(slotIndex)) return false;
+  if (isNeckSlot(slotIndex)) return isNeckItem(itemId);
+  if (isHandSlot(slotIndex)) return isRingItem(itemId);
   if (isBackpackSlot(slotIndex)) return isBackpackItem(itemId);
   // Long guns skip pockets. A worn backpack can still carry one.
   if (isHotbarOnlyItem(itemId)) return isBackpackStorageIndex(slotIndex);
@@ -1745,11 +1844,13 @@ function remainingAddCapacity(
   let capacity = 0;
   for (let i = 0; i < inventory.length; i++) {
     if (!itemFitsInSlot(itemId, i, access)) continue;
+    const cap = slotStackLimit(itemId, i);
+    if (cap <= 0) continue;
     const slot = inventory[i];
     if (slot?.id === itemId) {
-      capacity += maxStack - slot.quantity;
+      capacity += cap - slot.quantity;
     } else if (!slot) {
-      capacity += maxStack;
+      capacity += cap;
     }
   }
   return capacity;
@@ -1812,9 +1913,11 @@ export function addToInventory(
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
     if (!itemFitsInSlot(itemId, i, access)) continue;
+    const cap = slotStackLimit(itemId, i);
+    if (cap <= 0) continue;
     const slot = next[i];
     if (!slot || slot.id !== itemId) continue;
-    const room = maxStack - slot.quantity;
+    const room = cap - slot.quantity;
     if (room <= 0) continue;
     const add = Math.min(room, remaining);
     slot.quantity += add;
@@ -1823,8 +1926,10 @@ export function addToInventory(
 
   for (let i = 0; i < next.length && remaining > 0; i++) {
     if (!itemFitsInSlot(itemId, i, access)) continue;
+    const cap = slotStackLimit(itemId, i);
+    if (cap <= 0) continue;
     if (next[i]) continue;
-    const add = Math.min(maxStack, remaining);
+    const add = Math.min(cap, remaining);
     next[i] = { id: itemId, quantity: add };
     remaining -= add;
   }
@@ -1842,6 +1947,7 @@ export function addEntryToInventory(
   const access = inventorySlotAccess(inventory, extraPockets);
   for (let i = 0; i < inventory.length; i++) {
     if (inventory[i] || !itemFitsInSlot(entry.id, i, access)) continue;
+    if (isJewelrySlot(i) && entry.quantity !== 1) continue;
     const next = cloneInventory(inventory);
     next[i] = entry;
     return next;
@@ -2082,6 +2188,21 @@ export function removeFromInventorySlot(
   return next;
 }
 
+/**
+ * Neck and hands hold one piece. A stack dropped on an empty jewelry slot
+ * leaves the rest behind. A stack cannot swap onto a piece that is already worn.
+ */
+function placeOneJewelryPiece(
+  from: InventoryEntry,
+  toSlot: number,
+): InventoryEntry | null {
+  if (!isJewelrySlot(toSlot) || from.quantity <= 1) return null;
+  const piece = cloneInventoryEntry(from);
+  piece.quantity = 1;
+  from.quantity -= 1;
+  return piece;
+}
+
 /** Move or merge a stack into another slot; swap when merge is not possible. */
 export function moveInventorySlot(
   inventory: Inventory,
@@ -2117,16 +2238,25 @@ export function moveInventorySlot(
   const to = next[toSlot];
   if (to && loadedBackpackStowBlocked(to, fromSlot)) return inventory;
   if (!to) {
-    next[toSlot] = from;
-    next[fromSlot] = null;
+    const piece = placeOneJewelryPiece(from, toSlot);
+    next[toSlot] = piece ?? from;
+    if (!piece) next[fromSlot] = null;
     return finishPackMove(inventory, next, magWork, magazines);
   }
 
   // Swaps must also respect weapon-slot / pocket size rules for both items.
   if (!itemFitsInSlot(to.id, fromSlot, access)) return inventory;
+  if (isJewelrySlot(toSlot) && (from.quantity > 1 || from.id === to.id)) {
+    return inventory;
+  }
+  // A worn piece can merge into a pocket stack. It cannot swap with one,
+  // or the whole stack would land in the jewelry slot.
+  if (isJewelrySlot(fromSlot) && to.quantity > 1 && from.id !== to.id) {
+    return inventory;
+  }
 
-  if (from.id === to.id && maxStackForItem(from.id) > 1) {
-    const maxStack = maxStackForItem(from.id);
+  if (from.id === to.id && slotStackLimit(from.id, toSlot) > 1) {
+    const maxStack = slotStackLimit(from.id, toSlot);
     const room = maxStack - to.quantity;
     if (room > 0) {
       const moveQty = Math.min(room, from.quantity);
@@ -2176,8 +2306,8 @@ export function canSplitInventoryStackHalf(
   }
 
   const half = shiftSplitQuantity(from.quantity);
-  const maxStack = maxStackForItem(from.id);
-  return half >= 1 && maxStack > 1 && to.quantity + half <= maxStack;
+  const cap = slotStackLimit(from.id, toSlot);
+  return half >= 1 && cap > 1 && to.quantity + half <= cap;
 }
 
 /**
@@ -2390,6 +2520,7 @@ const CATEGORY_ITEMS: Record<string, string[]> = {
   junk: [
     "banknote",
     "lighter",
+    "lockpick",
     "blue_cigarettes",
     "white_tshirt",
     "black_tshirt",
@@ -2676,6 +2807,8 @@ const CONTAINER_CATEGORIES: Record<string, string[]> = {
   retailcase1: ["junk"],
   /** Watch display. The watch roll is dedicated below. */
   retailcase2: ["junk"],
+  /** Department-store register. Same stock and cash drawer as Checkout1. */
+  retailcheckout1: ["consumables", "junk"],
 };
 
 const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: number }> = {
@@ -2728,6 +2861,7 @@ const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: 
   m4_receiver: { chance: 0.002, minQty: 1, maxQty: 1 },
   banknote: { chance: 0.05, minQty: 1, maxQty: 20 },
   lighter: { chance: 0.04, minQty: 1, maxQty: 1 },
+  lockpick: { chance: 0.01, minQty: 1, maxQty: 1 },
   blue_cigarettes: { chance: 0.1, minQty: 1, maxQty: 1 },
   white_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
   black_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
@@ -2981,8 +3115,8 @@ export function generateSearchLoot(
     if (pick) results.push({ id: pick.itemId, quantity: 1 });
   }
 
-  // Checkout1: cash drawer + rare sidearm (+ matching ammo) on top of loot.
-  if (objectType === "checkout") {
+  // Checkout1 / RetailCheckout1: cash drawer + rare sidearm (+ matching ammo).
+  if (objectType === "checkout" || objectType === "retailcheckout1") {
     if (Math.random() < Math.min(1, 0.05 * scale)) {
       results.push({
         id: "banknote",
@@ -3375,6 +3509,10 @@ function normalizeInventorySlots(parsed: unknown[]): Inventory {
       if (isRetiredPocketSlot(i)) {
         slots[i] = normalized;
         continue;
+      }
+      if (isJewelrySlot(i) && normalized.quantity > 1) {
+        overflow.push(makeInventoryEntry(normalized.id, normalized.quantity - 1));
+        normalized.quantity = 1;
       }
       if (
         !itemFitsInSlot(normalized.id, i, {
@@ -4038,14 +4176,19 @@ export function takeFromContainerSlot(
     return { container: nextContainer, playerInventory: committed };
   };
   if (!to) {
-    nextPlayer[toSlot] = from;
-    nextContainer[fromSlot] = null;
+    const piece = placeOneJewelryPiece(from, toSlot);
+    nextPlayer[toSlot] = piece ?? from;
+    if (!piece) nextContainer[fromSlot] = null;
     return packed(nextPlayer);
   }
 
+  if (isJewelrySlot(toSlot) && (from.quantity > 1 || from.id === to.id)) {
+    return null;
+  }
+
   // Swap only when the player item could go back into this container slot (always true).
-  if (from.id === to.id && maxStackForItem(from.id) > 1) {
-    const maxStack = maxStackForItem(from.id);
+  if (from.id === to.id && slotStackLimit(from.id, toSlot) > 1) {
+    const maxStack = slotStackLimit(from.id, toSlot);
     const room = maxStack - to.quantity;
     if (room > 0) {
       const moveQty = Math.min(room, from.quantity);

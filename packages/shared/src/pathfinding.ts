@@ -1,4 +1,4 @@
-import { getBuildingAt, isWallTile, buildingEntryApproachCandidates, buildingEntranceSpan } from "./worldgen.js";
+import { getBuildingAt, isWallTile, buildingEntryApproachCandidates, buildingEntranceRun } from "./worldgen.js";
 import { isInWorldBounds, type WorldBounds } from "./worldBounds.js";
 import {
   canMoveInInterior,
@@ -399,8 +399,7 @@ export function planBuildingEntryPath(
   const bld = getBuildingAt(clickTX, clickTY);
   if (!bld) return null;
 
-  const { entranceX, entranceY } = bld;
-  const span = buildingEntranceSpan(bld);
+  const run = buildingEntranceRun(bld);
   const approachCandidates = buildingEntryApproachCandidates(bld);
 
   let bestApproach: { x: number; y: number } | null = null;
@@ -426,12 +425,11 @@ export function planBuildingEntryPath(
   );
   if (approachPath === null) return null;
 
-  // Step onto the first doorway tile; span>1 doors still enter from the start cell.
-  const faceIsSE = entranceX === bld.ox + bld.w - 1;
-  const mid = (span - 1) * 0.5;
+  // Step onto the middle of the doorway.
+  const mid = (run.span - 1) * 0.5;
   approachPath.push({
-    x: entranceX + 0.5 + (faceIsSE ? 0 : mid),
-    y: entranceY + 0.5 + (faceIsSE ? mid : 0),
+    x: run.x + 0.5 + (run.face === "SE" ? 0 : mid),
+    y: run.y + 0.5 + (run.face === "SE" ? mid : 0),
   });
   return approachPath;
 }
