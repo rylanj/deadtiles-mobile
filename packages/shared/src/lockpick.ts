@@ -12,7 +12,6 @@ import {
   officeManagerRoomForBuilding,
   retailManagerRoomForBuilding,
 } from "./interior.js";
-import { mulberry32, xmur3 } from "./worldgen.js";
 
 export const LOCKPICK_ITEM_ID = "lockpick";
 
@@ -30,9 +29,6 @@ export const LOCKPICK_CONSUME_AT_100 = 0.5;
 /** Tiles of zombie alert when a pick starts, at stealth level 0 and level 100. */
 export const LOCKPICK_NOISE_AT_0 = 10;
 export const LOCKPICK_NOISE_AT_100 = 5;
-
-/** Manager offices in office buildings and department stores. */
-export const MANAGER_OFFICE_LOCK_CHANCE = 0.75;
 
 export type LockDifficulty = "easy" | "medium" | "hard";
 
@@ -79,11 +75,12 @@ export function findUsableLockpickSlot(inventory: Inventory): number {
 }
 
 /**
- * Deterministic per building so the client, the server, and a later
- * interior rebuild agree on whether this office spawned locked.
+ * Every manager office in an office building or department store starts
+ * locked. Coordinates stay on the signature so callers and a later interior
+ * rebuild share one check.
  */
-export function managerOfficeStartsLocked(bx: number, by: number): boolean {
-  return mulberry32(xmur3(`mgrlock:${bx},${by}`)())() < MANAGER_OFFICE_LOCK_CHANCE;
+export function managerOfficeStartsLocked(_bx: number, _by: number): boolean {
+  return true;
 }
 
 /** Manager-office door tile when this building spawned that door locked. */

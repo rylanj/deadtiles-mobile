@@ -3,6 +3,7 @@ import {
   ASHEN_MILITIA_TASK_WINDOW_MS,
   ASHEN_REP_START,
   ASHEN_TRADER_DIALOG_LINES,
+  SAFE_DEPOSIT_COST,
   ASHEN_TRADER_QUESTS,
   ASHEN_TRADERS_FACTION,
   isAshenMarketTraderId,
@@ -42,6 +43,10 @@ export type AshenTraderDialogUIHandlers = {
   onRequestTrade: (traderId: string) => void;
   /** Player chose the Birchport player board with the market trader. */
   onRequestBoard: (traderId: string) => void;
+  /** Player already paid for a safe deposit box and wants it open. */
+  onRequestDeposit: (traderId: string) => void;
+  /** Player is paying the one-time safe deposit fee. */
+  onPayDeposit: (traderId: string) => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
 };
@@ -80,6 +85,7 @@ export class AshenTraderDialogUI {
   private questsJson = "";
   private inventoryJson = "[]";
   private extraPockets = 0;
+  private safeDepositRented = false;
   private expandedQuestId: string | null = null;
   private denyQuestId = "";
   private denyReason = "";
@@ -206,6 +212,7 @@ export class AshenTraderDialogUI {
     inventoryJson?: string;
     questsJson?: string;
     extraPockets?: number;
+    safeDepositRented?: boolean;
   }) {
     this.npcId = opts.npcId;
     this.npcKind = opts.npcKind;
@@ -223,6 +230,7 @@ export class AshenTraderDialogUI {
     this.inventoryJson = opts.inventoryJson ?? "[]";
     this.questsJson = opts.questsJson ?? "";
     this.extraPockets = opts.extraPockets ?? 0;
+    this.safeDepositRented = !!opts.safeDepositRented;
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
@@ -279,8 +287,8 @@ export class AshenTraderDialogUI {
     this.speechListEl.replaceChildren();
     for (const line of ASHEN_TRADER_DIALOG_LINES) {
       if (
-        line.action === "board" &&
-        (!this.isTraderMan() || !isAshenMarketTraderId(this.npcId))
+        (line.action === "board" || line.action === "deposit") &&
+        !this.isMarketTrader()
       ) {
         continue;
       }
@@ -296,10 +304,16 @@ export class AshenTraderDialogUI {
           ? "backpack"
           : this.isTraderMan() && line.action === "board"
             ? "banknote"
-            : line.id === "jobs"
-              ? "journal"
-              : undefined;
-      fillSpeechButton(btn, line.player, iconId);
+            : this.isTraderMan() && line.action === "deposit"
+              ? "safe"
+              : line.id === "jobs"
+                ? "journal"
+                : undefined;
+      const speech =
+        line.action === "deposit" && this.safeDepositRented && line.playerRented
+          ? line.playerRented
+          : line.player;
+      fillSpeechButton(btn, speech, iconId);
       btn.addEventListener("click", () => {
         this.activeLineId = line.id;
         this.render();
@@ -313,6 +327,16 @@ export class AshenTraderDialogUI {
           const traderId = this.npcId;
           this.handlers.onClose();
           this.handlers.onRequestBoard(traderId);
+        }
+        if (
+          line.action === "deposit" &&
+          this.isMarketTrader() &&
+          this.safeDepositRented &&
+          this.npcId
+        ) {
+          const traderId = this.npcId;
+          this.handlers.onClose();
+          this.handlers.onRequestDeposit(traderId);
         }
       });
       this.speechListEl.appendChild(btn);
@@ -341,6 +365,59 @@ export class AshenTraderDialogUI {
     if (this.isMarketTrader() && active.id === "jobs") {
       this.appendJobList();
     }
+    if (
+      this.isMarketTrader() &&
+      active.id === "deposit" &&
+      !this.safeDepositRented
+    ) {
+      this.appendSafeDepositOffer();
+    }
+  }
+
+  private appendSafeDepositOffer() {
+    const banknotes = this.itemCount("banknote");
+    const canPay = banknotes >= SAFE_DEPOSIT_COST;
+    const section = document.createElement("div");
+    section.className = "craft-recipe craft-recipe--expanded";
+    if (canPay) section.classList.add("craft-recipe--ready");
+
+    const details = document.createElement("div");
+    details.className = "craft-recipe-details";
+    const costTitle = document.createElement("div");
+    costTitle.className = "red-dialog-task-heading";
+    costTitle.textContent = "Safe deposit box";
+    details.appendChild(costTitle);
+
+    const costRow = document.createElement("div");
+    costRow.className = "red-dialog-task-row";
+    costRow.appendChild(
+      makeQuestCell({
+        itemId: "banknote",
+        qtyLabel: `×${SAFE_DEPOSIT_COST}`,
+        ariaLabel: `${SAFE_DEPOSIT_COST} banknotes`,
+      }),
+    );
+    details.appendChild(costRow);
+
+    if (canPay) {
+      const payBtn = document.createElement("button");
+      payBtn.type = "button";
+      payBtn.className = "red-dialog-complete-btn";
+      payBtn.textContent = `Pay $${SAFE_DEPOSIT_COST}`;
+      payBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.npcId) this.handlers.onPayDeposit(this.npcId);
+      });
+      details.appendChild(payBtn);
+    } else {
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent = `Need $${SAFE_DEPOSIT_COST} (you have $${banknotes})`;
+      details.appendChild(hint);
+    }
+
+    section.appendChild(details);
+    this.responseEl.appendChild(section);
   }
 
   private appendJobList() {

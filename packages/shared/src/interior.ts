@@ -143,6 +143,14 @@ export const SEARCH_RANGE = 1.5;
  */
 export const ASHEN_MARKET_TALK_RANGE = 2.75;
 export const SEARCH_DURATION_MS = 5000;
+/** Floor safe in a manager's office. Cracking is this long, then a normal search. */
+export const SAFE_OBJECT_TYPE = "safe1" as const;
+export const SAFE_CRACK_DURATION_MS = 60_000;
+export const SAFE_OPEN_NOTE = "The safe is open.";
+
+export function furnitureNeedsCrack(objectType: string): boolean {
+  return objectType === SAFE_OBJECT_TYPE;
+}
 
 /** Facing W, NW, N — enter from the east (SE face). */
 export const BUILDING_ENTRY_FACINGS_SE = new Set([6, 7, 0]);
@@ -248,6 +256,8 @@ export const FURNITURE_TYPES = [
   "retailcase1",
   "retailcase2",
   "retailcheckout1",
+  /** Manager's office. Cracked, then searched. Placed by layout, never rolled. */
+  "safe1",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -334,6 +344,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   retailcase1: "Jewelry Case",
   retailcase2: "Watch Case",
   retailcheckout1: "Checkout",
+  safe1: "Safe",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -690,6 +701,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   retailcase1: "SE",
   retailcase2: "SE",
   retailcheckout1: "SE",
+  safe1: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -804,6 +816,7 @@ const BULLET_BLOCKING_FURNITURE = new Set([
   "retailshelf1",
   "retailshelf2",
   "retailshelf3",
+  "safe1",
 ]);
 
 export function furnitureBlocksBullets(objectType: string): boolean {
@@ -1285,6 +1298,8 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   retailcase1: 0,
   retailcase2: 0,
   retailcheckout1: 0,
+  /** Manager offices only. Placed by layout, never rolled. */
+  safe1: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -1900,6 +1915,29 @@ function activeHouseMantelTiles(
   return tiles;
 }
 
+/** Mantel placed before other house furniture. Included so a suitcase cannot wall it off. */
+function placedMantelFurniture(
+  bx: number,
+  by: number,
+  occupied: Set<string>,
+): SearchableObject | null {
+  const bld = getBuildingAt(bx, by);
+  if (!bld) return null;
+  const spot = houseMantelSpot(bld);
+  if (!spot || !occupied.has(`${spot.x},${spot.y}`)) return null;
+  return {
+    id: "",
+    kind: "furniture",
+    objectType: "mantel",
+    x: spot.x,
+    y: spot.y,
+    searched: false,
+    buildingX: bx,
+    buildingY: by,
+    facing: spot.facing,
+  };
+}
+
 function footprintTooCloseToMantel(
   x: number,
   y: number,
@@ -2424,17 +2462,34 @@ function placeGenericFurniture(
   }
 
   // Suitcase1 — up to 2 per house on free floor tiles (not on furniture or
-  // their loot approaches). Own approach must stay clear so it is searchable.
+  // their loot approaches). Own approach must stay clear, and the suitcase
+  // must not be the only path to another piece of furniture.
   const suitcaseFacings: FurnitureFacing[] = ["SE", "SW"];
+  const mantel = placedMantelFurniture(bx, by, occupied);
   for (let n = 0; n < 2; n++) {
     if (rng() >= FURNITURE_SPAWN_CHANCE.suitcase) continue;
+    const guarded = mantel ? [mantel, ...furnitures] : furnitures;
     const candidates: { x: number; y: number; facing: FurnitureFacing }[] = [];
     for (let fy = 0; fy < iH; fy++) {
       for (let fx = 0; fx < iW; fx++) {
         for (const facing of suitcaseFacings) {
-          if (canPlaceFurniture("suitcase", fx, fy, facing)) {
-            candidates.push({ x: fx, y: fy, facing });
+          if (!canPlaceFurniture("suitcase", fx, fy, facing)) continue;
+          if (
+            !suitcasePreservesFurnitureAccess(
+              bx,
+              by,
+              iW,
+              iH,
+              undefined,
+              guarded,
+              fx,
+              fy,
+              facing,
+            )
+          ) {
+            continue;
           }
+          candidates.push({ x: fx, y: fy, facing });
         }
       }
     }
@@ -2460,7 +2515,8 @@ function placeGenericFurniture(
 
 /**
  * Lockers1 and Bookshelf2 always on different walls (NE vs NW).
- * Lockers: 1–2 flush against their wall; bookshelves: 1–4 on the other.
+ * Every station gets at least 2 lockers and 2 bookshelves.
+ * Lockers stay at 2; bookshelves roll 2–4. Both sit flush on their wall.
  * SE → NW wall (x=0); SW → NE wall (y=0).
  */
 function placePoliceWallFurniture(
@@ -2634,21 +2690,37 @@ function placePoliceWallFurniture(
     return placed;
   };
 
+  /** Keep placing until `count` or the wall has no free slot left. */
+  const placeCount = (
+    objectType: string,
+    facing: FurnitureFacing,
+    count: number,
+  ): void => {
+    let placed = 0;
+    while (placed < count) {
+      const n = placeOnWall(objectType, facing, count - placed, 0);
+      if (n <= 0) break;
+      placed += n;
+    }
+  };
+
   // Assign each type to a different wall at random.
+  // The rolls stay so later furniture (desks, cooler, chairs) keeps its seed.
   const lockersOnNE = rng() < 0.5;
   const lockersFacing: FurnitureFacing = lockersOnNE ? "SW" : "SE";
   const shelfFacing: FurnitureFacing = lockersOnNE ? "SE" : "SW";
-  const lockerCount = 1 + Math.floor(rng() * 2); // 1–2
-  const shelfCount = 1 + Math.floor(rng() * 4); // 1–4
+  const lockerCount = Math.max(2, 1 + Math.floor(rng() * 2));
+  const shelfCount = Math.max(2, 1 + Math.floor(rng() * 4));
 
-  placeOnWall("lockers", lockersFacing, lockerCount, 0);
-  placeOnWall("bookshelf2", shelfFacing, shelfCount, 0);
+  placeCount("lockers", lockersFacing, lockerCount);
+  placeCount("bookshelf2", shelfFacing, shelfCount);
   return furnitures;
 }
 
 /**
  * Police bullpen: uniform Desk2 grid — 6, 8, or 10 desks in 2–3 rows.
- * At least 2 empty tiles between each desk. Keeps the entrance corridor clear.
+ * Every station gets at least 6. At least 2 empty tiles between each desk.
+ * Keeps the entrance corridor clear.
  */
 function placePoliceBullpen(
   bx: number,
@@ -2668,6 +2740,7 @@ function placePoliceBullpen(
   const colPitch = dw + gap;
   const rowPitch = dh + gap;
   const margin = 2;
+  const minDesks = 6;
   const deskCounts = [6, 8, 10] as const;
   const target = deskCounts[Math.floor(rng() * deskCounts.length)]!;
 
@@ -2785,6 +2858,17 @@ function placePoliceBullpen(
     const y = y0 + row * rowPitch;
     for (let col = 0; col < cols; col++) {
       placeDesk(x0 + col * colPitch, y);
+    }
+  }
+
+  // A door band can knock a desk out of the grid. Extend the same pitch
+  // until the station has 6, without sitting a desk in the aisle between them.
+  if (furnitures.length < minDesks) {
+    for (let row = 0; row < 6 && furnitures.length < minDesks; row++) {
+      const y = y0 + row * rowPitch;
+      for (let col = 0; col < 8 && furnitures.length < minDesks; col++) {
+        placeDesk(x0 + col * colPitch, y);
+      }
     }
   }
 
@@ -5214,6 +5298,7 @@ function placeMotelShell(
       }
     }
 
+    // Keep the suitcase off the only path to the bed or mini fridge.
     if (rng() < MOTEL_SUITCASE_CHANCE) {
       const suitcaseCandidates: {
         x: number;
@@ -5223,9 +5308,23 @@ function placeMotelShell(
       for (let ty = room.y0; ty <= room.y1; ty++) {
         for (let tx = room.x0; tx <= room.x1; tx++) {
           for (const facing of MOTEL_FURNITURE_FACINGS) {
-            if (canPlaceFurniture("suitcase", tx, ty, facing)) {
-              suitcaseCandidates.push({ x: tx, y: ty, facing });
+            if (!canPlaceFurniture("suitcase", tx, ty, facing)) continue;
+            if (
+              !suitcasePreservesFurnitureAccess(
+                bx,
+                by,
+                iW,
+                iH,
+                walls,
+                furnitures,
+                tx,
+                ty,
+                facing,
+              )
+            ) {
+              continue;
             }
+            suitcaseCandidates.push({ x: tx, y: ty, facing });
           }
         }
       }
@@ -7003,6 +7102,8 @@ function placeHouseSuitcases(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
+  alreadyPlaced: readonly SearchableObject[],
+  walls: readonly InteriorWallTile[],
 ): SearchableObject[] {
   const furnitures: SearchableObject[] = [];
   let idx = startIndex;
@@ -7044,6 +7145,21 @@ function placeHouseSuitcases(
             }
           }
           if (blocked) continue;
+          if (
+            !suitcasePreservesFurnitureAccess(
+              bx,
+              by,
+              iW,
+              iH,
+              walls,
+              [...alreadyPlaced, ...furnitures],
+              x,
+              y,
+              facing,
+            )
+          ) {
+            continue;
+          }
           candidates.push({ x, y, facing });
         }
       }
@@ -7175,7 +7291,19 @@ function placeHouseRooms(
   }
 
   furnitures = furnitures.concat(
-    placeHouseSuitcases(bx, by, iW, iH, exitX, exitY, rng, occupied, idx),
+    placeHouseSuitcases(
+      bx,
+      by,
+      iW,
+      iH,
+      exitX,
+      exitY,
+      rng,
+      occupied,
+      idx,
+      furnitures,
+      walls,
+    ),
   );
   return { furnitures, walls, doors };
 }
@@ -7502,7 +7630,7 @@ function marketDepthOf(frame: AshenMarketFrame, x: number, y: number): number {
 
 export type AshenMarketNpcPost = {
   idSuffix: string;
-  kind: "trader" | "exit" | "patrol" | "shelf";
+  kind: "trader" | "patrol" | "shelf";
   /** Tile coordinates. */
   x: number;
   y: number;
@@ -7595,7 +7723,7 @@ function marketGuardRoutes(frame: AshenMarketFrame): {
   return { shelf, patrols };
 }
 
-/** Trader, exit flanks, and trader-side patrols for the Ashen market. */
+/** Trader and trader-side patrols for the Ashen market. */
 export function ashenMarketNpcPosts(bx: number, by: number): AshenMarketNpcPost[] {
   const frame = ashenMarketFrame(bx, by);
   if (!frame) return [];
@@ -7610,22 +7738,6 @@ export function ashenMarketNpcPosts(bx: number, by: number): AshenMarketNpcPost[
     patrolX: trader.x,
     patrolY: trader.y,
     facing: frame.facingNum,
-  });
-  // Lobby ends, one tile in from the east wall. 1 = NE, 5 = SW.
-  const exitPosts: { x: number; y: number; facing: number }[] = [
-    { x: 20, y: 19, facing: 1 },
-    { x: 20, y: 0, facing: 5 },
-  ];
-  exitPosts.forEach((tile, i) => {
-    posts.push({
-      idSuffix: `exit${i}`,
-      kind: "exit",
-      x: tile.x,
-      y: tile.y,
-      patrolX: tile.x,
-      patrolY: tile.y,
-      facing: tile.facing,
-    });
   });
   const routes = marketGuardRoutes(frame);
   if (routes.shelf) {
@@ -7820,8 +7932,6 @@ function placeAshenTraderMarket(
     const furnaceAlong = frame.span - 3;
     put("furnace", tile(0, furnaceAlong).x, tile(0, furnaceAlong).y, "SE");
     put("bigbox", tile(1, furnaceAlong).x, tile(1, furnaceAlong).y, "SW");
-    const bench = tile(8, frame.span - 6);
-    put("workbench", bench.x, bench.y, "SE");
   } else {
     put("lockers", tile(0, 2).x, tile(0, 2).y, "SW");
     put("lockers", tile(0, 6).x, tile(0, 6).y, "SW");
@@ -7836,8 +7946,6 @@ function placeAshenTraderMarket(
     const furnaceAlong = frame.span - 3;
     put("furnace", tile(0, furnaceAlong).x, tile(0, furnaceAlong).y, "SW");
     put("bigbox", tile(1, furnaceAlong).x, tile(1, furnaceAlong).y, "SW");
-    const bench = tile(10, 4);
-    put("workbench", bench.x, bench.y, "SE");
   }
 
   const back = frame.counterDepth - 2;
@@ -7867,6 +7975,21 @@ function placeAshenTraderMarket(
     if (item.along < 0 || item.along >= frame.span) continue;
     const p = tile(staff, item.along);
     put(item.type, p.x, p.y, item.facing);
+  }
+
+  // Player side of the counter, at the end farthest from the door.
+  // Workbench1 faces SE, so leave the tile to its east open to stand at.
+  const exit = interiorExitForBuildingAt(bx, by);
+  const doorAlong = (exit.alongMin + exit.alongMax) / 2;
+  const farHigh = doorAlong <= (frame.span - 1) / 2;
+  const benchDepth = frame.counterDepth + 1;
+  let benchAlong = farHigh ? frame.span - 2 : 0;
+  const benchStep = farHigh ? -1 : 1;
+  for (let n = 0; n < frame.span; n++) {
+    if (benchAlong < 0 || benchAlong >= frame.span) break;
+    const origin = tile(benchDepth, benchAlong);
+    if (put("workbench", origin.x, origin.y, "SE")) break;
+    benchAlong += benchStep;
   }
 
   return furnitures;
@@ -8486,6 +8609,47 @@ function placeOfficeUpstairs(
 }
 
 /**
+ * Stable id for the manager's safe. Sequential furniture indexes stay put so
+ * desks and shelves that already have loot do not get renumbered.
+ */
+const MANAGER_SAFE_INDEX = 65000;
+
+function placeFixedSafe(
+  furnitures: SearchableObject[],
+  occupied: Set<string>,
+  bx: number,
+  by: number,
+  x: number,
+  y: number,
+  facing: FurnitureFacing,
+): void {
+  const { w, h } = furnitureFootprint(SAFE_OBJECT_TYPE, facing);
+  for (let ty = y; ty < y + h; ty++) {
+    for (let tx = x; tx < x + w; tx++) occupied.add(`${tx},${ty}`);
+  }
+  for (const t of furnitureFrontApproachTiles({
+    kind: "furniture",
+    objectType: SAFE_OBJECT_TYPE,
+    x,
+    y,
+    facing,
+  })) {
+    occupied.add(`${t.x},${t.y}`);
+  }
+  furnitures.push({
+    id: interiorSearchableId(bx, by, "furniture", MANAGER_SAFE_INDEX),
+    kind: "furniture",
+    objectType: SAFE_OBJECT_TYPE,
+    x,
+    y,
+    searched: false,
+    buildingX: bx,
+    buildingY: by,
+    facing,
+  });
+}
+
+/**
  * Walled meeting room and manager's office on the back wall, then a desk bullpen.
  * ConferenceTable1 already includes its chairs, so OfficeChair1 is only at desks
  * and behind the manager's desk. About one office in five has the table gone.
@@ -8760,6 +8924,20 @@ function placeOffice(
         { back: 3, side: 3, facing: lowFace },
         { back: 3, side: 0, facing: backFace },
       ]);
+    }
+    // One tile in from the wall. Side 0 is the aisle to the bookshelf, and a
+    // safe there seals that shelf off from the door.
+    const safeAt = tileAt(2, 1);
+    if (canPlace(SAFE_OBJECT_TYPE, safeAt.x, safeAt.y, lowFace)) {
+      placeFixedSafe(
+        furnitures,
+        occupied,
+        bx,
+        by,
+        safeAt.x,
+        safeAt.y,
+        lowFace,
+      );
     }
     sealManager = true;
   }
@@ -9402,7 +9580,8 @@ export function furnitureInRetailManagerOffice(
  * door. Checkouts flank the aisle. A jewelry case and a watch case sit on
  * the aisle just inside the registers. Home furniture is a showroom in a
  * back corner. A manager's office with a 5 by 4 floor sits in another
- * corner, door opening onto the sales floor. Coolers and a vending machine
+ * corner, door opening onto the sales floor, with a safe against the wall.
+ * Coolers and a vending machine
  * sit on outside walls outside those corners. A mannequin family stands with
  * the clothing racks, two adults side by side and the child in front, with
  * a few carts in the walks.
@@ -9615,6 +9794,17 @@ function placeLargeRetail(
         placeBossChair(office.x0 + 1, office.y0 + 1, "NW");
       }
       tryPut("trashcan", office.x0 + 2, office.y1, "SE");
+      if (canPlace(SAFE_OBJECT_TYPE, office.x1, office.y0, "SW")) {
+        placeFixedSafe(
+          furnitures,
+          occupied,
+          bx,
+          by,
+          office.x1,
+          office.y0,
+          "SW",
+        );
+      }
     } else {
       tryPut("bookshelf", office.x0, office.y0, "SW");
       tryPut("cabinet", office.x0 + 3, office.y0, "SW");
@@ -9623,6 +9813,17 @@ function placeLargeRetail(
         placeBossChair(office.x0 + 1, office.y0 + 1, "NE");
       }
       tryPut("trashcan", office.x1, office.y0 + 2, "SW");
+      if (canPlace(SAFE_OBJECT_TYPE, office.x0, office.y1, "SE")) {
+        placeFixedSafe(
+          furnitures,
+          occupied,
+          bx,
+          by,
+          office.x0,
+          office.y1,
+          "SE",
+        );
+      }
     }
 
     for (let y = office.y0; y <= office.y1; y++) {

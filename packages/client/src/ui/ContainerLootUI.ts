@@ -50,6 +50,7 @@ import {
   containerInventoryIsEmpty,
   parseContainerInventory,
   parseInventory,
+  SAFE_DEPOSIT_OBJECT_TYPE,
   type Inventory,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
@@ -80,6 +81,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   lockers: "Lockers",
   drawers: "Drawers",
   guncabinet: "Gun Cabinet",
+  safe1: "Safe",
   fridge: "Fridge",
   kitchensink: "Kitchen Sink",
   dinnertable: "Dinner Table",
@@ -133,6 +135,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   rabbit: "Rabbit",
   storagebox: "Storage Box",
   storagebox2: "Storage Box 2",
+  safedeposit: "Safe Deposit",
 };
 
 function furnitureDisplayName(objectType: string): string {
@@ -165,7 +168,7 @@ export type ContainerLootUIHandlers = {
     toSlot: number,
     splitHalf?: boolean,
   ) => void;
-  onClose: () => void;
+  onClose: (containerId: string) => void;
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -383,12 +386,21 @@ export class ContainerLootUI {
     this.containerInventory = this.piles[0]?.inventory ?? [];
     this.titleEl.textContent =
       this.piles.length > 1 ? "Loot" : furnitureDisplayName(this.objectType);
+    const deposit =
+      this.objectType === SAFE_DEPOSIT_OBJECT_TYPE ||
+      this.piles.some((pile) => pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE);
+    this.hintEl.textContent = deposit
+      ? "Stays safe at the market until you collect it"
+      : isMobileDevice()
+        ? "Drag or double-tap to take"
+        : "Drag or double-click to take · Esc to close";
     this.rebuildGrids();
     resetDialogScroll(this.overlay);
   }
 
   close() {
     if (!this.visible) return;
+    const closedId = this.containerId;
     cancelAllSlotDrags();
     this.visible = false;
     this.overlay.hidden = true;
@@ -398,7 +410,7 @@ export class ContainerLootUI {
     this.dragFromSource = null;
     this.lastTap = null;
     document.body.classList.remove("container-loot-open");
-    this.handlers.onClose();
+    this.handlers.onClose(closedId);
   }
 
   isOpen() {

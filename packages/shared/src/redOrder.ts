@@ -156,16 +156,18 @@ export type RedOrderTask = {
   completionWindowMs?: number;
 };
 
-/** Turn-in: Ashen Militia dog tags for banknotes + Red Order reputation. */
+/** Turn-in: Ashen Militia dog tags. Once a day. */
 export const RED_ORDER_ASHEN_PATROL_TASK: RedOrderTask = {
   id: "ashen_patrol_dogtags",
   dialogLineId: "jobs",
   requireItemId: "dogtag",
   requireQty: 1,
-  rewardBanknotes: 200,
-  rewardReputation: 500,
+  rewardBanknotes: 50,
+  rewardReputation: 30,
   label: "Ashen Patrol Dog Tags",
   requireItemLabel: "Dog Tags",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: RED_ORDER_TASK_WINDOW_MS,
 };
 
 /** Turn-in: rags cut into armbands. Once a day. */
@@ -174,32 +176,44 @@ export const RED_ORDER_CUT_CLOTH_TASK: RedOrderTask = {
   dialogLineId: "jobs",
   requireItemId: "rags",
   requireQty: 6,
-  rewardBanknotes: 40,
-  rewardReputation: 80,
+  rewardBanknotes: 30,
+  rewardReputation: 20,
   label: "Cut Cloth",
   requireItemLabel: "Rags",
   maxCompletionsPerWindow: 1,
   completionWindowMs: RED_ORDER_TASK_WINDOW_MS,
 };
 
-/** Turn-in: a gold ring looted from a house. They melt it. */
+/** Turn-in: a gold ring looted from a house. They melt it. Once a day. */
 export const RED_ORDER_MELT_POT_TASK: RedOrderTask = {
   id: "red_melt_pot",
   dialogLineId: "jobs",
   requireItemId: "gold_ring",
   requireQty: 1,
-  rewardBanknotes: 130,
-  rewardReputation: 220,
+  rewardBanknotes: 70,
+  rewardReputation: 30,
   label: "Melt Pot",
   requireItemLabel: "Gold Ring",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: RED_ORDER_TASK_WINDOW_MS,
+};
+
+/** One-shot. Clear a police station in a city other than Birchport. */
+export const RED_ORDER_SEIZED_TASK: RedOrderTask = {
+  id: "red_seized",
+  dialogLineId: "jobs",
+  rewardBanknotes: 220,
+  rewardReputation: 200,
+  label: "Seized",
+  displayItemId: "map",
 };
 
 /** Clear walkers from a marked warehouse. Once a day. */
 export const RED_ORDER_FLOOR_SPACE_TASK: RedOrderTask = {
   id: "red_floor_space",
   dialogLineId: "jobs",
-  rewardBanknotes: 150,
-  rewardReputation: 320,
+  rewardBanknotes: 90,
+  rewardReputation: 50,
   label: "Floor Space",
   displayItemId: "map",
   maxCompletionsPerWindow: 1,
@@ -211,6 +225,7 @@ export const RED_ORDER_TASKS: readonly RedOrderTask[] = [
   RED_ORDER_CUT_CLOTH_TASK,
   RED_ORDER_MELT_POT_TASK,
   RED_ORDER_FLOOR_SPACE_TASK,
+  RED_ORDER_SEIZED_TASK,
 ];
 
 export function redOrderTaskById(id: string): RedOrderTask | undefined {

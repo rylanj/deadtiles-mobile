@@ -434,6 +434,9 @@ export type ClientMessage =
   | { type: "marketCollectPayout"; payload: MarketListingIdMessage }
   | { type: "marketBrowse"; payload: MarketBrowseMessage }
   | { type: "marketClose" }
+  | { type: "safeDepositOpen"; payload: MarketOpenMessage }
+  | { type: "safeDepositPay"; payload: MarketOpenMessage }
+  | { type: "safeDepositClose" }
   | { type: "dialogOpen"; payload: DialogOpenMessage }
   | { type: "dialogCompleteTask"; payload: DialogCompleteTaskMessage }
   | { type: "dialogHeal"; payload: DialogHealMessage }
@@ -489,6 +492,7 @@ const NO_PAYLOAD_TYPES = new Set([
   "chopTreeCancel",
   "tradeClose",
   "marketClose",
+  "safeDepositClose",
   "dialogClose",
   "craftClose",
   "fireplaceClose",
@@ -671,7 +675,9 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       return { type, payload: { traderId: p.traderId } };
     }
     case "marketOpen":
-    case "marketCollect": {
+    case "marketCollect":
+    case "safeDepositOpen":
+    case "safeDepositPay": {
       if (!isIdString(p.traderId)) return null;
       return { type, payload: { traderId: p.traderId } };
     }
@@ -969,6 +975,7 @@ export type ServerMessage =
         containerJson: string;
       };
     }
+  | { type: "safeDepositClose" }
   | {
       type: "tradeOpen";
       payload: {
@@ -988,6 +995,8 @@ export type ServerMessage =
         playerBanknotes: number;
         stockJson: string;
         inventoryJson: string;
+        /** Set only for the player whose offer just went through. */
+        completed?: boolean;
       };
     }
   | {
@@ -1353,9 +1362,15 @@ export type WorldSfxKind =
   | "consume"
   | "melee"
   | "extinguish"
-  | "death";
+  | "death"
+  | "lockpick";
 
-export type WorldSfxStopKind = "search" | "reload" | "unload" | "consume";
+export type WorldSfxStopKind =
+  | "search"
+  | "reload"
+  | "unload"
+  | "consume"
+  | "lockpick";
 
 export type WorldSfxPayload = {
   id: string;

@@ -19,6 +19,7 @@ import {
   pickableLockDifficulty,
   interiorDimensions,
   interiorExitForBuildingAt,
+  furnitureNeedsCrack,
   retailShowroomBounds,
   interiorWallCornerDepthBias,
   interiorWallsForBuilding,
@@ -149,6 +150,8 @@ export type SearchableVisual = {
   x: number;
   y: number;
   searched: boolean;
+  /** Safe is cracked. The searched sheet still waits for a real search. */
+  cracked?: boolean;
   buildingX: number;
   buildingY: number;
   facing?: string;
@@ -248,6 +251,10 @@ const DRESSER_BOTTOM_PAD = Math.round(FURNITURE_RENDER_HEIGHT * 0.15);
 const FRIDGE_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.05);
 /** GunCabinet1 — raise by 10% of display height. */
 const GUNCABINET_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.1);
+/** Safe1 — 30% smaller than generic furniture. */
+const SAFE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.5);
+/** Safe1 — raise by 10% of its display height. */
+const SAFE_BOTTOM_PAD = -Math.round(SAFE_RENDER_HEIGHT * 0.1);
 /** Drawers1 — raise by 5% of display height. */
 const DRAWERS_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.05);
 /** KitchenSink1 — lower by 15% of display height. */
@@ -345,6 +352,8 @@ const COUNTER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.15);
 const COUNTER_BOTTOM_PAD = Math.round(COUNTER_RENDER_HEIGHT * 0.1);
 /** MiniFridge1 — compact room fridge (~85% of generic). */
 const MINIFRIDGE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.85);
+/** MiniFridge1: raise by 5% of display height. */
+const MINIFRIDGE_BOTTOM_PAD = -Math.round(MINIFRIDGE_RENDER_HEIGHT * 0.05);
 /** DinnerTable1 — low freestanding table with place settings. */
 const DINNERTABLE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95);
 /** DinnerTable1 — sit slightly into the floor diamond. */
@@ -366,6 +375,8 @@ const DRINKDISPLAY_BOTTOM_PAD =
   COUNTER_BOTTOM_PAD + Math.round(DRINKDISPLAY_RENDER_HEIGHT * 0.025);
 /** BagChair1 — 20% smaller than generic furniture. */
 const BAGCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.8);
+/** BagChair1: raise by 5% of display height. */
+const BAGCHAIR_BOTTOM_PAD = -Math.round(BAGCHAIR_RENDER_HEIGHT * 0.05);
 /** Armchair1 — wingback, then 10% smaller. */
 const ARMCHAIR_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95 * 0.9);
 /** Sofa1: bench height so a 2-tile seat reads wide, then 10% smaller. */
@@ -537,7 +548,14 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "copier") return COPIER_RENDER_HEIGHT;
   if (objectType === "officechair") return OFFICECHAIR_RENDER_HEIGHT;
   if (objectType === "whiteboard") return WHITEBOARD_RENDER_HEIGHT;
+  if (objectType === "safe1") return SAFE_RENDER_HEIGHT;
   return FURNITURE_RENDER_HEIGHT;
+}
+
+/** Safes stay closed through the crack. The open sheet starts on the loot search. */
+function furnitureShowsSearched(item: SearchableVisual, isSearching: boolean): boolean {
+  if (furnitureNeedsCrack(item.objectType) && !item.searched && !item.cracked) return false;
+  return item.searched || isSearching;
 }
 
 function furnitureBottomPad(objectType: string): number {
@@ -556,6 +574,7 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "dresser") return DRESSER_BOTTOM_PAD;
   if (objectType === "fridge") return FRIDGE_BOTTOM_PAD;
   if (objectType === "guncabinet") return GUNCABINET_BOTTOM_PAD;
+  if (objectType === "safe1") return SAFE_BOTTOM_PAD;
   if (objectType === "drawers") return DRAWERS_BOTTOM_PAD;
   if (objectType === "kitchensink") return KITCHENSINK_BOTTOM_PAD;
   if (objectType === "workbench") return WORKBENCH_BOTTOM_PAD;
@@ -598,7 +617,7 @@ function furnitureBottomPad(objectType: string): number {
   }
   if (objectType === "motelbed") return MOTELBED_BOTTOM_PAD;
   if (objectType === "counter") return COUNTER_BOTTOM_PAD;
-  if (objectType === "minifridge") return 0;
+  if (objectType === "minifridge") return MINIFRIDGE_BOTTOM_PAD;
   if (objectType === "dinnertable") return DINNERTABLE_BOTTOM_PAD;
   if (objectType === "camptable") return DINNERTABLE_BOTTOM_PAD;
   if (
@@ -617,6 +636,7 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "range") return RANGE_BOTTOM_PAD;
   if (objectType === "hotdisplay") return HOTDISPLAY_BOTTOM_PAD;
   if (objectType === "drinkdisplay") return DRINKDISPLAY_BOTTOM_PAD;
+  if (objectType === "bagchair") return BAGCHAIR_BOTTOM_PAD;
   if (objectType === "campchair") return CAMPCHAIR_BOTTOM_PAD;
   if (objectType === "canteenchair") return CANTEENCHAIR_BOTTOM_PAD;
   if (objectType === "groundbackpack") return GROUNDBACKPACK_BOTTOM_PAD;
@@ -684,6 +704,8 @@ export class InteriorView {
   private searchedState = new Map<string, boolean>();
   /** Last known in-progress search per searchable (opens the sheet during the channel). */
   private searchingState = new Map<string, boolean>();
+  /** Whether the searched sheet was showing. A crack does not count. */
+  private searchVisualOpen = new Map<string, boolean>();
   private highlightGraphics: Phaser.GameObjects.Graphics | null = null;
   private buildGhostGraphics: Phaser.GameObjects.Graphics | null = null;
   private buildGhostWall: Phaser.GameObjects.Image | null = null;
@@ -1224,6 +1246,7 @@ export class InteriorView {
     this.groundBagTiles.clear();
     this.searchedState.clear();
     this.searchingState.clear();
+    this.searchVisualOpen.clear();
     this.highlightGraphics?.destroy();
     this.highlightGraphics = null;
   }
@@ -1958,6 +1981,7 @@ export class InteriorView {
         this.objectSprites.delete(id);
         this.searchedState.delete(id);
         this.searchingState.delete(id);
+        this.searchVisualOpen.delete(id);
         this.groundBagTiles.delete(id);
         this.lanternIds.delete(id);
         this.forgetFurnace(id);
@@ -2489,14 +2513,13 @@ export class InteriorView {
         this.objectSprites.delete(item.id);
         this.searchedState.delete(item.id);
         this.searchingState.delete(item.id);
+        this.searchVisualOpen.delete(item.id);
       }
       return;
     }
 
-    const prevSearched = this.searchedState.get(item.id);
-    const prevSearching = this.searchingState.get(item.id) === true;
-    const visuallyOpen = item.searched || isSearching;
-    const wasVisuallyOpen = prevSearched === true || prevSearching;
+    const visuallyOpen = furnitureShowsSearched(item, isSearching);
+    const wasVisuallyOpen = this.searchVisualOpen.get(item.id) === true;
     let sprite = this.objectSprites.get(item.id);
     const animDef = animatedFurnitureDef(item.objectType, item.facing);
 
@@ -2522,6 +2545,7 @@ export class InteriorView {
       this.trackGroundBagTile(item);
       this.searchedState.set(item.id, item.searched);
       this.searchingState.set(item.id, isSearching);
+      this.searchVisualOpen.set(item.id, visuallyOpen);
       return;
     }
 
@@ -2548,6 +2572,7 @@ export class InteriorView {
       this.trackGroundBagTile(item);
       this.searchedState.set(item.id, item.searched);
       this.searchingState.set(item.id, isSearching);
+      this.searchVisualOpen.set(item.id, visuallyOpen);
       return;
     }
 
@@ -2560,6 +2585,7 @@ export class InteriorView {
       this.trackGroundBagTile(item);
       this.searchedState.set(item.id, item.searched);
       this.searchingState.set(item.id, isSearching);
+      this.searchVisualOpen.set(item.id, visuallyOpen);
       return;
     }
 
@@ -2571,6 +2597,7 @@ export class InteriorView {
     this.trackGroundBagTile(item);
     this.searchedState.set(item.id, item.searched);
     this.searchingState.set(item.id, isSearching);
+    this.searchVisualOpen.set(item.id, visuallyOpen);
   }
 
   private clearFurnaceRuntime() {

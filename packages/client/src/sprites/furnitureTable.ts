@@ -84,7 +84,8 @@ export type AnimatedFurnitureType =
   | "retailshelf3"
   | "retailcase1"
   | "retailcase2"
-  | "retailcheckout1";
+  | "retailcheckout1"
+  | "safe1";
 
 /** SE/SW pair. `frameCount` 0 is idle-only; otherwise Searched_0001–N plays on search. */
 function idlePair(
@@ -1192,4 +1193,5 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
   ...idlePair("retailcase1", "Furniture/RetailCase1", "RetailCase1", 9),
   ...idlePair("retailcase2", "Furniture/RetailCase2", "RetailCase2"),
   ...idlePair("retailcheckout1", "Furniture/RetailCheckout1", "RetailCheckout1"),
+  ...idlePair("safe1", "Furniture/Safe1", "Safe1", 9),
 ];

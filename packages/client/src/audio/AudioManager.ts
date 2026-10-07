@@ -49,6 +49,9 @@ export type SfxId =
   | "ui_close"
   | "inventory_open"
   | "inventory_close"
+  | "journal"
+  | "quest"
+  | "trade"
   | "death"
   | "fireplace";
 
@@ -72,6 +75,9 @@ export const SFX_FILES: Record<SfxId, readonly string[]> = {
   ui_close: ["assets/audio/ui_close.ogg", "assets/audio/ui_close.mp3"],
   inventory_open: ["assets/audio/Inventory/OpenInventory.wav"],
   inventory_close: ["assets/audio/Inventory/CloseInventory.wav"],
+  journal: ["assets/audio/Journal.wav"],
+  quest: ["assets/audio/Quest.wav"],
+  trade: ["assets/audio/Trade.wav"],
   death: ["assets/audio/death.ogg", "assets/audio/death.mp3"],
   fireplace: ["assets/audio/Fireplace/Fireplace1.wav"],
 };
@@ -114,6 +120,9 @@ export const SFX_READY: readonly SfxId[] = [
   "fireplace",
   "inventory_open",
   "inventory_close",
+  "journal",
+  "quest",
+  "trade",
 ];
 
 const VOLUME_KEY = "deadtiles.sfxVolume";
@@ -195,9 +204,34 @@ const DOOR_FULL_DIST = 6;
 /** Wooden doors. Hospital cubicle files are hotter, so they use a lower gain. */
 const DOOR_GAIN = 0.3;
 const HOSPITAL_DOOR_GAIN = 0.2;
+/**
+ * LockedDoor1 peaks near OpenDoor1. Wooden doors play at 0.3, so this
+ * stays under that baseline.
+ */
+const LOCKED_DOOR_GAIN = 0.25;
+/**
+ * Lockpicking1 peaks near a search take. Search plays at 0.15, and this
+ * loop uses the same gain so a long pick stays at that level.
+ */
+const LOCKPICK_GAIN = 0.15;
 /** Eat, drink, and medical clips. The louder takes (soda, vitamins) were above the doors. */
 const CONSUME_GAIN = 0.35;
 const INVENTORY_UI_GAIN = 0.12;
+/**
+ * Journal.wav peaks near OpenDoor1. Wooden doors play at 0.3, so this
+ * stays under that baseline.
+ */
+const JOURNAL_GAIN = 0.25;
+/**
+ * Quest.wav peaks hotter than Journal.wav. 0.1 keeps the sting at the
+ * journal level, under the wooden door.
+ */
+const QUEST_GAIN = 0.1;
+/**
+ * Trade.wav peaks at 0.34. Journal plays at 0.25 on a 0.20 peak and
+ * quest at 0.1 on a 0.51 peak, so both land near 0.05. 0.15 matches that.
+ */
+const TRADE_GAIN = 0.15;
 
 export type GunshotListener = {
   x: number;
@@ -449,6 +483,8 @@ export class AudioManager {
     }
     loadWav(doorCloseKey("wood"), "Door/CloseDoor1.wav");
     loadWav(doorOpenKey("wood"), "Door/OpenDoor1.wav");
+    loadWav(doorLockedKey(), "Door/LockedDoor1.wav");
+    loadWav(doorLockpickKey(), "Door/Lockpicking1.wav");
     loadWav(doorCloseKey("hospital"), "Door/CloseDoor2.wav");
     loadWav(doorOpenKey("hospital"), "Door/OpenDoor2.wav");
     loadWav(searchKey("body", 0), "Search/SearchBody1.wav");
@@ -543,6 +579,8 @@ export class AudioManager {
       treeChopKey(),
       doorCloseKey("wood"),
       doorOpenKey("wood"),
+      doorLockedKey(),
+      doorLockpickKey(),
       doorCloseKey("hospital"),
       doorOpenKey("hospital"),
       searchKey("body", 0),
@@ -683,14 +721,23 @@ export class AudioManager {
       id === "ui_open" ||
       id === "ui_close" ||
       id === "inventory_open" ||
-      id === "inventory_close"
+      id === "inventory_close" ||
+      id === "journal" ||
+      id === "quest" ||
+      id === "trade"
     ) {
+      const uiGain =
+        id === "quest"
+          ? QUEST_GAIN
+          : id === "trade"
+            ? TRADE_GAIN
+            : id === "journal"
+              ? JOURNAL_GAIN
+              : id === "inventory_open" || id === "inventory_close"
+                ? INVENTORY_UI_GAIN
+                : 1;
       this.playKey(sfxKey(id), id, {
-        volume:
-          opts?.volume ??
-          (id === "inventory_open" || id === "inventory_close"
-            ? INVENTORY_UI_GAIN
-            : 1),
+        volume: opts?.volume ?? uiGain,
         rate: opts?.rate,
       });
       return;
@@ -771,6 +818,33 @@ export class AudioManager {
     this.stopActionSound("search", id);
   }
 
+  /**
+   * Lock scrape. Loops until the pick ends. A second call while it is
+   * already running leaves the loop where it is.
+   */
+  playLockpick(opts?: { id?: string; source?: GunshotSource }) {
+    const id = opts?.id ?? "local";
+    const mapKey = this.actionSoundKey("lockpick", id);
+    const existing = this.actionSounds.get(mapKey);
+    if (existing && loopSoundAlive(existing.sound)) {
+      if (opts?.source) existing.source = this.worldSource(opts.source);
+      return;
+    }
+    this.startActionSound(
+      "lockpick",
+      id,
+      doorLockpickKey(),
+      LOCKPICK_GAIN,
+      opts?.source,
+      0,
+      true,
+    );
+  }
+
+  stopLockpick(id = "local") {
+    this.stopActionSound("lockpick", id);
+  }
+
   /** Magazine swap. Starts with the reload bar. */
   playReload(
     itemId: string,
@@ -831,17 +905,21 @@ export class AudioManager {
     }
   }
 
-  private actionSoundKey(kind: "search" | "reload" | "unload" | "consume", id: string) {
+  private actionSoundKey(
+    kind: "search" | "reload" | "unload" | "consume" | "lockpick",
+    id: string,
+  ) {
     return `${kind}:${id}`;
   }
 
   private startActionSound(
-    kind: "search" | "reload" | "unload" | "consume",
+    kind: "search" | "reload" | "unload" | "consume" | "lockpick",
     id: string,
     cacheKey: string,
     volume: number,
     source?: GunshotSource,
     durationMs = 0,
+    loop = false,
   ) {
     this.stopActionSound(kind, id);
     const mapKey = this.actionSoundKey(kind, id);
@@ -861,6 +939,7 @@ export class AudioManager {
         volume: volume * spatial.gain,
         pan: spatial.pan,
         exteriorMuffle: spatial.exteriorMuffle,
+        loop,
       });
       if (!sound) return;
       this.actionSounds.set(mapKey, {
@@ -889,7 +968,10 @@ export class AudioManager {
     }
   }
 
-  private stopActionSound(kind: "search" | "reload" | "unload" | "consume", id: string) {
+  private stopActionSound(
+    kind: "search" | "reload" | "unload" | "consume" | "lockpick",
+    id: string,
+  ) {
     const mapKey = this.actionSoundKey(kind, id);
     const stopDelay = this.actionStopDelays.get(mapKey);
     if (stopDelay) {
@@ -1199,6 +1281,20 @@ export class AudioManager {
       exteriorMuffle: spatial.exteriorMuffle,
     });
     this.trackOneShot(sound, spatialSource, gain, DOOR_FULL_DIST);
+  }
+
+  /** Handle rattle when a closed door is locked. Same distance as a door swing. */
+  playLockedDoor(source: GunshotSource) {
+    const key = doorLockedKey();
+    const spatialSource = { ...source, noiseRadius: DOOR_HEAR_RADIUS };
+    const spatial = this.positionalSpatial(spatialSource, DOOR_FULL_DIST);
+    if (spatial.gain < GUNSHOT_MIN_GAIN) return;
+    const sound = this.playKey(key, key, {
+      volume: LOCKED_DOOR_GAIN * spatial.gain,
+      pan: spatial.pan,
+      exteriorMuffle: spatial.exteriorMuffle,
+    });
+    this.trackOneShot(sound, spatialSource, LOCKED_DOOR_GAIN, DOOR_FULL_DIST);
   }
 
   private dropTreeFall(id: string) {
@@ -1956,7 +2052,7 @@ export class AudioManager {
   private refreshLiveActionSounds() {
     if (this.muted) return;
     for (const [id, live] of [...this.actionSounds]) {
-      if (!live.sound.isPlaying) {
+      if (!loopSoundAlive(live.sound)) {
         this.actionSounds.delete(id);
         continue;
       }
@@ -2654,6 +2750,14 @@ function doorOpenKey(style: "wood" | "hospital"): string {
   return `sfx:door:open:${style}`;
 }
 
+function doorLockedKey(): string {
+  return "sfx:door:locked";
+}
+
+function doorLockpickKey(): string {
+  return "sfx:door:lockpick";
+}
+
 const FURNITURE_SEARCH_BANK_COUNT = 19;
 const SEARCH_GAIN_DEFAULT = 0.15;
 /** SearchBody1.wav */
@@ -2716,6 +2820,7 @@ const FURNITURE_SEARCH_BANK: Record<string, number> = {
   medicaldrawers: 6,
   cabinet: 6,
   guncabinet: 7,
+  safe1: 7,
   lockers: 7,
   bookshelf: 8,
   bookshelf2: 8,

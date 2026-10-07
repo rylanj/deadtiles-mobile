@@ -2172,45 +2172,58 @@
         border-color: rgba(100, 220, 100, 0.4);
       }
       /* NPC job list: accepted jobs read as in-progress; open jobs stay quieter. */
-      .red-dialog-task-list .craft-recipe--available {
+      .red-dialog-task-list .craft-recipe--available,
+      .journal-quest-list .craft-recipe--available {
         border-style: dashed;
         border-color: rgba(180, 120, 120, 0.5);
         background: rgba(0, 0, 0, 0.28);
       }
-      .red-dialog-task-list .craft-recipe--available .craft-recipe-summary-name {
+      .red-dialog-task-list .craft-recipe--available .craft-recipe-summary-name,
+      .journal-quest-list .craft-recipe--available .craft-recipe-summary-name {
         color: #c4a8a8;
         font-weight: 600;
       }
-      .red-dialog-task-list .craft-recipe--accepted {
+      .red-dialog-task-list .craft-recipe--accepted,
+      .journal-quest-list .craft-recipe--accepted {
         border-color: rgba(140, 190, 140, 0.6);
         background: rgba(18, 36, 22, 0.55);
         box-shadow: inset 3px 0 0 #7dcea0;
       }
-      .red-dialog-task-list .craft-recipe--accepted .craft-recipe-summary-name {
+      .red-dialog-task-list .craft-recipe--accepted .craft-recipe-summary-name,
+      .journal-quest-list .craft-recipe--accepted .craft-recipe-summary-name {
         color: #e8ffe8;
       }
-      .red-dialog-task-list .craft-recipe--accepted:not(.craft-recipe--ready) .craft-recipe-summary-meta {
+      .red-dialog-task-list .craft-recipe--accepted:not(.craft-recipe--ready) .craft-recipe-summary-meta,
+      .journal-quest-list .craft-recipe--accepted:not(.craft-recipe--ready) .craft-recipe-summary-meta {
         color: #b7d4b7;
       }
-      .red-dialog-task-list .craft-recipe--accepted.craft-recipe--ready {
+      .red-dialog-task-list .craft-recipe--accepted.craft-recipe--ready,
+      .journal-quest-list .craft-recipe--accepted.craft-recipe--ready {
         border-color: rgba(100, 220, 100, 0.7);
         box-shadow: inset 3px 0 0 #88ff88;
       }
-      .red-dialog-task-list .craft-recipe--capped {
+      .red-dialog-task-list .craft-recipe--capped,
+      .journal-quest-list .craft-recipe--capped {
         border-color: rgba(130, 130, 130, 0.32);
         background: rgba(18, 18, 18, 0.55);
       }
-      .red-dialog-task-list .craft-recipe--capped .craft-recipe-summary-name {
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-summary-name,
+      .journal-quest-list .craft-recipe--capped .craft-recipe-summary-name {
         color: #8e8e8e;
         font-weight: 600;
       }
       .red-dialog-task-list .craft-recipe--capped .craft-recipe-summary-meta,
       .red-dialog-task-list .craft-recipe--capped .craft-recipe-chevron,
       .red-dialog-task-list .craft-recipe--capped .red-dialog-task-heading,
-      .red-dialog-task-list .craft-recipe--capped .craft-recipe-hint {
+      .red-dialog-task-list .craft-recipe--capped .craft-recipe-hint,
+      .journal-quest-list .craft-recipe--capped .craft-recipe-summary-meta,
+      .journal-quest-list .craft-recipe--capped .craft-recipe-chevron,
+      .journal-quest-list .craft-recipe--capped .red-dialog-task-heading,
+      .journal-quest-list .craft-recipe--capped .craft-recipe-hint {
         color: #8a8a8a;
       }
-      .red-dialog-task-list .craft-recipe--capped .red-dialog-task-cell {
+      .red-dialog-task-list .craft-recipe--capped .red-dialog-task-cell,
+      .journal-quest-list .craft-recipe--capped .red-dialog-task-cell {
         filter: grayscale(1);
         opacity: 0.55;
       }
@@ -2736,7 +2749,15 @@
         border-color: rgba(100, 220, 100, 0.85);
         box-shadow: 0 0 0 1px rgba(94, 200, 94, 0.2);
       }
-      .inventory-cell--equipped {
+      .inventory-cell--equipped,
+      .inventory-cell--equipped:hover {
+        border-color: rgba(100, 220, 100, 0.85);
+        box-shadow: 0 0 0 1px rgba(94, 200, 94, 0.35);
+      }
+      /* Sell grid: worn gear keeps the bright edge while hovered or selected. */
+      .trader-cell.inventory-cell--equipped,
+      .trader-cell.inventory-cell--equipped:hover,
+      .trader-cell.inventory-cell--equipped.inventory-cell--selected {
         border-color: rgba(100, 220, 100, 0.85);
         box-shadow: 0 0 0 1px rgba(94, 200, 94, 0.35);
       }

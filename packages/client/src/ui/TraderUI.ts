@@ -7,8 +7,18 @@ import {
   ashenStandingLabel,
   backpackHoldsItems,
   getItemDefinition,
+  isArmorSlot,
   isBackpackItem,
+  isBackpackSlot,
+  isClothingItem,
+  isClothingSlot,
+  isJewelrySlot,
+  isMapSlot,
   isQuestKeepsakeItem,
+  isRadioSlot,
+  isWatchSlot,
+  isWeaponItem,
+  isWeaponSlot,
   parseInventory,
   tradeOfferTotals,
   tradeOfferCashSettlement,
@@ -531,6 +541,14 @@ export class TraderUI {
     cell.tabIndex = 0;
     cell.setAttribute("role", "button");
     markQuestKeepsake(cell, opts.id);
+    const equipped =
+      opts.side === "player" &&
+      opts.slotIndex != null &&
+      this.isEquippedSellSlot(opts.slotIndex, opts.id);
+    if (equipped) {
+      cell.classList.add("inventory-cell--equipped");
+      cell.title = "Equipped";
+    }
     if (opts.selected) cell.classList.add("inventory-cell--selected");
     if (opts.offered > 0) cell.classList.add("trader-cell--offered");
     cell.style.setProperty(
@@ -565,7 +583,7 @@ export class TraderUI {
     const def = getItemDefinition(opts.id);
     cell.setAttribute(
       "aria-label",
-      `${def?.name ?? opts.id}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}`,
+      `${def?.name ?? opts.id}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}${equipped ? " · equipped" : ""}`,
     );
 
     const selectCell = () => {
@@ -729,10 +747,29 @@ export class TraderUI {
     }
     const def = getItemDefinition(this.selection.id);
     const name = def?.name ?? this.selection.id;
-    this.detailEl.textContent =
-      this.selection.quantity > 1
-        ? `${name} ×${this.selection.quantity}`
-        : name;
+    const label =
+      this.selection.quantity > 1 ? `${name} ×${this.selection.quantity}` : name;
+    const equipped =
+      this.selection.side === "player" &&
+      this.isEquippedSellSlot(this.selection.slotIndex, this.selection.id);
+    this.detailEl.textContent = equipped ? `${label} · Equipped` : label;
+  }
+
+  /**
+   * True when this stack is sitting in a wear slot (weapon, clothing, radio, and the rest).
+   * Pocket copies of the same item stay unmarked.
+   */
+  private isEquippedSellSlot(slotIndex: number, itemId: string): boolean {
+    if (isWeaponSlot(slotIndex)) return isWeaponItem(itemId);
+    if (isClothingSlot(slotIndex)) return isClothingItem(itemId);
+    if (isBackpackSlot(slotIndex)) return isBackpackItem(itemId);
+    return (
+      isWatchSlot(slotIndex) ||
+      isRadioSlot(slotIndex) ||
+      isMapSlot(slotIndex) ||
+      isJewelrySlot(slotIndex) ||
+      isArmorSlot(slotIndex)
+    );
   }
 
   private updateSettlement() {

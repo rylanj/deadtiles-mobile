@@ -650,3 +650,143 @@ export function pickSupplyListStore(
   );
   return pickFirstThatFits(far, fits, far.length);
 }
+
+/** Cities other than Birchport, road links first, then any city in the far ring. */
+function citiesBeyondBirchport(): { cx: number; cy: number }[] {
+  const hub = birchportCityCell();
+  const cells: { cx: number; cy: number }[] = [];
+  const seen = new Set<string>();
+  const push = (cx: number, cy: number) => {
+    if (hub && cx === hub.cx && cy === hub.cy) return;
+    if (getSettlementType(cx, cy) !== "city") return;
+    const key = `${cx},${cy}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    cells.push({ cx, cy });
+  };
+  if (hub) {
+    for (const city of getCityRoadLinks(hub.cx, hub.cy)) push(city.cx, city.cy);
+  }
+  const f = getPlayerSpawnFootprint();
+  for (const cell of settlementCellsInRegion(
+    f.minX - QUEST_FAR_PAD,
+    f.maxX + QUEST_FAR_PAD,
+    f.minY - QUEST_FAR_PAD,
+    f.maxY + QUEST_FAR_PAD,
+  )) {
+    push(cell.cx, cell.cy);
+  }
+  return cells;
+}
+
+function buildingsOfTypeInCity(
+  cx: number,
+  cy: number,
+  type: BuildingInfo["buildingType"],
+  blocked?: readonly { ox: number; oy: number }[],
+): BuildingInfo[] {
+  return buildingsInCityCell(cx, cy).filter(
+    (bld) =>
+      bld.buildingType === type &&
+      !isAshenTraderWarehouse(bld.ox, bld.oy) &&
+      !isBlockedOrigin(bld, blocked),
+  );
+}
+
+function sameSettlement(a: BuildingInfo, b: BuildingInfo): boolean {
+  const ax = Math.floor((a.ox + a.w / 2) / SETTLEMENT_CELL_SIZE);
+  const ay = Math.floor((a.oy + a.h / 2) / SETTLEMENT_CELL_SIZE);
+  const bx = Math.floor((b.ox + b.w / 2) / SETTLEMENT_CELL_SIZE);
+  const by = Math.floor((b.oy + b.h / 2) / SETTLEMENT_CELL_SIZE);
+  return ax === bx && ay === by;
+}
+
+function shuffleCells(
+  cells: readonly { cx: number; cy: number }[],
+): { cx: number; cy: number }[] {
+  const order = cells.slice();
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = order[i]!;
+    order[i] = order[j]!;
+    order[j] = tmp;
+  }
+  return order;
+}
+
+/** Police station in a city other than Birchport, with room for walkers. */
+export function pickSeizedPoliceStation(
+  blocked?: readonly { ox: number; oy: number }[],
+): BuildingInfo | null {
+  const fits = (bld: BuildingInfo) => {
+    if (isBlockedOrigin(bld, blocked)) return false;
+    return interiorQuestFit(bld.ox, bld.oy).standingTiles >= 2;
+  };
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of citiesBeyondBirchport()) {
+    for (const bld of buildingsOfTypeInCity(
+      city.cx,
+      city.cy,
+      "police_station",
+      blocked,
+    )) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  return pickFirstThatFits(pool, fits, 24);
+}
+
+export type BothEndsSites = {
+  warehouse: BuildingInfo;
+  market: BuildingInfo;
+};
+
+/**
+ * A warehouse in one other city and a supermarket with three shelves in a
+ * different city. Birchport is never either stop.
+ */
+export function pickBothEndsSites(
+  blocked?: readonly { ox: number; oy: number }[],
+): BothEndsSites | null {
+  const cities = shuffleCells(citiesBeyondBirchport());
+  const marketFits = (bld: BuildingInfo) => {
+    if (isBlockedOrigin(bld, blocked)) return false;
+    return interiorQuestFit(bld.ox, bld.oy).shelves >= 3;
+  };
+  for (let i = 0; i < cities.length; i++) {
+    const warehouseCity = cities[i]!;
+    const warehouse = pickFirstThatFits(
+      buildingsOfTypeInCity(
+        warehouseCity.cx,
+        warehouseCity.cy,
+        "warehouse",
+        blocked,
+      ),
+      (bld) =>
+        !isBlockedOrigin(bld, blocked) &&
+        interiorQuestFit(bld.ox, bld.oy).standingTiles >= 2,
+      8,
+    );
+    if (!warehouse) continue;
+    for (let j = 0; j < cities.length; j++) {
+      if (i === j) continue;
+      const marketCity = cities[j]!;
+      const market = pickFirstThatFits(
+        buildingsOfTypeInCity(
+          marketCity.cx,
+          marketCity.cy,
+          "supermarket",
+          blocked,
+        ),
+        (bld) => marketFits(bld) && !sameSettlement(bld, warehouse),
+        8,
+      );
+      if (market) return { warehouse, market };
+    }
+  }
+  return null;
+}

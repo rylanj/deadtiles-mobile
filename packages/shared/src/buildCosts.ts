@@ -125,6 +125,15 @@ export const STORAGE_BOX_OBJECT_TYPE = "storagebox";
 /** Object type sent with the Storage Box 2 container UI. */
 export const STORAGE_BOX2_OBJECT_TYPE = "storagebox2";
 
+/** Slots in a Birchport market safe deposit box. */
+export const SAFE_DEPOSIT_SLOTS = 8;
+
+/** Object type sent with the safe deposit container UI. */
+export const SAFE_DEPOSIT_OBJECT_TYPE = "safedeposit";
+
+/** Container id for the player's market safe deposit box. */
+export const SAFE_DEPOSIT_CONTAINER_ID = "safedeposit";
+
 export function isStorageBoxKind(kind: unknown): kind is StorageBoxKind {
   return kind === "storage_box" || kind === "storage_box_2";
 }
@@ -142,6 +151,7 @@ export function storageBoxObjectType(kind: StorageBoxKind): string {
 export function storageBoxSlotsForObjectType(objectType: string): number | null {
   if (objectType === STORAGE_BOX2_OBJECT_TYPE) return STORAGE_BOX2_SLOTS;
   if (objectType === STORAGE_BOX_OBJECT_TYPE) return STORAGE_BOX_SLOTS;
+  if (objectType === SAFE_DEPOSIT_OBJECT_TYPE) return SAFE_DEPOSIT_SLOTS;
   return null;
 }
 

@@ -5,6 +5,7 @@
 import {
   ASHEN_MILITIA_AISLE_CHECK_TASK,
   ASHEN_MILITIA_AMMO_TASK,
+  ASHEN_MILITIA_BIG_TRACK_TASK,
   ASHEN_MILITIA_BARGATE_SCRAP_TASK,
   ASHEN_MILITIA_BEFORE_IT_TURNS_TASK,
   ASHEN_MILITIA_CAPTAIN_NAME,
@@ -33,9 +34,11 @@ import {
 } from "./ashenMilitia.js";
 import { RED_ORDER_FACTION } from "./constants.js";
 import {
+  RED_ORDER_ASHEN_PATROL_TASK,
   RED_ORDER_CUT_CLOTH_TASK,
   RED_ORDER_FLOOR_SPACE_TASK,
   RED_ORDER_MELT_POT_TASK,
+  RED_ORDER_SEIZED_TASK,
   type RedOrderTask,
 } from "./redOrder.js";
 import {
@@ -138,6 +141,9 @@ export type PlayerQuestState = {
   /** Assigned building origin for visit / clear jobs. */
   targetX?: number;
   targetY?: number;
+  /** Second site, when a job marks two buildings. */
+  altTargetX?: number;
+  altTargetY?: number;
   /** Extra one-shot notes (e.g. missing pair found dead). */
   flags?: Record<string, boolean>;
   /** Furniture id that holds a player-only quest item. */
@@ -149,6 +155,8 @@ export type PlayerQuestState = {
 export type QuestAcceptAssignment = {
   targetX?: number;
   targetY?: number;
+  altTargetX?: number;
+  altTargetY?: number;
 };
 
 export type PlayerQuestsState = {
@@ -215,11 +223,13 @@ export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
   id: "ashen_patrol_dogtags",
   title: "Ashen Patrol Dog Tags",
   description:
-    "Ashen Militia patrols have been a problem. Bring Red Order their dog tags.",
+    "Ashen Militia patrols have been a problem. Bring Red Order one set of dog tags. Once a day.",
   faction: "redOrder",
   giver: "redOrder",
   dialogLineId: "jobs",
   repeatable: true,
+  maxCompletionsPerWindow: RED_ORDER_ASHEN_PATROL_TASK.maxCompletionsPerWindow,
+  completionWindowMs: RED_ORDER_ASHEN_PATROL_TASK.completionWindowMs,
   objectives: [
     {
       id: "turn_in_dogtag",
@@ -231,15 +241,18 @@ export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
     },
   ],
   rewards: [
-    { banknotes: 200 },
-    { faction: "redOrder", reputation: 500 },
+    { banknotes: RED_ORDER_ASHEN_PATROL_TASK.rewardBanknotes },
+    {
+      faction: "redOrder",
+      reputation: RED_ORDER_ASHEN_PATROL_TASK.rewardReputation,
+    },
   ],
 };
 
 export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
   questFromMilitiaTask(ASHEN_MILITIA_AMMO_TASK, {
     description:
-      "Captain Davis needs 7.62 for Birchport patrols. Accept the job, then turn the ammo in at the barracks.",
+      "Captain Davis needs 7.62 for Birchport patrols. Accept the job, then turn the ammo in at the barracks. Once a day.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
@@ -251,7 +264,7 @@ export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
   }),
   questFromMilitiaTask(ASHEN_MILITIA_CIGARETTES_TASK, {
     description:
-      "Cigarettes for the barracks board. Accept with Davis, then bring a pack in.",
+      "Cigarettes for the barracks board. Accept with Davis, then bring them in. Once a day.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
@@ -342,10 +355,12 @@ export const QUEST_ID_MISSING_PAIR = ASHEN_MILITIA_MISSING_PAIR_TASK.id;
 export const QUEST_ID_DONT_FEED_THEM = ASHEN_MILITIA_DONT_FEED_THEM_TASK.id;
 export const QUEST_ID_AISLE_CHECK = ASHEN_MILITIA_AISLE_CHECK_TASK.id;
 export const QUEST_ID_THIN_THE_PACK = ASHEN_MILITIA_THIN_THE_PACK_TASK.id;
+export const QUEST_ID_BIG_TRACK = ASHEN_MILITIA_BIG_TRACK_TASK.id;
 export const QUEST_ID_DONT_HOCK_THEM = ASHEN_MILITIA_DONT_HOCK_THEM_TASK.id;
 /** Completes when the anniversary earrings are in the player's inventory. */
 export const QUEST_DONT_HOCK_FIND_OBJECTIVE = "find_earrings";
 export const QUEST_ID_FLOOR_SPACE = RED_ORDER_FLOOR_SPACE_TASK.id;
+export const QUEST_ID_SEIZED = RED_ORDER_SEIZED_TASK.id;
 export const QUEST_ID_FIRST_SWEEP = ASHEN_MILITIA_FIRST_SWEEP_TASK.id;
 
 export const QUEST_FIRST_SWEEP: QuestDefinition = {
@@ -493,6 +508,33 @@ export const QUEST_AISLE_CHECK: QuestDefinition = {
   ],
 };
 
+export const QUEST_BIG_TRACK: QuestDefinition = {
+  id: QUEST_ID_BIG_TRACK,
+  title: ASHEN_MILITIA_BIG_TRACK_TASK.label,
+  description:
+    "A bear has been using a road outside Birchport. Accept with Davis, kill it, then report back. You keep the meat. One time.",
+  faction: "ashenMilitia",
+  giver: "ashenCaptain",
+  dialogLineId: "jobs",
+  iconItemId: "raw_bear_meat",
+  objectives: [
+    {
+      id: "kill_bear",
+      kind: "killNpcKind",
+      label: "Kill a bear outside Birchport",
+      npcKind: "bear",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: ASHEN_MILITIA_BIG_TRACK_TASK.rewardBanknotes },
+    {
+      faction: "ashenMilitia",
+      reputation: ASHEN_MILITIA_BIG_TRACK_TASK.rewardReputation,
+    },
+  ],
+};
+
 export const QUEST_THIN_THE_PACK: QuestDefinition = {
   id: QUEST_ID_THIN_THE_PACK,
   title: ASHEN_MILITIA_THIN_THE_PACK_TASK.label,
@@ -556,6 +598,33 @@ export const QUEST_DONT_HOCK_THEM: QuestDefinition = {
   ],
 };
 
+export const QUEST_SEIZED: QuestDefinition = {
+  id: QUEST_ID_SEIZED,
+  title: RED_ORDER_SEIZED_TASK.label,
+  description:
+    "The Red Order wants a police station in another city. Accept the job, clear the walkers, then report back. You keep what you find. One time.",
+  faction: "redOrder",
+  giver: "redOrder",
+  dialogLineId: "jobs",
+  iconItemId: "map",
+  objectives: [
+    {
+      id: "clear_station",
+      kind: "clearBuilding",
+      label: "Clear walkers from the marked police station",
+      buildingType: "police_station",
+      count: 1,
+    },
+  ],
+  rewards: [
+    { banknotes: RED_ORDER_SEIZED_TASK.rewardBanknotes },
+    {
+      faction: "redOrder",
+      reputation: RED_ORDER_SEIZED_TASK.rewardReputation,
+    },
+  ],
+};
+
 export const QUEST_FLOOR_SPACE: QuestDefinition = {
   id: QUEST_ID_FLOOR_SPACE,
   title: RED_ORDER_FLOOR_SPACE_TASK.label,
@@ -592,6 +661,7 @@ export const QUEST_ID_STILL_ON_THE_SHELF = "ashen_trader_still_on_the_shelf";
 export const QUEST_ID_SCALING_UP = "ashen_trader_scaling_up";
 export const QUEST_ID_SHORT_CRATE = "ashen_trader_short_crate";
 export const QUEST_ID_X_MARKS = "ashen_trader_x_marks_the_spot";
+export const QUEST_ID_BOTH_ENDS = "ashen_trader_both_ends";
 export const QUEST_ID_PAID_AHEAD = "ashen_trader_paid_ahead";
 export const QUEST_ID_FLOOR_MODEL = "ashen_trader_floor_model";
 export const QUEST_ID_LEFT_ON_THE_DESK = "ashen_trader_left_on_the_desk";
@@ -630,8 +700,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 70 },
-      { faction: "ashenTraders", reputation: 120 },
+      { banknotes: 55 },
+      { faction: "ashenTraders", reputation: 30 },
     ],
   },
   {
@@ -657,8 +727,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 60 },
-      { faction: "ashenTraders", reputation: 110 },
+      { banknotes: 45 },
+      { faction: "ashenTraders", reputation: 25 },
     ],
   },
   {
@@ -692,8 +762,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 80 },
-      { faction: "ashenTraders", reputation: 130 },
+      { banknotes: 60 },
+      { faction: "ashenTraders", reputation: 30 },
     ],
   },
   {
@@ -720,8 +790,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 120 },
-      { faction: "ashenTraders", reputation: 220 },
+      { banknotes: 70 },
+      { faction: "ashenTraders", reputation: 60 },
     ],
   },
   {
@@ -748,8 +818,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 140 },
-      { faction: "ashenTraders", reputation: 240 },
+      { banknotes: 80 },
+      { faction: "ashenTraders", reputation: 70 },
     ],
   },
   {
@@ -771,8 +841,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 180 },
-      { faction: "ashenTraders", reputation: 320 },
+      { banknotes: 120 },
+      { faction: "ashenTraders", reputation: 100 },
     ],
   },
   {
@@ -802,8 +872,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 180 },
-      { faction: "ashenTraders", reputation: 350 },
+      { banknotes: 140 },
+      { faction: "ashenTraders", reputation: 120 },
     ],
   },
   {
@@ -833,8 +903,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 180 },
-      { faction: "ashenTraders", reputation: 360 },
+      { banknotes: 140 },
+      { faction: "ashenTraders", reputation: 120 },
     ],
   },
   {
@@ -864,8 +934,37 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 200 },
-      { faction: "ashenTraders", reputation: 400 },
+      { banknotes: 160 },
+      { faction: "ashenTraders", reputation: 140 },
+    ],
+  },
+  {
+    id: QUEST_ID_BOTH_ENDS,
+    title: "Both Ends",
+    description:
+      "Kevin will not call a route open until someone has walked both ends. Clear the marked warehouse, then search three shelves in the supermarket in the other city. You keep what you pocket. One time.",
+    faction: "ashenTraders",
+    giver: "ashenTrader",
+    dialogLineId: "jobs",
+    iconItemId: "map",
+    objectives: [
+      {
+        id: "clear_warehouse",
+        kind: "clearBuilding",
+        label: "Clear walkers from the marked warehouse",
+        buildingType: "warehouse",
+        count: 1,
+      },
+      {
+        id: "search_shelves",
+        kind: "searchShelf",
+        label: "Search shelves in the marked supermarket",
+        count: 3,
+      },
+    ],
+    rewards: [
+      { banknotes: 240 },
+      { faction: "ashenTraders", reputation: 200 },
     ],
   },
   {
@@ -912,8 +1011,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 220 },
-      { faction: "ashenTraders", reputation: 400 },
+      { banknotes: 100 },
+      { faction: "ashenTraders", reputation: 80 },
     ],
   },
   {
@@ -968,8 +1067,8 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 260 },
-      { faction: "ashenTraders", reputation: 450 },
+      { banknotes: 160 },
+      { faction: "ashenTraders", reputation: 100 },
     ],
   },
 ];
@@ -991,7 +1090,7 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
         count: 1,
       },
     ],
-    rewards: [{ faction: "redOrder", reputation: 300 }],
+    rewards: [{ faction: "redOrder", reputation: 50 }],
     stub: true,
   },
   {
@@ -1018,8 +1117,8 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 150 },
-      { faction: "ashenTraders", reputation: 400 },
+      { banknotes: 40 },
+      { faction: "ashenTraders", reputation: 30 },
     ],
     stub: true,
   },
@@ -1037,7 +1136,10 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
         count: 1,
       },
     ],
-    rewards: [{ faction: "ashenTraders", reputation: 500 }],
+    rewards: [
+      { banknotes: 100 },
+      { faction: "ashenTraders", reputation: 150 },
+    ],
     stub: true,
   },
   {
@@ -1046,6 +1148,9 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
     description: "Bring bandit dog tags to prove the roads are safer.",
     faction: "redOrder",
     dialogLineId: "jobs",
+    repeatable: true,
+    maxCompletionsPerWindow: 1,
+    completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
     objectives: [
       {
         id: "turn_in_bandit_tag",
@@ -1057,8 +1162,8 @@ export const QUEST_STUBS: readonly QuestDefinition[] = [
       },
     ],
     rewards: [
-      { banknotes: 250 },
-      { faction: "redOrder", reputation: 400 },
+      { banknotes: 60 },
+      { faction: "redOrder", reputation: 40 },
     ],
     stub: true,
   },
@@ -1078,7 +1183,7 @@ export const QUEST_MELT_POT: QuestDefinition = questFromMilitiaTask(
   RED_ORDER_MELT_POT_TASK,
   {
     description:
-      "They melt jewelry from empty houses. Accept the job, then bring one gold ring.",
+      "They melt jewelry from empty houses. Accept the job, then bring one gold ring. Once a day.",
     giver: "redOrder",
     faction: "redOrder",
   },
@@ -1090,9 +1195,11 @@ export const QUEST_REGISTRY: readonly QuestDefinition[] = [
   QUEST_CUT_CLOTH,
   QUEST_MELT_POT,
   QUEST_FLOOR_SPACE,
+  QUEST_SEIZED,
   ...QUEST_ASHEN_MILITIA_LIVE,
   QUEST_QUIET_STRETCH,
   QUEST_MISSING_PAIR,
+  QUEST_BIG_TRACK,
   QUEST_DONT_FEED_THEM,
   QUEST_AISLE_CHECK,
   QUEST_THIN_THE_PACK,
@@ -1154,6 +1261,8 @@ export function parseQuestsJson(
       const timesCompleted = Number(obj.timesCompleted);
       const targetX = Number(obj.targetX);
       const targetY = Number(obj.targetY);
+      const altTargetX = Number(obj.altTargetX);
+      const altTargetY = Number(obj.altTargetY);
       const flags: Record<string, boolean> = {};
       if (obj.flags && typeof obj.flags === "object") {
         for (const [k, v] of Object.entries(obj.flags as Record<string, unknown>)) {
@@ -1185,6 +1294,8 @@ export function parseQuestsJson(
             : undefined,
         targetX: Number.isFinite(targetX) ? Math.floor(targetX) : undefined,
         targetY: Number.isFinite(targetY) ? Math.floor(targetY) : undefined,
+        altTargetX: Number.isFinite(altTargetX) ? Math.floor(altTargetX) : undefined,
+        altTargetY: Number.isFinite(altTargetY) ? Math.floor(altTargetY) : undefined,
         flags: Object.keys(flags).length > 0 ? flags : undefined,
         stashId,
         marks: marks && marks.length > 0 ? marks : undefined,
@@ -1200,6 +1311,8 @@ export function parseQuestsJson(
         entry.acceptedAt = undefined;
         entry.targetX = undefined;
         entry.targetY = undefined;
+        entry.altTargetX = undefined;
+        entry.altTargetY = undefined;
         entry.flags = undefined;
         entry.stashId = undefined;
         entry.marks = undefined;
@@ -1465,6 +1578,8 @@ export function acceptQuest(
         timesCompleted: prev?.timesCompleted,
         targetX: assignment?.targetX,
         targetY: assignment?.targetY,
+        altTargetX: assignment?.altTargetX,
+        altTargetY: assignment?.altTargetY,
       },
     },
   };
@@ -1528,6 +1643,8 @@ export function completeAcceptedQuest(
         timesCompleted,
         targetX: undefined,
         targetY: undefined,
+        altTargetX: undefined,
+        altTargetY: undefined,
         flags: undefined,
         stashId: undefined,
         marks: undefined,
@@ -1746,7 +1863,15 @@ export function questAssignedLocationLabel(
 ): string | null {
   const prev = state.quests[questId];
   if (prev?.targetX == null || prev.targetY == null) return null;
-  return questTargetBuildingLabel(prev.targetX, prev.targetY);
+  const primary = questTargetBuildingLabel(prev.targetX, prev.targetY);
+  if (prev.altTargetX == null || prev.altTargetY == null) return primary;
+  return `${primary}. ${questTargetBuildingLabel(prev.altTargetX, prev.altTargetY)}`;
+}
+
+function questBuildingMapPoint(ox: number, oy: number): { x: number; y: number } {
+  const bld = getBuildingAt(ox, oy);
+  if (bld) return { x: bld.ox + bld.w / 2, y: bld.oy + bld.h / 2 };
+  return { x: ox, y: oy };
 }
 
 export type QuestMapMarker = {
@@ -1791,8 +1916,13 @@ export function listActiveQuestMapMarkers(
     const def = getQuestDefinition(prev.questId);
     if (!def || def.stub) continue;
     const pt = resolveQuestMapPoint(state, def);
-    if (!pt) continue;
-    out.push({ questId: def.id, title: def.title, x: pt.x, y: pt.y });
+    if (pt) out.push({ questId: def.id, title: def.title, x: pt.x, y: pt.y });
+    if (prev.altTargetX != null && prev.altTargetY != null) {
+      const alt = questBuildingMapPoint(prev.altTargetX, prev.altTargetY);
+      if (!pt || alt.x !== pt.x || alt.y !== pt.y) {
+        out.push({ questId: def.id, title: def.title, x: alt.x, y: alt.y });
+      }
+    }
   }
   return out;
 }
@@ -1806,6 +1936,44 @@ export function listActiveQuestBuildingTargets(
     if (prev.status !== "active") continue;
     if (prev.targetX == null || prev.targetY == null) continue;
     out.push({ x: prev.targetX, y: prev.targetY });
+  }
+  return out;
+}
+
+/**
+ * Jobs that just became active. The join snapshot has no previous state, so
+ * the caller must skip the first sync or every saved job looks newly accepted.
+ */
+export function listNewlyAcceptedQuests(
+  prev: PlayerQuestsState,
+  next: PlayerQuestsState,
+): { questId: string; title: string }[] {
+  const out: { questId: string; title: string }[] = [];
+  for (const [questId, after] of Object.entries(next.quests)) {
+    if (after.status !== "active") continue;
+    if (prev.quests[questId]?.status === "active") continue;
+    const def = getQuestDefinition(questId);
+    if (!def || def.stub) continue;
+    out.push({ questId, title: def.title });
+  }
+  return out;
+}
+
+/**
+ * Jobs that just went from active to completed. A turn-in.
+ * A missing previous entry is not a completion, so the join snapshot stays quiet.
+ */
+export function listNewlyCompletedQuests(
+  prev: PlayerQuestsState,
+  next: PlayerQuestsState,
+): { questId: string; title: string }[] {
+  const out: { questId: string; title: string }[] = [];
+  for (const [questId, after] of Object.entries(next.quests)) {
+    if (after.status !== "completed") continue;
+    if (prev.quests[questId]?.status !== "active") continue;
+    const def = getQuestDefinition(questId);
+    if (!def || def.stub) continue;
+    out.push({ questId, title: def.title });
   }
   return out;
 }

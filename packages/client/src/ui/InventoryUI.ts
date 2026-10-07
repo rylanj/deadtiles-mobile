@@ -578,12 +578,11 @@ export class InventoryUI {
       appendItemWetnessBar(cell, slot);
 
       const weaponIndex = weaponIndexFromItemId(slot.id);
-      const isWeaponEquipped =
-        weaponIndex >= 0 && this.equippedInventorySlot === index;
       const isClothingWorn =
         isClothingItem(slot.id) && index === CLOTHING_SLOT_INDEX;
       if (
-        isWeaponEquipped ||
+        index < WEAPON_SLOT_COUNT ||
+        isArmorSlot(index) ||
         isClothingWorn ||
         isWatchSlot(index) ||
         isRadioSlot(index) ||

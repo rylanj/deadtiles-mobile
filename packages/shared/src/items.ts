@@ -1,4 +1,14 @@
 import { RAW_MEAT_INFECTION_CHANCE } from "./infection.js";
+import {
+  BACKPACK_ROLLS,
+  CONTAINER_LOOT,
+  GUARD_POCKET,
+  MAGAZINE_ROLLS,
+  TRADER_GUARD_POCKET,
+  TRADER_POCKET,
+  ZOMBIE_POCKET,
+  rollLootRolls,
+} from "./lootTables.js";
 import { parentOfSub, type SubSkillId } from "./skills.js";
 import {
   getBuildingAt,
@@ -540,7 +550,7 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   { id: "banknote", name: "Banknote", category: "junk", stackable: true, weight: 0.01 },
   { id: "dogtag", name: "Dog Tag", category: "junk", stackable: true, weight: 0.02 },
   { id: "lighter", name: "Lighter", category: "junk", stackable: false, weight: 0.05, maxDurability: 20 },
-  { id: "lockpick", name: "Lockpick", category: "junk", stackable: false, weight: 0.05, maxDurability: 5 },
+  { id: "lockpick", name: "Lockpick Kit", category: "junk", stackable: false, weight: 0.05, maxDurability: 5 },
   { id: "blue_cigarettes", name: "Cigarettes (Blue)", category: "junk", stackable: true, weight: 0.05 },
   { id: "gold_chain", name: "Gold Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "gold_earrings", name: "Gold Earrings", category: "junk", stackable: true, weight: 0.05 },
@@ -848,7 +858,7 @@ export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
 
 /** True when this furniture type can roll container loot. */
 export function isLootContainerType(objectType: string): boolean {
-  return Object.prototype.hasOwnProperty.call(CONTAINER_CATEGORIES, objectType);
+  return Object.prototype.hasOwnProperty.call(CONTAINER_LOOT, objectType);
 }
 
 export function isConsumable(itemId: string): boolean {
@@ -2555,437 +2565,7 @@ export function lootCategoryItemIds(category: string): readonly string[] {
 
 /** True when furniture can be searched / looted. */
 export function furnitureIsSearchable(objectType: string): boolean {
-  return Object.prototype.hasOwnProperty.call(CONTAINER_CATEGORIES, objectType);
-}
-
-/** Furniture → loot categories (objectType keys match interior furniture). */
-const CONTAINER_CATEGORIES: Record<string, string[]> = {
-  desk: [
-    "melee_lite",
-    "ammo_lite",
-    "medical_lite",
-    "crafting_lite",
-    "junk",
-    "parts_pistol",
-  ],
-  bigshelf: [
-    "ammo_lite",
-    "ammo_heavy",
-    "medical_lite",
-    "medical_heavy",
-    "crafting_lite",
-    "consumables",
-    "parts_springs",
-  ],
-  bigbox: [
-    "ammo_lite",
-    "ammo_heavy",
-    "medical_lite",
-    "medical_heavy",
-    "crafting_lite",
-    "consumables",
-    "guns_lite",
-    "melee_lite",
-    "melee_heavy",
-    "parts_springs",
-    "parts_military",
-    "guns_military",
-  ],
-  watercontainer: ["consumables"],
-  cabinet: ["ammo_lite", "medical_lite", "crafting_lite", "junk"],
-  bed: [
-    "guns_lite",
-    "guns_medium",
-    "melee_lite",
-    "melee_heavy",
-    "junk",
-    "parts_pistol",
-    "parts_shotgun",
-  ],
-  dresser: ["junk"],
-  bookshelf: ["junk"],
-  guncabinet: [
-    "ammo_lite",
-    "ammo_heavy",
-    "guns_lite",
-    "guns_medium",
-    "guns_hunting",
-    "parts_pistol",
-    "parts_revolver",
-    "parts_shotgun",
-    "parts_hunting",
-  ],
-  fridge: ["consumables"],
-  drawers: [
-    "ammo_lite",
-    "medical_lite",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "parts_pistol",
-    "parts_revolver",
-  ],
-  kitchensink: ["consumables"],
-  /** House kitchen — set DinnerTable1. */
-  dinnertable: ["consumables", "junk"],
-  nightstand: [
-    "ammo_lite",
-    "medical_lite",
-    "guns_lite",
-    "melee_lite",
-    "crafting_lite",
-    "junk",
-    "parts_pistol",
-    "parts_revolver",
-  ],
-  desk2: [
-    "ammo_lite",
-    "medical_lite",
-    "medical_heavy",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_pistol",
-    "parts_shotgun",
-  ],
-  /** Office bullpen desk. */
-  desk3: [
-    "ammo_lite",
-    "medical_lite",
-    "medical_heavy",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_pistol",
-    "parts_shotgun",
-  ],
-  /** Office meeting table. Chairs are part of the art. */
-  conferencetable: ["junk", "consumables", "crafting_lite", "medical_lite"],
-  /** Office copier. */
-  copier: ["crafting_lite", "junk"],
-  bookshelf2: ["ammo_lite", "junk"],
-  deadofficer: [
-    "guns_lite",
-    "ammo_lite",
-    "medical_lite",
-    "medical_heavy",
-    "junk",
-    "parts_pistol",
-  ],
-  bagchair: [
-    "ammo_lite",
-    "medical_lite",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-  ],
-  /** House Armchair1. Cushion finds only. */
-  armchair: ["cushion"],
-  /** House Sofa1. Cushion finds only. */
-  sofa: ["cushion"],
-  suitcase: [
-    "ammo_lite",
-    "medical_lite",
-    "medical_heavy",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_pistol",
-  ],
-  watercooler: ["consumables"],
-  trashcan: ["crafting_lite", "junk", "consumables"],
-  checkout: ["consumables", "junk"],
-  supershelf1: ["consumables", "medical_lite", "medical_heavy", "junk"],
-  supershelf2: ["consumables", "medical_lite", "medical_heavy", "junk"],
-  /** Drink coolers — filtered to drink items only in eligibleLootItems. */
-  superfridge1: ["consumables"],
-  hospitalbed: ["medical_lite", "medical_heavy", "junk"],
-  /** HospitalBed2/3 — occupied soldier beds (decorative Idle only, not searchable). */
-  ivstand: ["medical_lite", "medical_heavy"],
-  medicalcart: [
-    "medical_lite",
-    "medical_heavy",
-    "crafting_lite",
-    "consumables",
-  ],
-  medicalreception: [
-    "medical_lite",
-    "medical_heavy",
-    "junk",
-    "consumables",
-  ],
-  /** Hospital admin — MedicalDrawers1 filing unit. */
-  medicaldrawers: [
-    "medical_lite",
-    "medical_heavy",
-    "crafting_lite",
-    "junk",
-  ],
-  /** Hospital lobby — ThreeSeater1 is decorative only (not searchable). */
-  /** Hospital lobby — ThreeSeater2 waiting bench. */
-  threeseater2: ["consumables", "junk", "crafting_lite", "guns_lite"],
-  /** Hospital lobby — ThreeSeater3 waiting bench. */
-  threeseater3: ["consumables", "junk"],
-  /** Hospital / police — VendingMachine1. */
-  vendingmachine: ["consumables", "junk"],
-  /** Motel — lobby Counter1 (junk + rare sidearm roll). */
-  counter: ["junk"],
-  /** Motel — MotelBed1 guest bed. */
-  motelbed: [
-    "guns_lite",
-    "guns_medium",
-    "melee_lite",
-    "melee_heavy",
-    "junk",
-    "parts_pistol",
-  ],
-  /** Motel — MiniFridge1 in guest rooms. */
-  minifridge: ["consumables"],
-  /** Player-dropped floor bag — loot is pre-seeded; no random rolls. */
-  groundbackpack: [],
-  militarybed: ["guns_lite", "melee_lite", "junk", "parts_military", "guns_military"],
-  footlocker: [
-    "ammo_lite",
-    "medical_lite",
-    "guns_lite",
-    "melee_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_military",
-    "guns_military",
-  ],
-  kitbag: [
-    "ammo_lite",
-    "medical_lite",
-    "guns_lite",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_military",
-    "guns_military",
-  ],
-  camptable: ["consumables", "junk"],
-  militarybasket: ["crafting_lite", "junk", "consumables"],
-  range: ["consumables", "junk"],
-  hotdisplay: ["consumables"],
-  drinkdisplay: ["consumables"],
-  canteentable1: ["consumables", "junk"],
-  canteentable2: ["consumables", "junk"],
-  canteentable3: ["consumables", "junk"],
-  /** Felled overworld tree — loot is pre-seeded (2–4 wood); no random rolls. */
-  fallenTree: [],
-  lockers: [
-    "ammo_lite",
-    "medical_lite",
-    "medical_heavy",
-    "guns_lite",
-    "guns_medium",
-    "melee_heavy",
-    "crafting_lite",
-    "junk",
-    "consumables",
-    "parts_pistol",
-    "parts_shotgun",
-  ],
-  /** Large retail clothing racks. Shirts only, filtered below. */
-  clothingrack1: ["junk"],
-  clothingrack2: ["junk"],
-  clothingrack3: ["junk"],
-  /** Large retail gondolas. General merchandise, no cash drawer. */
-  retailshelf1: ["consumables", "crafting_lite", "medical_lite", "junk"],
-  retailshelf2: ["consumables", "crafting_lite", "medical_lite", "junk"],
-  retailshelf3: ["consumables", "crafting_lite", "medical_lite", "junk"],
-  /** Abandoned shopping cart. */
-  cart1: ["consumables", "junk"],
-  cart2: ["consumables", "junk"],
-  /** Jewelry display. Rings and chains only, filtered below. */
-  retailcase1: ["junk"],
-  /** Watch display. The watch roll is dedicated below. */
-  retailcase2: ["junk"],
-  /** Department-store register. Same stock and cash drawer as Checkout1. */
-  retailcheckout1: ["consumables", "junk"],
-};
-
-const ITEM_SPAWN_DATA: Record<string, { chance: number; minQty: number; maxQty: number }> = {
-  ammo_44: { chance: 0.05, minQty: 1, maxQty: 6 },
-  ammo_9x19: { chance: 0.05, minQty: 1, maxQty: 17 },
-  ammo_762x39: { chance: 0.02, minQty: 1, maxQty: 30 },
-  ammo_556x45: { chance: 0.02, minQty: 1, maxQty: 30 },
-  ammo_buckshot: { chance: 0.04, minQty: 1, maxQty: 8 },
-  multivitamins: { chance: 0.05, minQty: 1, maxQty: 1 },
-  rags: { chance: 0.1, minQty: 1, maxQty: 4 },
-  alcohol: { chance: 0.05, minQty: 1, maxQty: 2 },
-  bandages: { chance: 0.05, minQty: 1, maxQty: 2 },
-  antibiotics: { chance: 0.04, minQty: 1, maxQty: 1 },
-  weapon_pistol: { chance: 0.01, minQty: 1, maxQty: 1 },
-  weapon_revolver: { chance: 0.01, minQty: 1, maxQty: 1 },
-  weapon_shotgun: { chance: 0.005, minQty: 1, maxQty: 1 },
-  weapon_assault_rifle: { chance: 0.002, minQty: 1, maxQty: 1 },
-  weapon_m4a1: { chance: 0.002, minQty: 1, maxQty: 1 },
-  weapon_hunting_rifle: { chance: 0.002, minQty: 1, maxQty: 1 },
-  weapon_hammer: { chance: 0.1, minQty: 1, maxQty: 1 },
-  weapon_hatchet: { chance: 0.1, minQty: 1, maxQty: 1 },
-  weapon_bat: { chance: 0.1, minQty: 1, maxQty: 1 },
-  bolts: { chance: 0.05, minQty: 1, maxQty: 3 },
-  screws: { chance: 0.08, minQty: 1, maxQty: 5 },
-  duct_tape: { chance: 0.1, minQty: 1, maxQty: 1 },
-  scrap_metal: { chance: 0.05, minQty: 1, maxQty: 1 },
-  pistol_slide: { chance: 0.012, minQty: 1, maxQty: 1 },
-  pistol_trigger: { chance: 0.008, minQty: 1, maxQty: 1 },
-  pistol_frame: { chance: 0.006, minQty: 1, maxQty: 1 },
-  small_spring: { chance: 0.018, minQty: 1, maxQty: 1 },
-  revolver_cylinder: { chance: 0.006, minQty: 1, maxQty: 1 },
-  revolver_barrel: { chance: 0.006, minQty: 1, maxQty: 1 },
-  revolver_trigger: { chance: 0.006, minQty: 1, maxQty: 1 },
-  revolver_frame: { chance: 0.005, minQty: 1, maxQty: 1 },
-  shotgun_stock: { chance: 0.005, minQty: 1, maxQty: 1 },
-  shotgun_trigger: { chance: 0.005, minQty: 1, maxQty: 1 },
-  shotgun_barrel: { chance: 0.004, minQty: 1, maxQty: 1 },
-  shotgun_receiver: { chance: 0.004, minQty: 1, maxQty: 1 },
-  large_spring: { chance: 0.008, minQty: 1, maxQty: 1 },
-  rifle_stock: { chance: 0.004, minQty: 1, maxQty: 1 },
-  rifle_trigger: { chance: 0.004, minQty: 1, maxQty: 1 },
-  rifle_barrel: { chance: 0.003, minQty: 1, maxQty: 1 },
-  rifle_receiver: { chance: 0.003, minQty: 1, maxQty: 1 },
-  scope: { chance: 0.003, minQty: 1, maxQty: 1 },
-  ak_stock: { chance: 0.004, minQty: 1, maxQty: 1 },
-  ak_barrel: { chance: 0.003, minQty: 1, maxQty: 1 },
-  ak_receiver: { chance: 0.003, minQty: 1, maxQty: 1 },
-  m4_stock: { chance: 0.003, minQty: 1, maxQty: 1 },
-  m4_barrel: { chance: 0.002, minQty: 1, maxQty: 1 },
-  m4_receiver: { chance: 0.002, minQty: 1, maxQty: 1 },
-  banknote: { chance: 0.05, minQty: 1, maxQty: 20 },
-  lighter: { chance: 0.04, minQty: 1, maxQty: 1 },
-  lockpick: { chance: 0.01, minQty: 1, maxQty: 1 },
-  blue_cigarettes: { chance: 0.1, minQty: 1, maxQty: 1 },
-  white_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
-  black_tshirt: { chance: 0.08, minQty: 1, maxQty: 1 },
-  [BACKPACK_FANNY_ID]: { chance: 0.08, minQty: 1, maxQty: 1 },
-  [BACKPACK_UTILITY_ID]: { chance: 0.05, minQty: 1, maxQty: 1 },
-  [BACKPACK_SMALL_ID]: { chance: 0.03, minQty: 1, maxQty: 1 },
-  [BACKPACK_HUNTING_ID]: { chance: 0.018, minQty: 1, maxQty: 1 },
-  [BACKPACK_LEATHER_ID]: { chance: 0.01, minQty: 1, maxQty: 1 },
-  [BACKPACK_HIKING_ID]: { chance: 0.006, minQty: 1, maxQty: 1 },
-  gold_chain: { chance: 0.005, minQty: 1, maxQty: 1 },
-  gold_earrings: { chance: 0.005, minQty: 1, maxQty: 1 },
-  gold_ring: { chance: 0.0075, minQty: 1, maxQty: 1 },
-  silver_chain: { chance: 0.02, minQty: 1, maxQty: 1 },
-  silver_ring: { chance: 0.02, minQty: 1, maxQty: 1 },
-  old_teddy: { chance: 0.1, minQty: 1, maxQty: 1 },
-  teddy: { chance: 0.08, minQty: 1, maxQty: 1 },
-  map: { chance: 0.08, minQty: 1, maxQty: 1 },
-  [RADIO_ITEM_ID]: { chance: 0.05, minQty: 1, maxQty: 1 },
-  canned_beans: { chance: 0.05, minQty: 1, maxQty: 2 },
-  canned_peaches: { chance: 0.08, minQty: 1, maxQty: 2 },
-  canned_tuna: { chance: 0.05, minQty: 1, maxQty: 2 },
-  hot_chips: { chance: 0.1, minQty: 1, maxQty: 2 },
-  onion_chips: { chance: 0.1, minQty: 1, maxQty: 2 },
-  salted_chips: { chance: 0.15, minQty: 1, maxQty: 2 },
-  cola: { chance: 0.05, minQty: 1, maxQty: 3 },
-  lemonada: { chance: 0.05, minQty: 1, maxQty: 3 },
-  water: { chance: 0.08, minQty: 1, maxQty: 3 },
-};
-
-/** Eligible item ids for a container, after furniture-specific filters. */
-function eligibleLootItems(objectType: string): string[] {
-  const categories = CONTAINER_CATEGORIES[objectType] ?? [];
-  let items = [...new Set(categories.flatMap((cat) => CATEGORY_ITEMS[cat] ?? []))];
-
-  // Water furniture: only bottles of water from consumables.
-  if (objectType === "watercontainer" || objectType === "watercooler") {
-    return items.filter((id) => id === "water");
-  }
-
-  // Dead officer: guns_lite contributes pistol only (no revolver).
-  if (objectType === "deadofficer") {
-    items = items.filter((id) => id !== "weapon_revolver");
-  }
-
-  // SuperShelf: junk is limited to map + teddies (no cash / jewellery).
-  if (objectType === "supershelf1" || objectType === "supershelf2") {
-    const shelfJunk = new Set(["map", "teddy", "old_teddy"]);
-    const junkIds = new Set(CATEGORY_ITEMS.junk ?? []);
-    items = items.filter((id) => !junkIds.has(id) || shelfJunk.has(id));
-  }
-
-  // Clothing racks: shirts only.
-  if (
-    objectType === "clothingrack1" ||
-    objectType === "clothingrack2" ||
-    objectType === "clothingrack3"
-  ) {
-    return items.filter((id) => id === "white_tshirt" || id === "black_tshirt");
-  }
-
-  // Jewelry case: rings and chains only.
-  if (objectType === "retailcase1") {
-    return items.filter(
-      (id) =>
-        id === "gold_chain" ||
-        id === "gold_earrings" ||
-        id === "gold_ring" ||
-        id === "silver_chain" ||
-        id === "silver_ring",
-    );
-  }
-
-  // Watch case: no generic junk. The watch is rolled separately.
-  if (objectType === "retailcase2") return [];
-
-  // Retail shelves and carts: merchandise, not cash or jewellery.
-  if (
-    objectType === "retailshelf1" ||
-    objectType === "retailshelf2" ||
-    objectType === "retailshelf3" ||
-    objectType === "cart1" ||
-    objectType === "cart2"
-  ) {
-    const merch = new Set([
-      "map",
-      "teddy",
-      "old_teddy",
-      "white_tshirt",
-      "black_tshirt",
-      "lighter",
-      "blue_cigarettes",
-    ]);
-    const junkIds = new Set(CATEGORY_ITEMS.junk ?? []);
-    items = items.filter((id) => !junkIds.has(id) || merch.has(id));
-  }
-
-  // SuperFridge1: consumable drink rolls only (cola / lemonade / water).
-  if (objectType === "superfridge1" || objectType === "drinkdisplay") {
-    items = items.filter((id) => getItemDefinition(id)?.category === "drink");
-  }
-
-  return items;
-}
-
-/** Independent rolls for each item in the given loot categories. */
-function rollLootFromCategories(
-  categories: string[],
-  rng: () => number,
-  chanceScale = 1,
-): InventoryEntry[] {
-  const possibleItems = [
-    ...new Set(categories.flatMap((cat) => CATEGORY_ITEMS[cat] ?? [])),
-  ];
-  const scale =
-    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
-  const results: InventoryEntry[] = [];
-  for (const id of possibleItems) {
-    const data = ITEM_SPAWN_DATA[id];
-    if (!data || rng() >= Math.min(1, data.chance * scale)) continue;
-    const quantity =
-      Math.floor(rng() * (data.maxQty - data.minQty + 1)) + data.minQty;
-    results.push({ id, quantity });
-  }
-  return results;
+  return Object.prototype.hasOwnProperty.call(CONTAINER_LOOT, objectType);
 }
 
 /** Packs that can appear in this building. Empty outside those sites. */
@@ -3003,6 +2583,7 @@ function backpackIdsForBuilding(buildingX: number, buildingY: number): string[] 
   }
   if (bld.buildingType === "warehouse") return [BACKPACK_UTILITY_ID];
   if (bld.buildingType === "police_station") return [BACKPACK_HIKING_ID];
+  if (bld.buildingType === "tent") return [BACKPACK_HIKING_ID];
   if (bld.buildingType === "house" || bld.buildingType === "apartment") {
     const cx = Math.floor(bld.ox / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
     const cy = Math.floor(bld.oy / SETTLEMENT_CELL_SIZE) * SETTLEMENT_CELL_SIZE;
@@ -3014,321 +2595,188 @@ function backpackIdsForBuilding(buildingX: number, buildingY: number): string[] 
   return [];
 }
 
-/**
- * One skill magazine in about 4% of searches. Town loot scale still applies.
- * Beds, seats, desks, shelves, and the other household containers below.
- */
-const MAGAZINE_LOOT_CHANCE = 0.06;
-
-const MAGAZINE_CONTAINERS = new Set([
-  "bed",
-  "motelbed",
-  "hospitalbed",
-  "militarybed",
-  "sofa",
-  "armchair",
-  "desk",
-  "desk2",
-  "desk3",
-  "bookshelf",
-  "bookshelf2",
-  "drawers",
-  "medicaldrawers",
-  "cabinet",
-  "counter",
-  "bagchair",
-  "suitcase",
-  "trashcan",
-  "lockers",
-  "footlocker",
-  "nightstand",
-  "dresser",
-]);
-
-/** Clothing tables, plus warehouse shelves that do not roll shirts. */
-function containerRollsBackpacks(objectType: string): boolean {
-  if (objectType === "retailcase1" || objectType === "retailcase2") return false;
-  const categories = CONTAINER_CATEGORIES[objectType];
-  if (!categories || categories.length === 0) return false;
-  if (categories.includes("junk")) return true;
-  return objectType === "bigshelf" || objectType === "bigbox";
+function rollMagazine(
+  objectType: string,
+  rng: () => number,
+): InventoryEntry | null {
+  const spec = MAGAZINE_ROLLS[objectType];
+  if (!spec || rng() >= spec.chance) return null;
+  if (spec.only) return { id: spec.only, quantity: 1 };
+  const pick = SKILL_MAGAZINES[Math.floor(rng() * SKILL_MAGAZINES.length)];
+  return pick ? { id: pick.itemId, quantity: 1 } : null;
 }
 
-/** Roll container loot — non-deterministic (fresh `Math.random` each call). */
+function rollBackpacks(
+  objectType: string,
+  buildingX: number | undefined,
+  buildingY: number | undefined,
+  rng: () => number,
+): InventoryEntry[] {
+  const specs = BACKPACK_ROLLS[objectType];
+  if (!specs || buildingX == null || buildingY == null) return [];
+  const allowed = new Set(backpackIdsForBuilding(buildingX, buildingY));
+  const motel = getBuildingAt(buildingX, buildingY)?.buildingType === "motel";
+  const results: InventoryEntry[] = [];
+  for (const spec of specs) {
+    if (spec.motelOnly && !motel) continue;
+    if (!allowed.has(spec.id)) continue;
+    if (rng() >= spec.chance) continue;
+    results.push({ id: spec.id, quantity: 1 });
+  }
+  return results;
+}
+
+/** Checkout and the department-store register: 1% sidearm plus matching ammo. */
+function rollRegisterSidearm(rng: () => number): InventoryEntry[] {
+  if (rng() >= 0.01) return [];
+  const pistol = rng() < 0.5;
+  const ammoQty = pistol
+    ? 1 + Math.floor(rng() * 17)
+    : 1 + Math.floor(rng() * 6);
+  return [
+    { id: pistol ? "weapon_pistol" : "weapon_revolver", quantity: 1 },
+    { id: pistol ? "ammo_9x19" : "ammo_44", quantity: ammoQty },
+  ];
+}
+
+/** Motel counter: 1% sidearm. Ammo can be zero. */
+function rollCounterSidearm(rng: () => number): InventoryEntry[] {
+  if (rng() >= 0.01) return [];
+  const pistol = rng() < 0.5;
+  const results: InventoryEntry[] = [
+    { id: pistol ? "weapon_pistol" : "weapon_revolver", quantity: 1 },
+  ];
+  const ammoQty = pistol
+    ? Math.floor(rng() * 18)
+    : Math.floor(rng() * 7);
+  if (ammoQty > 0) {
+    results.push({
+      id: pistol ? "ammo_9x19" : "ammo_44",
+      quantity: ammoQty,
+    });
+  }
+  return results;
+}
+
+/** Roll container loot. Fresh `Math.random` each call. */
 export function generateSearchLoot(
   objectType: string,
   _searchSeed: string,
   buildingX?: number,
   buildingY?: number,
-  chanceScale = 1,
 ): InventoryEntry[] {
-  const possibleItems = eligibleLootItems(objectType);
-  const results: InventoryEntry[] = [];
-  const scale =
-    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
+  const rng = Math.random;
+  const results = rollLootRolls(CONTAINER_LOOT[objectType] ?? [], rng);
 
-  const cushion =
-    objectType === "armchair" || objectType === "sofa";
-  for (const id of possibleItems) {
-    const data = ITEM_SPAWN_DATA[id];
-    if (!data) continue;
-    // Cash, jewellery, and springs are the point of searching a seat.
-    const cushionBoost =
-      cushion &&
-      (id === "banknote" ||
-        id.startsWith("gold_") ||
-        id.startsWith("silver_") ||
-        id === "small_spring" ||
-        id === "large_spring")
-        ? 4
-        : 1;
-    // House junk rates are tiny. A display case should usually still hold a piece.
-    const caseBoost = objectType === "retailcase1" ? 18 : 1;
-    if (Math.random() >= Math.min(1, data.chance * scale * cushionBoost * caseBoost)) continue;
-    const quantity =
-      Math.floor(Math.random() * (data.maxQty - data.minQty + 1)) + data.minQty;
-    results.push({ id, quantity });
-  }
+  const magazine = rollMagazine(objectType, rng);
+  if (magazine) results.push(magazine);
+  results.push(...rollBackpacks(objectType, buildingX, buildingY, rng));
 
-  // Watch case: one watch, often. Watches are not in the generic junk table.
-  if (objectType === "retailcase2" && Math.random() < Math.min(1, 0.65 * scale)) {
-    results.push({ id: WATCH_ITEM_ID, quantity: 1 });
-  }
-
-  if (
-    containerRollsBackpacks(objectType) &&
-    buildingX != null &&
-    buildingY != null
-  ) {
-    for (const id of backpackIdsForBuilding(buildingX, buildingY)) {
-      const data = ITEM_SPAWN_DATA[id];
-      if (!data || Math.random() >= Math.min(1, data.chance * scale)) continue;
-      results.push({ id, quantity: 1 });
-    }
-  }
-
-  if (
-    MAGAZINE_CONTAINERS.has(objectType) &&
-    Math.random() < Math.min(1, MAGAZINE_LOOT_CHANCE * scale)
-  ) {
-    const pick = SKILL_MAGAZINES[Math.floor(Math.random() * SKILL_MAGAZINES.length)];
-    if (pick) results.push({ id: pick.itemId, quantity: 1 });
-  }
-
-  // Checkout1 / RetailCheckout1: cash drawer + rare sidearm (+ matching ammo).
   if (objectType === "checkout" || objectType === "retailcheckout1") {
-    if (Math.random() < Math.min(1, 0.05 * scale)) {
-      results.push({
-        id: "banknote",
-        quantity: 1 + Math.floor(Math.random() * 50), // 1–50
-      });
-    }
-    if (Math.random() < Math.min(1, 0.01 * scale)) {
-      const pistol = Math.random() < 0.5;
-      results.push({
-        id: pistol ? "weapon_pistol" : "weapon_revolver",
-        quantity: 1,
-      });
-      results.push({
-        id: pistol ? "ammo_9x19" : "ammo_44",
-        quantity: pistol
-          ? 1 + Math.floor(Math.random() * 17) // 1–17
-          : 1 + Math.floor(Math.random() * 6), // 1–6
-      });
-    }
+    results.push(...rollRegisterSidearm(rng));
+  }
+  if (objectType === "counter") {
+    results.push(...rollCounterSidearm(rng));
   }
 
-  // Motel Counter1: 1% sidearm + matching ammo (0–17 / 0–6).
-  if (objectType === "counter" && Math.random() < Math.min(1, 0.01 * scale)) {
-    const pistol = Math.random() < 0.5;
-    results.push({
-      id: pistol ? "weapon_pistol" : "weapon_revolver",
-      quantity: 1,
-    });
-    const ammoQty = pistol
-      ? Math.floor(Math.random() * 18) // 0–17
-      : Math.floor(Math.random() * 7); // 0–6
-    if (ammoQty > 0) {
-      results.push({
-        id: pistol ? "ammo_9x19" : "ammo_44",
-        quantity: ammoQty,
-      });
-    }
+  // Waiting bench: a pistol still comes with 0-17 rounds of 9mm.
+  if (
+    objectType === "threeseater2" &&
+    results.some((entry) => entry.id === "weapon_pistol") &&
+    !results.some((entry) => entry.id === "ammo_9x19")
+  ) {
+    const qty = Math.floor(rng() * 18);
+    if (qty > 0) results.push({ id: "ammo_9x19", quantity: qty });
   }
 
-  // MedicalReception1: dedicated cash-drawer banknote roll (on top of junk).
-  if (objectType === "medicalreception" && Math.random() < Math.min(1, 0.15 * scale)) {
-    results.push({
-      id: "banknote",
-      quantity: 1 + Math.floor(Math.random() * 15), // 1–15
-    });
-  }
-
-  // ThreeSeater2: sidearms come with matching ammo (0–17 / 0–6).
-  if (objectType === "threeseater2") {
-    if (results.some((e) => e.id === "weapon_pistol")) {
-      const qty = Math.floor(Math.random() * 18); // 0–17
-      if (qty > 0) results.push({ id: "ammo_9x19", quantity: qty });
-    }
-    if (results.some((e) => e.id === "weapon_revolver")) {
-      const qty = Math.floor(Math.random() * 7); // 0–6
-      if (qty > 0) results.push({ id: "ammo_44", quantity: qty });
-    }
-  }
-
-  // Dead officer: one body per station. Desk-style 1% pistol rolls left them empty.
   if (objectType === "deadofficer") {
-    return applyDeadOfficerLoot(results, scale);
+    return applyDeadOfficerLoot(results);
   }
 
   return results;
 }
 
-/** Same sidearm rate as a police-officer zombie. These bodies are rare. */
-const DEAD_OFFICER_PISTOL_CHANCE = 0.25;
-/** Extra radio roll on the station body, independent of the junk pool. */
-const DEAD_OFFICER_RADIO_CHANCE = 0.25;
+/** Pocket 9mm added when a dead officer has a pistol and the ammo roll missed. */
+const DEAD_OFFICER_PISTOL_AMMO_MIN = 4;
+const DEAD_OFFICER_PISTOL_AMMO_MAX = 12;
 
-function applyDeadOfficerLoot(
-  results: InventoryEntry[],
-  scale: number,
-): InventoryEntry[] {
+function applyDeadOfficerLoot(results: InventoryEntry[]): InventoryEntry[] {
   const out = results.slice();
   if (
-    !out.some((e) => e.id === "weapon_pistol") &&
-    Math.random() < Math.min(1, DEAD_OFFICER_PISTOL_CHANCE * scale)
+    out.some((entry) => entry.id === "weapon_pistol") &&
+    !out.some((entry) => entry.id === "ammo_9x19")
   ) {
-    out.push({ id: "weapon_pistol", quantity: 1 });
-  }
-  if (
-    !out.some((e) => e.id === RADIO_ITEM_ID) &&
-    Math.random() < Math.min(1, DEAD_OFFICER_RADIO_CHANCE * scale)
-  ) {
-    out.push({ id: RADIO_ITEM_ID, quantity: 1 });
-  }
-  if (
-    out.some((e) => e.id === "weapon_pistol") &&
-    !out.some((e) => e.id === "ammo_9x19")
-  ) {
+    const span = DEAD_OFFICER_PISTOL_AMMO_MAX - DEAD_OFFICER_PISTOL_AMMO_MIN + 1;
     out.push({
       id: "ammo_9x19",
-      quantity: 1 + Math.floor(Math.random() * 17),
-    });
-  }
-  // Outside town the body always yields something. Birchport uses the halved
-  // rolls only, so this station corpse can come up empty.
-  if (out.length === 0 && scale >= 1) {
-    const fallback: { id: string; minQty: number; maxQty: number }[] = [
-      { id: "ammo_9x19", minQty: 3, maxQty: 17 },
-      { id: "rags", minQty: 1, maxQty: 4 },
-      { id: "bandages", minQty: 1, maxQty: 2 },
-      { id: "blue_cigarettes", minQty: 1, maxQty: 1 },
-      { id: "banknote", minQty: 2, maxQty: 20 },
-      { id: "lighter", minQty: 1, maxQty: 1 },
-    ];
-    const pick = fallback[Math.floor(Math.random() * fallback.length)]!;
-    out.push({
-      id: pick.id,
-      quantity:
-        pick.minQty +
-        Math.floor(Math.random() * (pick.maxQty - pick.minQty + 1)),
+      quantity: DEAD_OFFICER_PISTOL_AMMO_MIN + Math.floor(Math.random() * span),
     });
   }
   return out;
 }
 
-/** 50% of zombies carry nothing; otherwise category rolls at normal spawn rates. */
+/** 50% of zombies carry nothing. A pocket that is not empty uses its own list. */
 const ZOMBIE_EMPTY_LOOT_CHANCE = 0.5;
-const ZOMBIE_LOOT_CATEGORIES = [
-  "ammo_lite",
-  "medical_lite",
-  "crafting_lite",
-  "junk",
-  "consumables",
-];
 
-/** Police officer zombie (skin 11) — 25% chance of a sidearm + 0–17 9x19. */
+/** Police officer zombie (skin 11): 25% chance of a sidearm and 0-17 9x19. */
 const ZOMBIE_POLICE_PISTOL_CHANCE = 0.25;
 
 /** Deterministic loot rolled once when a zombie dies. */
 export function generateZombieLoot(
   zombieId: string,
   skin = 1,
-  chanceScale = 1,
 ): InventoryEntry[] {
   const rng = mulberry32(xmur3(`zombie-loot:${zombieId}`)());
-  const scale =
-    Number.isFinite(chanceScale) && chanceScale > 0 ? chanceScale : 1;
   const results: InventoryEntry[] = [];
 
-  if (
-    skin === ZOMBIE_SKIN_MAN11 &&
-    rng() < Math.min(1, ZOMBIE_POLICE_PISTOL_CHANCE * scale)
-  ) {
+  if (skin === ZOMBIE_SKIN_MAN11 && rng() < ZOMBIE_POLICE_PISTOL_CHANCE) {
     results.push({ id: "weapon_pistol", quantity: 1 });
-    const ammoQty = Math.floor(rng() * 18); // 0–17
+    const ammoQty = Math.floor(rng() * 18);
     if (ammoQty > 0) {
       results.push({ id: "ammo_9x19", quantity: ammoQty });
     }
   }
 
-  // Empty roll skips normal categories but keeps any officer sidearm above.
+  // Empty roll skips the pocket but keeps any officer sidearm above.
   if (rng() < ZOMBIE_EMPTY_LOOT_CHANCE) return results;
-  results.push(...rollLootFromCategories(ZOMBIE_LOOT_CATEGORIES, rng, scale));
+  results.push(...rollLootRolls(ZOMBIE_POCKET, rng));
   return results;
 }
 
-const GUARD_LOOT_CATEGORIES = [
-  "ammo_lite",
-  "medical_lite",
-  "medical_heavy",
-  "crafting_lite",
-  "junk",
-  "consumables",
-  "parts_military",
-];
-
-/** Deterministic loot rolled once when a guard dies — always includes dog tag, AK + 0–30 7.62. */
+/** Deterministic loot rolled once when a guard dies. Always a dog tag, an AK, and 0-30 7.62. */
 export function generateGuardLoot(guardId: string, salt = ""): InventoryEntry[] {
   const rng = mulberry32(xmur3(`guard-loot:${guardId}:${salt}`)());
   const results: InventoryEntry[] = [
     { id: "dogtag", quantity: 1 },
     { id: "weapon_assault_rifle", quantity: 1 },
   ];
-  const ammoQty = Math.floor(rng() * 31); // 0–30
+  const ammoQty = Math.floor(rng() * 31);
   if (ammoQty > 0) {
     results.push({ id: "ammo_762x39", quantity: ammoQty });
   }
-  results.push(...rollLootFromCategories(GUARD_LOOT_CATEGORIES, rng));
+  results.push(...rollLootRolls(GUARD_POCKET, rng));
   return results;
 }
 
-const TRADER_GUARD_LOOT_CATEGORIES = [
-  "medical_lite",
-  "medical_heavy",
-  "consumables",
-  "junk",
-];
-
-/** TraderGuard1 loot — always 1× pistol + 0–17 9x19mm, plus trader categories. */
+/** TraderGuard1 loot. Always 1 pistol and 0-17 9x19mm, plus a short pocket. */
 export function generateTraderGuardLoot(
   guardId: string,
   salt = "",
 ): InventoryEntry[] {
   const rng = mulberry32(xmur3(`trader-guard-loot:${guardId}:${salt}`)());
   const results: InventoryEntry[] = [{ id: "weapon_pistol", quantity: 1 }];
-  const ammoQty = Math.floor(rng() * 18); // 0–17
+  const ammoQty = Math.floor(rng() * 18);
   if (ammoQty > 0) {
     results.push({ id: "ammo_9x19", quantity: ammoQty });
   }
-  results.push(...rollLootFromCategories(TRADER_GUARD_LOOT_CATEGORIES, rng));
+  results.push(...rollLootRolls(TRADER_GUARD_POCKET, rng));
   return results;
 }
 
 /**
- * Red Order loot — pistol skins always drop a pistol + 0–17 9x19;
- * shotgun skin (2) always drops a shotgun + 0–8 buckshot.
- * Extra rolls match TraderGuard categories.
+ * Red Order loot. Pistol skins always drop a pistol and 0-17 9x19.
+ * Shotgun skin (2) always drops a shotgun and 0-8 buckshot.
+ * The extra pocket matches a trader guard.
  */
 export function generateRedManLoot(
   guardId: string,
@@ -3341,28 +2789,25 @@ export function generateRedManLoot(
     { id: shotgun ? "weapon_shotgun" : "weapon_pistol", quantity: 1 },
   ];
   const ammoQty = shotgun
-    ? Math.floor(rng() * 9) // 0–8
-    : Math.floor(rng() * 18); // 0–17
+    ? Math.floor(rng() * 9)
+    : Math.floor(rng() * 18);
   if (ammoQty > 0) {
     results.push({
       id: shotgun ? "ammo_buckshot" : "ammo_9x19",
       quantity: ammoQty,
     });
   }
-  results.push(...rollLootFromCategories(TRADER_GUARD_LOOT_CATEGORIES, rng));
+  results.push(...rollLootRolls(TRADER_GUARD_POCKET, rng));
   return results;
 }
 
-/** TraderMan1 loot — light trade goods, no guaranteed weapon. */
+/** TraderMan1 loot. Light trade goods, no guaranteed weapon. */
 export function generateTraderManLoot(
   manId: string,
   salt = "",
 ): InventoryEntry[] {
   const rng = mulberry32(xmur3(`trader-man-loot:${manId}:${salt}`)());
-  return rollLootFromCategories(
-    ["medical_lite", "consumables", "junk"],
-    rng,
-  );
+  return rollLootRolls(TRADER_POCKET, rng);
 }
 
 function normalizeInventorySlots(parsed: unknown[]): Inventory {
@@ -3997,14 +3442,20 @@ export function createContainerInventoryFromLoot(loot: InventoryEntry[]): Invent
   const inventory = createEmptyContainerInventory();
   let slot = 0;
   for (const entry of loot) {
-    if (slot >= CONTAINER_INVENTORY_SLOTS) break;
     if (!getItemDefinition(entry.id) || entry.quantity <= 0) continue;
-    inventory[slot++] = makeInventoryEntry(
-      entry.id,
-      entry.quantity,
-      entry.magazineRounds,
-      inventoryEntryMeta(entry),
-    );
+    const cap = maxStackForItem(entry.id);
+    if (cap <= 0) continue;
+    let remaining = Math.floor(entry.quantity);
+    while (remaining > 0 && slot < CONTAINER_INVENTORY_SLOTS) {
+      const qty = Math.min(remaining, cap);
+      inventory[slot++] = makeInventoryEntry(
+        entry.id,
+        qty,
+        entry.magazineRounds,
+        inventoryEntryMeta(entry),
+      );
+      remaining -= qty;
+    }
   }
   return inventory;
 }

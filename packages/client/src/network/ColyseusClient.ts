@@ -489,6 +489,8 @@ export type SearchableSchema = {
   facing: string;
   /** Unix ms when a furnace's fire goes out. 0 when cold or not a furnace. */
   activeUntil: number;
+  /** Safe is cracked and waiting for its loot search. The door stays closed. */
+  cracked: boolean;
 };
 
 export type WorldRoomState = {
@@ -684,6 +686,8 @@ export type TradeSyncEvent = {
     stockJson: string;
     stockCapacity?: number;
     inventoryJson: string;
+    /** Set only for the player whose offer just went through. */
+    completed?: boolean;
   };
 };
 
@@ -701,6 +705,8 @@ export type DialogOpenEvent = {
     ashenMilitiaReputation?: number;
     inInterior?: boolean;
     taskCompletionsJson?: string;
+    /** Kevin only. True after the safe deposit fee is paid. */
+    safeDepositRented?: boolean;
   };
 };
 
@@ -723,6 +729,10 @@ export type DialogTaskCompleteEvent = {
     rewards: { id: string; quantity: number; name: string }[];
     taskCompletionsJson?: string;
   };
+};
+
+export type SafeDepositCloseEvent = {
+  type: "safeDepositClose";
 };
 
 export type DialogHealCompleteEvent = {
@@ -998,6 +1008,7 @@ export type ServerEvent =
   | DialogTaskDeniedEvent
   | DialogTaskCompleteEvent
   | DialogHealCompleteEvent
+  | SafeDepositCloseEvent
   | QuestSyncEvent
   | SkillSyncEvent
   | BlueprintSyncEvent

@@ -251,8 +251,8 @@ export const ASHEN_MILITIA_MEDICAL_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "bandages",
   requireQty: 3,
-  rewardBanknotes: 50,
-  rewardReputation: 100,
+  rewardBanknotes: 35,
+  rewardReputation: 20,
   label: "Three's a Wrap",
   requireItemLabel: "Bandages",
   maxCompletionsPerWindow: 1,
@@ -265,24 +265,26 @@ export const ASHEN_MILITIA_POCKET_ROUNDS_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "ammo_9x19",
   requireQty: 20,
-  rewardBanknotes: 90,
-  rewardReputation: 160,
+  rewardBanknotes: 50,
+  rewardReputation: 25,
   label: "Pocket Rounds",
   requireItemLabel: "9x19mm Rounds",
   maxCompletionsPerWindow: 1,
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
-/** Turn-in: rifle ammo for street patrols. */
+/** Turn-in: rifle ammo for street patrols. Once a day. */
 export const ASHEN_MILITIA_AMMO_TASK: AshenMilitiaTask = {
   id: "ashen_militia_ammo",
   dialogLineId: "jobs",
   requireItemId: "ammo_762x39",
   requireQty: 30,
-  rewardBanknotes: 300,
-  rewardReputation: 600,
+  rewardBanknotes: 75,
+  rewardReputation: 40,
   label: "Feed our Rifles",
   requireItemLabel: "7.62x39mm Rounds",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 /** Turn-in: drinking water for the hospital ward. Once a day. */
@@ -291,24 +293,26 @@ export const ASHEN_MILITIA_WATER_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "water",
   requireQty: 5,
-  rewardBanknotes: 50,
-  rewardReputation: 100,
+  rewardBanknotes: 30,
+  rewardReputation: 15,
   label: "Dry Patrol",
   requireItemLabel: "Water",
   maxCompletionsPerWindow: 1,
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
-/** Turn-in: cigarettes for morale. */
+/** Turn-in: cigarettes for morale. Once a day. */
 export const ASHEN_MILITIA_CIGARETTES_TASK: AshenMilitiaTask = {
   id: "ashen_militia_cigarettes",
   dialogLineId: "jobs",
   requireItemId: "blue_cigarettes",
   requireQty: 5,
-  rewardBanknotes: 50,
-  rewardReputation: 100,
+  rewardBanknotes: 30,
+  rewardReputation: 15,
   label: "Morale Sticks",
   requireItemLabel: "Cigarettes",
+  maxCompletionsPerWindow: 1,
+  completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
 /** Turn-in: duct tape for split patrol kits. Once a day. */
@@ -317,8 +321,8 @@ export const ASHEN_MILITIA_SPLIT_KIT_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "duct_tape",
   requireQty: 2,
-  rewardBanknotes: 40,
-  rewardReputation: 80,
+  rewardBanknotes: 20,
+  rewardReputation: 15,
   label: "Split Kit",
   requireItemLabel: "Duct Tape",
   maxCompletionsPerWindow: 1,
@@ -331,8 +335,8 @@ export const ASHEN_MILITIA_LIGHTER_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "lighter",
   requireQty: 1,
-  rewardBanknotes: 25,
-  rewardReputation: 50,
+  rewardBanknotes: 15,
+  rewardReputation: 10,
   label: "Firestarter",
   requireItemLabel: "Lighter",
   maxCompletionsPerWindow: 1,
@@ -345,8 +349,8 @@ export const ASHEN_MILITIA_COLD_TINS_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "canned_beans",
   requireQty: 4,
-  rewardBanknotes: 60,
-  rewardReputation: 110,
+  rewardBanknotes: 40,
+  rewardReputation: 20,
   label: "Cold Tins",
   requireItemLabel: "Canned Beans",
   maxCompletionsPerWindow: 1,
@@ -359,8 +363,8 @@ export const ASHEN_MILITIA_HOT_PLATE_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "cooked_coyote_meat",
   requireQty: 2,
-  rewardBanknotes: 80,
-  rewardReputation: 140,
+  rewardBanknotes: 45,
+  rewardReputation: 25,
   label: "Hot Plate",
   requireItemLabel: "Cooked Coyote Meat",
   maxCompletionsPerWindow: 1,
@@ -373,8 +377,8 @@ export const ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "wood",
   requireQty: 8,
-  rewardBanknotes: 40,
-  rewardReputation: 80,
+  rewardBanknotes: 30,
+  rewardReputation: 15,
   label: "Night Watch Fuel",
   requireItemLabel: "Wood",
   maxCompletionsPerWindow: 1,
@@ -385,8 +389,8 @@ export const ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK: AshenMilitiaTask = {
 export const ASHEN_MILITIA_QUIET_STRETCH_TASK: AshenMilitiaTask = {
   id: "ashen_militia_quiet_stretch",
   dialogLineId: "jobs",
-  rewardBanknotes: 120,
-  rewardReputation: 250,
+  rewardBanknotes: 70,
+  rewardReputation: 40,
   label: "Quiet Stretch",
   displayItemId: "map",
   maxCompletionsPerWindow: 1,
@@ -397,14 +401,14 @@ export const ASHEN_MILITIA_QUIET_STRETCH_TASK: AshenMilitiaTask = {
 export const ASHEN_MILITIA_MISSING_PAIR_TASK: AshenMilitiaTask = {
   id: "ashen_militia_missing_pair",
   dialogLineId: "jobs",
-  rewardBanknotes: 180,
-  rewardReputation: 350,
+  rewardBanknotes: 100,
+  rewardReputation: 80,
   label: "Missing Pair",
   displayItemId: "map",
 };
 
 /** Spare 7.62 from the pair's kit when the motel was not empty. */
-export const QUEST_MISSING_PAIR_BONUS_AMMO = 15;
+export const QUEST_MISSING_PAIR_BONUS_AMMO = 6;
 
 /** Turn-in: scrap for the barracks chain-link. */
 export const ASHEN_MILITIA_BARGATE_SCRAP_TASK: AshenMilitiaTask = {
@@ -412,8 +416,8 @@ export const ASHEN_MILITIA_BARGATE_SCRAP_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "scrap_metal",
   requireQty: 10,
-  rewardBanknotes: 70,
-  rewardReputation: 120,
+  rewardBanknotes: 40,
+  rewardReputation: 20,
   label: "Bargate Scrap",
   requireItemLabel: "Scrap Metal",
   maxCompletionsPerWindow: 1,
@@ -424,20 +428,33 @@ export const ASHEN_MILITIA_BARGATE_SCRAP_TASK: AshenMilitiaTask = {
 export const ASHEN_MILITIA_AISLE_CHECK_TASK: AshenMilitiaTask = {
   id: "ashen_militia_aisle_check",
   dialogLineId: "jobs",
-  rewardBanknotes: 100,
-  rewardReputation: 180,
+  rewardBanknotes: 40,
+  rewardReputation: 20,
   label: "Aisle Check",
   displayItemId: "map",
   maxCompletionsPerWindow: 1,
   completionWindowMs: ASHEN_MILITIA_TASK_WINDOW_MS,
 };
 
+/**
+ * One-shot. A bear on a road outside Birchport.
+ * The player keeps the meat.
+ */
+export const ASHEN_MILITIA_BIG_TRACK_TASK: AshenMilitiaTask = {
+  id: "ashen_militia_big_track",
+  dialogLineId: "jobs",
+  rewardBanknotes: 200,
+  rewardReputation: 180,
+  label: "Big Track",
+  displayItemId: "raw_bear_meat",
+};
+
 /** Kill coyotes on the roads outside Birchport. Town kills do not count. */
 export const ASHEN_MILITIA_THIN_THE_PACK_TASK: AshenMilitiaTask = {
   id: "ashen_militia_thin_the_pack",
   dialogLineId: "jobs",
-  rewardBanknotes: 120,
-  rewardReputation: 220,
+  rewardBanknotes: 70,
+  rewardReputation: 35,
   label: "Thin the Pack",
   displayItemId: "map",
   maxCompletionsPerWindow: 1,
@@ -448,8 +465,8 @@ export const ASHEN_MILITIA_THIN_THE_PACK_TASK: AshenMilitiaTask = {
 export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
   id: "ashen_militia_dont_feed_them",
   dialogLineId: "jobs",
-  rewardBanknotes: 100,
-  rewardReputation: 200,
+  rewardBanknotes: 50,
+  rewardReputation: 30,
   label: "Don't Feed Them",
   displayItemId: "map",
   maxCompletionsPerWindow: 1,
@@ -463,8 +480,8 @@ export const ASHEN_MILITIA_DONT_FEED_THEM_TASK: AshenMilitiaTask = {
 export const ASHEN_MILITIA_FIRST_SWEEP_TASK: AshenMilitiaTask = {
   id: "ashen_militia_first_sweep",
   dialogLineId: "jobs",
-  rewardBanknotes: 60,
-  rewardReputation: 150,
+  rewardBanknotes: 40,
+  rewardReputation: 50,
   label: "First Sweep",
   displayItemId: "weapon_hammer",
 };
@@ -490,6 +507,7 @@ export const ASHEN_MILITIA_CAPTAIN_TASKS: readonly AshenMilitiaTask[] = [
   ASHEN_MILITIA_AISLE_CHECK_TASK,
   ASHEN_MILITIA_DONT_FEED_THEM_TASK,
   ASHEN_MILITIA_THIN_THE_PACK_TASK,
+  ASHEN_MILITIA_BIG_TRACK_TASK,
 ];
 
 /** True if Clark's paid treatment should be offered (missing HP or infection). */
@@ -635,8 +653,8 @@ export const ASHEN_MILITIA_CLEAN_HANDS_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "alcohol",
   requireQty: 2,
-  rewardBanknotes: 45,
-  rewardReputation: 90,
+  rewardBanknotes: 30,
+  rewardReputation: 15,
   label: "Clean Hands",
   requireItemLabel: "Alcohol",
   maxCompletionsPerWindow: 1,
@@ -649,8 +667,8 @@ export const ASHEN_MILITIA_BEFORE_IT_TURNS_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "antibiotics",
   requireQty: 5,
-  rewardBanknotes: 150,
-  rewardReputation: 300,
+  rewardBanknotes: 80,
+  rewardReputation: 80,
   label: "Before It Turns",
   requireItemLabel: "Antibiotics",
 };
@@ -661,8 +679,8 @@ export const ASHEN_MILITIA_RAG_BIN_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "rags",
   requireQty: 10,
-  rewardBanknotes: 30,
-  rewardReputation: 60,
+  rewardBanknotes: 25,
+  rewardReputation: 25,
   label: "Rag Bin",
   requireItemLabel: "Rags",
 };
@@ -673,8 +691,8 @@ export const ASHEN_MILITIA_SOMETHING_SOFT_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "canned_peaches",
   requireQty: 2,
-  rewardBanknotes: 40,
-  rewardReputation: 80,
+  rewardBanknotes: 30,
+  rewardReputation: 15,
   label: "Something Soft",
   requireItemLabel: "Canned Peaches",
   maxCompletionsPerWindow: 1,
@@ -690,8 +708,8 @@ export const ASHEN_MILITIA_DONT_HOCK_THEM_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "clarks_earrings",
   requireQty: 1,
-  rewardBanknotes: 100,
-  rewardReputation: 220,
+  rewardBanknotes: 80,
+  rewardReputation: 80,
   label: "Don't Hock Them",
   requireItemLabel: "Anniversary Earrings",
 };
@@ -702,8 +720,8 @@ export const ASHEN_MILITIA_SPICY_FINGERS_TASK: AshenMilitiaTask = {
   dialogLineId: "jobs",
   requireItemId: "hot_chips",
   requireQty: 1,
-  rewardBanknotes: 10,
-  rewardReputation: 20,
+  rewardBanknotes: 8,
+  rewardReputation: 10,
   label: "Spicy Fingers",
   requireItemLabel: "Hot Chips",
   maxCompletionsPerWindow: 1,

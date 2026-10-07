@@ -11,12 +11,17 @@ import {
   parseQuestsJson,
   buffedSubSkillLevel,
   parseSkillsJson,
+  ASHEN_MILITIA_TASK_WINDOW_MS,
+  getItemDefinition,
   questAssignedLocationLabel,
   questCompletionsRemaining,
   questFlag,
   questGiverLabel,
   questHasItemTurnIn,
   questObjectiveLine,
+  questRewardBanknotes,
+  questRewardReputation,
+  questTurnInItems,
   isQuestObjectiveDone,
   questStatusOf,
   xpToNextLevel,
@@ -24,12 +29,13 @@ import {
   type PlayerQuestsState,
   type PlayerSkillsState,
   type QuestDefinition,
-  type QuestStatus,
+  type QuestFaction,
   type SkillProgress,
 } from "@zombie/shared";
 import { AudioManager } from "../audio/AudioManager";
 import { isMobileDevice } from "../device";
 import { createDialogCloseButton } from "./dialogCloseBtn";
+import { appendItemIcon, markQuestKeepsake } from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
 
 export type JournalTab = "quests" | "skills" | "guide";
@@ -41,11 +47,57 @@ export type JournalUIHandlers = {
   onReplayTutorial: () => void;
 };
 
-function statusLabel(status: QuestStatus): string {
-  if (status === "active") return "Active";
-  if (status === "completed") return "Completed";
-  if (status === "failed") return "Failed";
-  return "Available";
+function makeQuestCell(opts: {
+  itemId: string;
+  qtyLabel?: string;
+  ariaLabel: string;
+}): HTMLElement {
+  const cell = document.createElement("div");
+  cell.className = "inventory-cell inventory-cell--filled red-dialog-task-cell";
+  cell.setAttribute("role", "img");
+  cell.setAttribute("aria-label", opts.ariaLabel);
+  cell.tabIndex = -1;
+  const hasIcon = appendItemIcon(cell, opts.itemId, "inventory-cell-icon");
+  if (hasIcon) cell.classList.add("inventory-cell--has-icon");
+  markQuestKeepsake(cell, opts.itemId);
+  if (opts.qtyLabel) {
+    const qty = document.createElement("span");
+    qty.className = "inventory-cell-qty";
+    qty.textContent = opts.qtyLabel;
+    cell.appendChild(qty);
+  }
+  return cell;
+}
+
+function progressQtyLabel(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+): string | undefined {
+  const objs = def.objectives.filter((obj) => obj.kind !== "turnInItem");
+  if (objs.length === 0) return undefined;
+  const focus =
+    objs.find((obj) => {
+      const need = Math.max(1, obj.count ?? 1);
+      return (state.quests[def.id]?.progress[obj.id] ?? 0) < need;
+    }) ?? objs[objs.length - 1];
+  if (!focus) return undefined;
+  const need = Math.max(1, focus.count ?? 1);
+  const have = Math.min(need, state.quests[def.id]?.progress[focus.id] ?? 0);
+  return `${have}/${need}`;
+}
+
+const REP_FACTIONS: readonly QuestFaction[] = [
+  "ashenTraders",
+  "ashenMilitia",
+  "redOrder",
+  "none",
+];
+
+function reputationLabel(faction: QuestFaction): string {
+  if (faction === "ashenTraders") return "Ashen Traders reputation";
+  if (faction === "ashenMilitia") return "Ashen Militia reputation";
+  if (faction === "redOrder") return "Red Order reputation";
+  return "reputation";
 }
 
 function skillBar(progress: SkillProgress, cap: number): HTMLElement {
@@ -278,24 +330,62 @@ export class JournalUI {
     const remaining = questCompletionsRemaining(state, def);
     const expanded = this.expandedQuestId === def.id;
     const giver = questGiverLabel(def);
-    const badgeText =
-      remaining === 0 ? "Daily limit" : statusLabel(status);
+    const turnIns = questTurnInItems(def);
+    const notes = questRewardBanknotes(def);
+    const max = def.maxCompletionsPerWindow;
+    const used =
+      remaining != null && max != null ? Math.max(0, max - remaining) : 0;
+    const atCap = remaining === 0;
+    const field = def.objectives.filter((obj) => obj.kind !== "turnInItem");
+    const fieldOpen =
+      status === "active" &&
+      field.some((obj) => !isQuestObjectiveDone(state, def, obj));
+    const readyToReport =
+      status === "active" && !fieldOpen && !questHasItemTurnIn(def);
+    const location = questAssignedLocationLabel(state, def.id);
+    const stageDone = (obj: (typeof def.objectives)[number]) =>
+      status === "completed" || isQuestObjectiveDone(state, def, obj);
 
     const section = document.createElement("div");
     section.className = "craft-recipe journal-quest";
     if (expanded) section.classList.add("craft-recipe--expanded");
-    if (status === "active") {
-      section.classList.add("journal-quest--active");
-      section.classList.add("craft-recipe--ready");
+    if (status === "failed" || atCap) section.classList.add("craft-recipe--capped");
+    else if (status === "active") {
+      section.classList.add("craft-recipe--accepted");
+      if (readyToReport) section.classList.add("craft-recipe--ready");
     }
 
     const summary = document.createElement("button");
     summary.type = "button";
     summary.className = "craft-recipe-summary";
     summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const chipText = atCap
+      ? "Daily limit"
+      : status === "failed"
+        ? "Failed"
+        : status === "completed"
+          ? "Completed"
+          : status === "active"
+            ? "Accepted"
+            : "";
     summary.setAttribute(
       "aria-label",
-      `${expanded ? "Collapse" : "Expand"} ${def.title}`,
+      `${expanded ? "Collapse" : "Expand"} ${def.title}${
+        chipText ? `, ${chipText}` : ""
+      }`,
+    );
+
+    const iconId = def.iconItemId ?? turnIns[0]?.itemId ?? "map";
+    const qtyLabel =
+      turnIns.length === 1
+        ? `×${turnIns[0]!.quantity}`
+        : progressQtyLabel(state, def);
+    summary.appendChild(
+      makeQuestCell({
+        itemId: iconId,
+        qtyLabel,
+        ariaLabel: def.title,
+      }),
     );
 
     const label = document.createElement("div");
@@ -303,9 +393,48 @@ export class JournalUI {
     const nameEl = document.createElement("span");
     nameEl.className = "craft-recipe-summary-name";
     nameEl.textContent = def.title;
+    if (chipText) {
+      const chip = document.createElement("span");
+      chip.className =
+        status === "failed" || atCap
+          ? "quest-status-chip quest-status-chip--capped"
+          : "quest-status-chip quest-status-chip--accepted";
+      chip.textContent = chipText;
+      nameEl.appendChild(chip);
+    }
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
-    meta.textContent = giver ? `${badgeText} · ${giver}` : badgeText;
+    const shown =
+      field.length > 0 && !fieldOpen && turnIns.length > 0
+        ? def.objectives.filter((obj) => obj.kind === "turnInItem")
+        : field.length > 0
+          ? field
+          : def.objectives;
+    if (status === "failed") {
+      meta.textContent = giver ? `Failed · ${giver}` : "Failed";
+    } else if (status === "completed" && !def.repeatable) {
+      meta.textContent = giver ? `Already reported · ${giver}` : "Already reported";
+    } else if (atCap) {
+      meta.textContent = giver
+        ? `Daily limit reached (${max}/day) · ${giver}`
+        : `Daily limit reached (${max}/day)`;
+    } else if (readyToReport) {
+      meta.textContent = giver
+        ? `Ready to turn in · ${giver}`
+        : "Ready to turn in";
+    } else if (shown.length > 0) {
+      shown.forEach((obj, i) => {
+        if (i > 0) meta.append(" · ");
+        const stage = document.createElement("span");
+        stage.textContent = questObjectiveLine(state, def, obj);
+        if (stageDone(obj)) stage.classList.add("quest-stage--done");
+        meta.appendChild(stage);
+      });
+      if (location && fieldOpen) meta.append(` · ${location}`);
+      if (giver) meta.append(` · ${giver}`);
+    } else if (giver) {
+      meta.textContent = giver;
+    }
     label.append(nameEl, meta);
     summary.appendChild(label);
 
@@ -314,73 +443,114 @@ export class JournalUI {
     chevron.setAttribute("aria-hidden", "true");
     chevron.textContent = expanded ? "▾" : "▸";
     summary.appendChild(chevron);
-
     summary.addEventListener("click", () => {
-      this.expandedQuestId =
-        this.expandedQuestId === def.id ? null : def.id;
+      this.expandedQuestId = this.expandedQuestId === def.id ? null : def.id;
       this.renderBody();
     });
     section.appendChild(summary);
-
     if (!expanded) return section;
 
     const details = document.createElement("div");
     details.className = "craft-recipe-details";
 
-    const desc = document.createElement("p");
-    desc.className = "journal-quest-desc";
-    desc.textContent = def.description;
-    details.appendChild(desc);
+    const blurb = document.createElement("div");
+    blurb.className = "craft-recipe-hint";
+    blurb.textContent = def.description;
+    details.appendChild(blurb);
 
-    if (def.objectives.length > 0) {
-      const objList = document.createElement("ul");
-      objList.className = "journal-quest-objectives";
-      for (const obj of def.objectives) {
-        const li = document.createElement("li");
-        li.textContent = questObjectiveLine(state, def, obj);
-        if (status === "completed" || isQuestObjectiveDone(state, def, obj)) {
-          li.classList.add("quest-stage--done");
-        }
-        objList.appendChild(li);
-      }
-      details.appendChild(objList);
+    for (const obj of def.objectives) {
+      const line = document.createElement("div");
+      line.className = "craft-recipe-hint";
+      line.textContent = questObjectiveLine(state, def, obj);
+      if (stageDone(obj)) line.classList.add("quest-stage--done");
+      details.appendChild(line);
     }
-
-    const location = questAssignedLocationLabel(state, def.id);
-    if (location) {
+    if (location && (fieldOpen || status !== "active")) {
       const loc = document.createElement("div");
-      loc.className = "journal-quest-meta";
+      loc.className = "craft-recipe-hint";
       loc.textContent = `Marked ${location}`;
       details.appendChild(loc);
     }
     if (questFlag(state, def.id, "foundDead")) {
       const found = document.createElement("div");
-      found.className = "journal-quest-meta";
+      found.className = "craft-recipe-hint";
       found.textContent = "The pair did not make it. Davis will add 7.62.";
       details.appendChild(found);
     }
 
-    const times = state.quests[def.id]?.timesCompleted ?? 0;
-    if (times > 0 && def.repeatable) {
-      const done = document.createElement("div");
-      done.className = "journal-quest-meta";
-      done.textContent =
-        remaining != null
-          ? `Turned in ${times} times · ${remaining} left today`
-          : `Turned in ${times} times`;
-      details.appendChild(done);
-    } else if (remaining != null && remaining > 0) {
-      const cap = document.createElement("div");
-      cap.className = "journal-quest-meta";
-      cap.textContent = `${remaining} left today`;
-      details.appendChild(cap);
+    if (turnIns.length > 0) {
+      const needTitle = document.createElement("div");
+      needTitle.className = "red-dialog-task-heading";
+      needTitle.textContent = "Turn in";
+      details.appendChild(needTitle);
+      const needRow = document.createElement("div");
+      needRow.className = "red-dialog-task-row";
+      for (const item of turnIns) {
+        const name = getItemDefinition(item.itemId)?.name ?? item.label;
+        needRow.appendChild(
+          makeQuestCell({
+            itemId: item.itemId,
+            qtyLabel: `×${item.quantity}`,
+            ariaLabel: `${item.quantity} ${name}`,
+          }),
+        );
+      }
+      details.appendChild(needRow);
+    }
+
+    const rewardRow = document.createElement("div");
+    rewardRow.className = "red-dialog-task-row";
+    if (notes > 0) {
+      rewardRow.appendChild(
+        makeQuestCell({
+          itemId: "banknote",
+          qtyLabel: `×${notes}`,
+          ariaLabel: `${notes} banknotes`,
+        }),
+      );
+    }
+    for (const faction of REP_FACTIONS) {
+      const rep = questRewardReputation(def, faction);
+      if (rep <= 0) continue;
+      rewardRow.appendChild(
+        makeQuestCell({
+          itemId: "rep",
+          qtyLabel: `+${rep}`,
+          ariaLabel: `+${rep} ${reputationLabel(faction)}`,
+        }),
+      );
+    }
+    for (const reward of def.rewards) {
+      if (!reward.itemId || (reward.quantity ?? 0) <= 0) continue;
+      const qty = reward.quantity ?? 1;
+      const name = getItemDefinition(reward.itemId)?.name ?? reward.itemId;
+      rewardRow.appendChild(
+        makeQuestCell({
+          itemId: reward.itemId,
+          qtyLabel: `×${qty}`,
+          ariaLabel: `${qty} ${name}`,
+        }),
+      );
+    }
+    if (rewardRow.childElementCount > 0) {
+      const rewardTitle = document.createElement("div");
+      rewardTitle.className = "red-dialog-task-heading";
+      rewardTitle.textContent = "Rewards";
+      details.appendChild(rewardTitle);
+      details.appendChild(rewardRow);
+    }
+
+    if (max != null) {
+      const capHint = document.createElement("div");
+      capHint.className = "craft-recipe-hint";
+      const windowHrs = Math.round(
+        (def.completionWindowMs ?? ASHEN_MILITIA_TASK_WINDOW_MS) / 3_600_000,
+      );
+      capHint.textContent = `${used}/${max} completed in the last ${windowHrs}h`;
+      details.appendChild(capHint);
     }
 
     if (status === "active") {
-      const fieldOpen = def.objectives.some(
-        (obj) =>
-          obj.kind !== "turnInItem" && !isQuestObjectiveDone(state, def, obj),
-      );
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
       hint.textContent = fieldOpen

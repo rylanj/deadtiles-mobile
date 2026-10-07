@@ -64,6 +64,7 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   scrap_metal: "/assets/UI/UI_scrap_metal.png",
   wood: "/assets/UI/UI_wood.png",
   banknote: "/assets/UI/UI_banknote.png",
+  safe: "/assets/UI/UI_safe.png",
   dogtag: "/assets/UI/UI_dogtag.png",
   lighter: "/assets/UI/UI_lighter.png",
   blue_cigarettes: "/assets/UI/UI_blue_cigarettes.png",

@@ -108,16 +108,9 @@ export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
   accuracy: ["Bullet spread reduces"],
   crafting: ["Crafting time reduces"],
   scavenging: ["Searching time reduces"],
-  stealth: [
-    "Zombies do not notice you as easily",
-    "Lockpicking noise carries less far",
-  ],
+  stealth: ["Zombies do not notice you as easily"],
   cooking: ["Food and drink restore more"],
-  lockpicking: [
-    "Picking a lock takes less time",
-    "Lockpicks break less often",
-    "Medium locks need level 25. Hard locks need level 50",
-  ],
+  lockpicking: ["Picking a lock takes less time, lockpicks break less often, can pick harder locks"],
   medicine: ["Medicine is more effective and lasts longer"],
   reading: ["Magazine XP increases and reading time reduces"],
   bartering: ["Buy and sell prices improve"],

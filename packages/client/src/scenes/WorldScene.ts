@@ -156,6 +156,8 @@ import {
   militiaGuardDieAnimMs,
   playerAdjacentToSearchable,
   furnitureIsSearchable,
+  furnitureNeedsCrack,
+  SAFE_CRACK_DURATION_MS,
   furnitureIsStairs,
   furnitureIsCraftStation,
   furnitureIsFurnace,
@@ -211,6 +213,7 @@ import {
   temperatureHudLook,
   buildingInteriorIsPowered,
   isStorageBoxKind,
+  SAFE_DEPOSIT_CONTAINER_ID,
   TEMPERATURE_CORE_DEFAULT,
   countStandingTreesNear,
   phaseOfDay,
@@ -230,6 +233,8 @@ import {
   parsePrecip,
   parseQuestsJson,
   listActiveQuestMapMarkers,
+  listNewlyAcceptedQuests,
+  listNewlyCompletedQuests,
   listNewlyCompletedQuestStages,
   stepBirchportMapChart,
   type QuestMapMarker,
@@ -945,6 +950,8 @@ export class WorldScene extends Phaser.Scene {
   /** Last icon on the mobile aim button: crosshair, or the equipped melee item. */
   private mobileAimIconId = "";
   private containerLootUI?: ContainerLootUI;
+  /** Server already dropped the box session, so closing the UI should not echo. */
+  private suppressSafeDepositClose = false;
   private craftUI?: CraftUI;
   private traderUI?: TraderUI;
   private playerMarketUI?: PlayerMarketUI;
@@ -1556,6 +1563,9 @@ export class WorldScene extends Phaser.Scene {
       case "death":
         audio.playDeath(source);
         return;
+      case "lockpick":
+        audio.playLockpick({ id: msg.id, source });
+        return;
       case "melee":
         audio.playMelee(source, msg.itemId);
         return;
@@ -1565,6 +1575,7 @@ export class WorldScene extends Phaser.Scene {
   private applyWorldSfxStop(id: string, kind: WorldSfxStopKind) {
     const audio = AudioManager.get();
     if (kind === "search") audio.stopSearch(id);
+    else if (kind === "lockpick") audio.stopLockpick(id);
     else if (kind === "reload") audio.stopReload(id);
     else if (kind === "unload") audio.stopUnload(id);
     else if (kind === "consume") audio.stopConsume(id);
@@ -1926,7 +1937,12 @@ export class WorldScene extends Phaser.Scene {
         this.storeInContainer(containerId, fromSlot, toSlot),
       onMovePlayerSlot: (fromSlot, toSlot, splitHalf) =>
         this.moveInventorySlot(fromSlot, toSlot, splitHalf),
-      onClose: () => {},
+      onClose: (containerId) => {
+        if (this.suppressSafeDepositClose) return;
+        if (containerId === SAFE_DEPOSIT_CONTAINER_ID) {
+          this.sendSafeDepositClose();
+        }
+      },
     });
     this.craftUI = new CraftUI({
       onClose: () => this.closeCraftUI(),
@@ -1973,6 +1989,8 @@ export class WorldScene extends Phaser.Scene {
       onClose: () => this.closeAshenTraderDialog(),
       onRequestTrade: (traderId) => this.requestTradeOpen(traderId),
       onRequestBoard: (traderId) => this.requestMarketOpen(traderId),
+      onRequestDeposit: (traderId) => this.requestSafeDepositOpen(traderId),
+      onPayDeposit: (traderId) => this.requestSafeDepositPay(traderId),
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.ashenTraderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenTraderCompleteTask(taskId),
@@ -2357,6 +2375,17 @@ export class WorldScene extends Phaser.Scene {
             msg.payload.containerId,
             msg.payload.containerJson,
           );
+        } else if (msg.type === "safeDepositClose") {
+          if (
+            this.containerLootUI?.getContainerId() === SAFE_DEPOSIT_CONTAINER_ID
+          ) {
+            this.suppressSafeDepositClose = true;
+            try {
+              this.containerLootUI.close();
+            } finally {
+              this.suppressSafeDepositClose = false;
+            }
+          }
         } else if (msg.type === "craftOpen") {
           this.openCraftUI(msg.payload);
         } else if (msg.type === "fireplaceOpen") {
@@ -2420,6 +2449,7 @@ export class WorldScene extends Phaser.Scene {
             ...msg.payload,
             barterT: this.localSkillMods(msg.payload.inventoryJson).barterT,
           });
+          if (msg.payload.completed) AudioManager.get().play("trade");
           this.lastInventoryRenderKey = "";
           this.lastHotbarRenderKey = "";
         } else if (msg.type === "marketOpen") {
@@ -4021,6 +4051,10 @@ export class WorldScene extends Phaser.Scene {
         const lockpicking =
           searching &&
           player.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX);
+        const crackingSafe =
+          searching &&
+          !lockpicking &&
+          this.isCrackingSafe(player.searchTargetId);
 
         this.entityActionLabels.sync(
           id,
@@ -4039,7 +4073,14 @@ export class WorldScene extends Phaser.Scene {
         this.entityActionLabels.sync(
           id,
           "search",
-          searching && !lockpicking,
+          searching && !lockpicking && !crackingSafe,
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "crack",
+          crackingSafe,
           labelSprite,
           stackBelowPx,
         );
@@ -4978,16 +5019,27 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private applyQuestSync(questsJson: string) {
+    const hadSnapshot = this.cachedQuestsJson.length > 0;
     const prev = parseQuestsJson(this.cachedQuestsJson);
     const next = parseQuestsJson(questsJson);
     this.cachedQuestsJson = questsJson;
     this.lastQuestUiKey = "";
     this.refreshQuestPanels();
-    for (const stage of listNewlyCompletedQuestStages(prev, next)) {
+    const stages = listNewlyCompletedQuestStages(prev, next);
+    for (const stage of stages) {
       this.lootPopup?.show([], {
         header: `${stage.title} task updated`,
         arrow: "↑",
       });
+    }
+    if (hadSnapshot && listNewlyCompletedQuests(prev, next).length > 0) {
+      AudioManager.get().play("quest");
+    }
+    if (
+      hadSnapshot &&
+      (stages.length > 0 || listNewlyAcceptedQuests(prev, next).length > 0)
+    ) {
+      AudioManager.get().play("journal");
     }
     this.onboardingUI?.setFirstSweepState(firstSweepStateOf(next));
   }
@@ -7362,6 +7414,14 @@ export class WorldScene extends Phaser.Scene {
     this.stopPlayerMovement();
 
     if (!door.isOpen && door.isLocked) {
+      AudioManager.get().playLockedDoor({
+        x: tx + 0.5,
+        y: ty + 0.5,
+        noiseRadius: 22,
+        inInterior: !!me.inInterior,
+        buildingX: me.inInterior ? (me.buildingX ?? 0) : 0,
+        buildingY: me.inInterior ? (me.buildingY ?? 0) : 0,
+      });
       const bx = me.buildingX;
       const by = me.buildingY;
       const difficulty =
@@ -10029,7 +10089,11 @@ export class WorldScene extends Phaser.Scene {
         type: "searchStart",
         payload: { searchableId: target.id },
       };
-      this.beginOptimisticSearch("furniture", target.objectType);
+      this.beginOptimisticSearch(
+        "furniture",
+        target.objectType,
+        target.cracked || target.searched,
+      );
       this.room.send("action", message);
       this.notifyTutorial("search");
       return true;
@@ -10763,17 +10827,32 @@ export class WorldScene extends Phaser.Scene {
     return mods;
   }
 
+  private isCrackingSafe(searchableId: string): boolean {
+    const target = this.searchablesCache.find((item) => item.id === searchableId);
+    return (
+      !!target &&
+      furnitureNeedsCrack(target.objectType) &&
+      !target.cracked &&
+      !target.searched
+    );
+  }
+
   private beginOptimisticSearch(
     kind: "furniture" | "loot" = "loot",
     objectType?: string,
+    searched = false,
   ) {
+    const cracking =
+      kind === "furniture" && furnitureNeedsCrack(objectType ?? "") && !searched;
     this.beginLocalTimedAction(
       "search",
-      this.localSkillMods().searchDurationMs,
-      "Searching",
+      cracking ? SAFE_CRACK_DURATION_MS : this.localSkillMods().searchDurationMs,
+      cracking ? "Cracking" : "Searching",
       true,
     );
-    AudioManager.get().playSearch(kind === "furniture" ? "furniture" : "body", objectType);
+    const audio = AudioManager.get();
+    if (cracking) audio.playLockpick();
+    else audio.playSearch(kind === "furniture" ? "furniture" : "body", objectType);
     const me = this.room?.state?.players?.get(this.sessionId);
     if (me && this.isOutsideTown(me)) this.notifyTip("search_noise");
   }
@@ -10815,10 +10894,12 @@ export class WorldScene extends Phaser.Scene {
 
   private clearLocalSearchProgress() {
     if (this.localTimedAction?.kind === "search") {
+      const cracking = this.localTimedAction.label === "Cracking";
       this.localTimedAction = null;
       this.lastSearchProgressPct = -1;
       this.searchProgressEl?.classList.remove("search-progress--visible");
       AudioManager.get().stopSearch();
+      if (cracking) AudioManager.get().stopLockpick();
     }
   }
 
@@ -10908,8 +10989,14 @@ export class WorldScene extends Phaser.Scene {
     if (active.some((channel) => channel.localKind === "consume")) {
       AudioManager.get().stopConsume();
     }
-    if (active.some((channel) => channel.localKind === "search")) {
+    if (
+      active.some(
+        (channel) =>
+          channel.localKind === "search" || channel.localKind === "lockpick",
+      )
+    ) {
       AudioManager.get().stopSearch();
+      AudioManager.get().stopLockpick();
     }
     if (active.some((channel) => channel.localKind === "reload")) {
       AudioManager.get().stopReload();
@@ -11939,7 +12026,11 @@ export class WorldScene extends Phaser.Scene {
             type: "searchStart",
             payload: { searchableId: target.id },
           };
-          this.beginOptimisticSearch("furniture", target.objectType);
+          this.beginOptimisticSearch(
+            "furniture",
+            target.objectType,
+            target.cracked || target.searched,
+          );
           this.room.send("action", message);
         }
         started = true;
@@ -12517,6 +12608,22 @@ export class WorldScene extends Phaser.Scene {
     console.log(parts.join(" "));
   }
 
+  /**
+   * Lock scrape follows the pick. The optimistic window covers the moment
+   * before the server marks the door, then the server flag keeps it going.
+   */
+  private syncLockpickLoop(serverLockpicking: boolean) {
+    const action = this.localTimedAction;
+    const optimistic =
+      !!action &&
+      action.kind === "lockpick" &&
+      action.optimistic &&
+      Date.now() - action.startedAt < 2500;
+    const audio = AudioManager.get();
+    if (serverLockpicking || optimistic) audio.playLockpick();
+    else audio.stopLockpick();
+  }
+
   private updateLocalPlayerHud() {
     const me = this.room?.state?.players?.get(this.sessionId);
     const sprite = this.playerSprites.get(this.sessionId);
@@ -12634,6 +12741,13 @@ export class WorldScene extends Phaser.Scene {
     const searching = !!me.searchTargetId;
     const lockpicking =
       searching && me.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX);
+    const crackingSafe = searching && this.isCrackingSafe(me.searchTargetId);
+    const optimisticCrack =
+      !!this.localTimedAction &&
+      this.localTimedAction.label === "Cracking" &&
+      this.localTimedAction.optimistic &&
+      Date.now() - this.localTimedAction.startedAt < 2500;
+    this.syncLockpickLoop(lockpicking || crackingSafe || optimisticCrack);
     const syncConfirmsOptimisticReload =
       !!sync?.isReloading &&
       this.localTimedAction?.kind === "reload" &&
@@ -12657,12 +12771,18 @@ export class WorldScene extends Phaser.Scene {
         false,
       );
     } else if (searching) {
-      this.beginLocalTimedAction(
-        "search",
-        this.localSkillMods().searchDurationMs,
-        "Searching",
-        false,
-      );
+      const target = this.searchablesCache.find((item) => item.id === me.searchTargetId);
+      const cracking = this.isCrackingSafe(me.searchTargetId);
+      if (target || !this.localTimedAction || this.localTimedAction.kind !== "search") {
+        this.beginLocalTimedAction(
+          "search",
+          cracking ? SAFE_CRACK_DURATION_MS : this.localSkillMods().searchDurationMs,
+          cracking ? "Cracking" : "Searching",
+          false,
+        );
+      } else {
+        this.localTimedAction.optimistic = false;
+      }
     } else if (reloading) {
       this.beginLocalTimedAction(
         "reload",
@@ -12731,15 +12851,18 @@ export class WorldScene extends Phaser.Scene {
           !action.optimistic &&
           age >= action.durationMs - 150
         ) {
-          // Search time elapsed — hold at 100% until loot UI, then time out.
-          if (age > action.durationMs + 3000) {
+          // A crack has no loot window. A search holds at 100% until the loot UI.
+          if (action.label === "Cracking" || age > action.durationMs + 3000) {
             this.localTimedAction = null;
             AudioManager.get().stopSearch();
+            AudioManager.get().stopLockpick();
           }
         } else {
           // Cancelled / rejected before finishing.
+          const cracking = action.label === "Cracking";
           this.localTimedAction = null;
           AudioManager.get().stopSearch();
+          if (cracking) AudioManager.get().stopLockpick();
         }
       } else if (action.optimistic) {
         // Wait until the full action window (+ grace) before giving up — a short
@@ -16578,6 +16701,30 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private requestSafeDepositOpen(traderId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "safeDepositOpen",
+      payload: { traderId },
+    };
+    this.room.send("action", message);
+  }
+
+  private requestSafeDepositPay(traderId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "safeDepositPay",
+      payload: { traderId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendSafeDepositClose() {
+    if (!this.room) return;
+    const message: ClientMessage = { type: "safeDepositClose" };
+    this.room.send("action", message);
+  }
+
   private requestMarketOpen(traderId: string) {
     if (!this.room || !traderId) return;
     if (this.playerMarketUI?.isOpen() && this.playerMarketUI.getTraderId() === traderId) {
@@ -16841,6 +16988,7 @@ export class WorldScene extends Phaser.Scene {
     ashenMilitiaReputation?: number;
     inInterior?: boolean;
     taskCompletionsJson?: string;
+    safeDepositRented?: boolean;
   }) {
     if (payload.faction === "ashenMilitia") {
       this.openAshenMilitiaDialog(payload);
@@ -16938,6 +17086,7 @@ export class WorldScene extends Phaser.Scene {
     npcKind: number;
     playerName: string;
     ashenReputation?: number;
+    safeDepositRented?: boolean;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
@@ -16961,6 +17110,7 @@ export class WorldScene extends Phaser.Scene {
       inventoryJson,
       questsJson: this.localQuestsJson(),
       extraPockets: this.localExtraPockets(),
+      safeDepositRented: payload.safeDepositRented,
     });
   }
 
@@ -17235,6 +17385,9 @@ export class WorldScene extends Phaser.Scene {
       this.containerLootUI.close();
       return;
     }
+    // The market box is not a world pile. Kevin's range is enforced on the
+    // server, which sends safeDepositClose when the player walks off.
+    if (ids.includes(SAFE_DEPOSIT_CONTAINER_ID)) return;
     if (ids.some((id) => this.lootPileStillNear(me, id))) return;
     this.containerLootUI.close();
   }
