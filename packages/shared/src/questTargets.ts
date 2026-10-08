@@ -433,6 +433,80 @@ export function pickFirstSweepHouse(
   return null;
 }
 
+const COLEMAN_HOUSE_X = -115.5;
+const COLEMAN_HOUSE_Y = 180.5;
+const EAST_FORESTFORD_MOTEL_X = 514.5;
+const EAST_FORESTFORD_MOTEL_Y = -178.5;
+
+let colemanHouseCache: BuildingInfo | null | undefined;
+let colemanMotelCache: BuildingInfo | null | undefined;
+
+function nearestBuilding(
+  pool: BuildingInfo[],
+  x: number,
+  y: number,
+): BuildingInfo | null {
+  let best: BuildingInfo | null = null;
+  let bestD = Infinity;
+  for (const bld of pool) {
+    const c = buildingCenter(bld);
+    const d = Math.hypot(c.x - x, c.y - y);
+    if (d < bestD) {
+      best = bld;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/** Birchport house nearest (-115.5, 180.5). Sergeant Coleman's place. */
+export function colemanHouse(): BuildingInfo | null {
+  if (colemanHouseCache !== undefined) return colemanHouseCache;
+  const f = getPlayerSpawnFootprint();
+  const houses = listBuildingsInRect(f.minX, f.maxX, f.minY, f.maxY).filter(
+    (bld) =>
+      bld.buildingType === "house" && isBuildingInBirchport(bld.ox, bld.oy),
+  );
+  colemanHouseCache = nearestBuilding(houses, COLEMAN_HOUSE_X, COLEMAN_HOUSE_Y);
+  return colemanHouseCache;
+}
+
+export function isColemanHouse(bx: number, by: number): boolean {
+  const house = colemanHouse();
+  return !!house && house.ox === bx && house.oy === by;
+}
+
+/** Motel at East Forestford (514.5, -178.5), or the nearest motel if that tile is a yard. */
+export function colemanMotel(): BuildingInfo | null {
+  if (colemanMotelCache !== undefined) return colemanMotelCache;
+  const at = getBuildingAt(
+    Math.floor(EAST_FORESTFORD_MOTEL_X),
+    Math.floor(EAST_FORESTFORD_MOTEL_Y),
+  );
+  if (at?.buildingType === "motel") {
+    colemanMotelCache = at;
+    return at;
+  }
+  const pad = 160;
+  const motels = listBuildingsInRect(
+    EAST_FORESTFORD_MOTEL_X - pad,
+    EAST_FORESTFORD_MOTEL_X + pad,
+    EAST_FORESTFORD_MOTEL_Y - pad,
+    EAST_FORESTFORD_MOTEL_Y + pad,
+  ).filter((bld) => bld.buildingType === "motel");
+  colemanMotelCache = nearestBuilding(
+    motels,
+    EAST_FORESTFORD_MOTEL_X,
+    EAST_FORESTFORD_MOTEL_Y,
+  );
+  return colemanMotelCache;
+}
+
+export function isColemanMotel(bx: number, by: number): boolean {
+  const motel = colemanMotel();
+  return !!motel && motel.ox === bx && motel.oy === by;
+}
+
 /** House outside Birchport, rural or in another settlement. */
 export function pickClarkHouse(
   exclude?: QuestTargetExclude,

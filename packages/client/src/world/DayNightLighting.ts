@@ -180,6 +180,7 @@ export class DayNightLighting {
     lights: readonly NightLight[],
     opts?: {
       alwaysLit?: boolean;
+      underground?: boolean;
       firelit?: boolean;
       dtMs?: number;
       cloudyAmount?: number;
@@ -198,6 +199,7 @@ export class DayNightLighting {
     const look = dayNightLook(worldTimeMs, {
       indoor,
       alwaysLit: opts?.alwaysLit,
+      underground: opts?.underground,
       firelitAmount: this.firelitAmount,
       cloudyAmount: opts?.cloudyAmount,
       fogAmount: opts?.fogAmount,

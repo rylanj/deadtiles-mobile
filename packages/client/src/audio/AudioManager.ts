@@ -21,6 +21,8 @@ import {
   WEAPONS,
   ACTION_SFX_HEAR_RADIUS,
   ACTION_SFX_FULL_DIST,
+  ZOMBIE_GROAN_COUNT,
+  ZOMBIE_GROAN_HEAR_RADIUS,
   RELOAD_DURATION_MS,
   UNLOAD_DURATION_MS,
 } from "@zombie/shared";
@@ -175,8 +177,7 @@ const GUNSHOT_MIN_GAIN = 0.02;
 const GUNSHOT_ZOOM_OUT_GAIN = 0.5;
 /** Volume multiplier at maximum camera zoom (fully zoomed in). */
 const GUNSHOT_ZOOM_IN_GAIN = 1;
-export const ZOMBIE_GROAN_HEAR_RADIUS = 22;
-export const ZOMBIE_GROAN_COUNT = 12;
+export { ZOMBIE_GROAN_HEAR_RADIUS, ZOMBIE_GROAN_COUNT };
 /** Full groan volume at this distance; linear fade to silent at hear radius. */
 const ZOMBIE_GROAN_FULL_DIST = 1;
 /** Groan files peak near full scale. Keep a close walker under a rifle shot. */
@@ -1363,7 +1364,11 @@ export class AudioManager {
     });
     if (!sound) return false;
     this.lastZombieGroanVariant = pick;
-    this.liveZombieGroans.push({ sound, source: spatialSource });
+    this.liveZombieGroans.push({
+      sound,
+      source: spatialSource,
+      fileGain: ZOMBIE_GROAN_GAIN,
+    });
     sound.once("destroy", () => this.dropLiveZombieGroan(sound));
     return true;
   }

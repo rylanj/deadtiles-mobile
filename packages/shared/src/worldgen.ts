@@ -40,9 +40,11 @@ import {
   BIRCHPORT_BARRACKS_TENTS,
   BIRCHPORT_BARRACKS_MESS_HALL,
   BIRCHPORT_BARRACKS_BOUNDS,
+  getBirchportGraveAt,
   isInBirchportBarracks,
   type BarracksTentFootprint,
 } from "./birchportBarracks.js";
+import { getCellarAt } from "./cellar.js";
 
 /**
  * Tile types.
@@ -3478,6 +3480,8 @@ function tryPushFence(
   if (occupied.has(edgeKey)) return;
   if (buildings.some((b) => buildingCoversTile(b, tx, ty))) return;
   if (isInBirchportBarracks(tx, ty)) return;
+  if (getBirchportGraveAt(tx, ty)) return;
+  if (getCellarAt(tx, ty)) return;
   if (getStreetTileType(tx, ty) !== null) return;
   // Ends of a run overhang neighbouring tiles — keep them off pavement/road.
   for (const [nx, ny] of fenceRunAxisNeighbors(tx, ty, facing)) {
@@ -4496,6 +4500,8 @@ export function getTreeAt(tx: number, ty: number): TreeInfo | null {
   if (getStreetTileType(tx, ty) !== null) return null;
   if (isCarParkLotTile(tx, ty)) return null;
   if (isInBirchportBarracks(tx, ty)) return null;
+  if (getBirchportGraveAt(tx, ty)) return null;
+  if (getCellarAt(tx, ty)) return null;
   // Rural cabins sit on grass. A tree on the door approach blocks entry.
   if (tileIsBuildingEntryApproach(tx, ty)) return null;
   const variant = pickTreeVariant(lx, ly, rng);
@@ -4779,6 +4785,8 @@ export function generateTile(
     if (getStreetlightAt(x, y)) return TileType.Wall;
     return street;
   }
+  if (getBirchportGraveAt(x, y)) return TileType.Wall;
+  if (getCellarAt(x, y)) return TileType.Wall;
   if (getFenceAt(x, y)) return TileType.Wall;
   if (getStandingTreeAt(x, y)) return TileType.Wall;
   if (isInBirchportBarracks(x, y)) return TileType.Barracks;

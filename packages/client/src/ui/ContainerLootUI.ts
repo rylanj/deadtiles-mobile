@@ -32,8 +32,9 @@ import {
   RADIO_SLOT_INDEX,
   MAP_ITEM_ID,
   MAP_SLOT_INDEX,
-  WATCH_ITEM_ID,
   WATCH_SLOT_INDEX,
+  isWatchItem,
+  wornGearEffectHint,
   WEAPON_SLOT_COUNT,
   getEntryDurability,
   getEntryRadioFreq,
@@ -670,9 +671,12 @@ export class ContainerLootUI {
       appendItemDurabilityBar(cell, slot);
       appendItemWetnessBar(cell, slot);
 
+      const effect = wornGearEffectHint(slot.id);
+      const itemName = def?.name ?? slot.id;
+      if (effect) cell.title = `${itemName} · ${effect}`;
       cell.setAttribute(
         "aria-label",
-        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${
+        `${itemName}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${
           packedCount > 0 ? ` · ${packedCount} inside` : ""
         }${
           getEntryRadioFreq(slot) > 0 ? ` · freq ${getEntryRadioFreq(slot)}` : ""
@@ -680,7 +684,7 @@ export class ContainerLootUI {
           getMaxDurability(slot.id) != null
             ? ` · ${getEntryDurability(slot)}/${getMaxDurability(slot.id)}`
             : ""
-        }`,
+        }${effect ? ` · ${effect}` : ""}`,
       );
 
       const takeToInventory = () => {
@@ -728,9 +732,12 @@ export class ContainerLootUI {
           ) {
             return false;
           }
-          if (shift) {
+          if (
+            shift &&
+            source === "player" &&
+            shiftSplitQuantity(slot.quantity) >= 1
+          ) {
             return (
-              source === "player" &&
               toSource === "player" &&
               canSplitInventoryStackHalf(
                 this.playerInventory,
@@ -765,7 +772,25 @@ export class ContainerLootUI {
           ) {
             return;
           }
-          if (shift && !(source === "player" && toSource === "player")) return;
+          const split =
+            shift &&
+            source === "player" &&
+            toSource === "player" &&
+            shiftSplitQuantity(slot.quantity) >= 1;
+          if (split) {
+            if (
+              !canSplitInventoryStackHalf(
+                this.playerInventory,
+                index,
+                toSlot,
+                this.extraPockets,
+              )
+            ) {
+              return;
+            }
+            this.handlers.onMovePlayerSlot(index, toSlot, true);
+            return;
+          }
           if (!this.canDrop(source, slot, toSource, toSlot)) return;
 
           if (source === "container" && toSource === "player") {
@@ -773,7 +798,7 @@ export class ContainerLootUI {
           } else if (source === "container" && toSource === "container") {
             this.handlers.onMoveInContainer(containerId, index, toSlot);
           } else if (source === "player" && toSource === "player") {
-            this.handlers.onMovePlayerSlot(index, toSlot, shift);
+            this.handlers.onMovePlayerSlot(index, toSlot, false);
           } else if (
             source === "player" &&
             toSource === "container" &&
@@ -904,7 +929,7 @@ export class ContainerLootUI {
     const loadedPack = backpackContentsHaveItems(entry);
     const dedicated = isBackpackItem(itemId)
       ? BACKPACK_SLOT_INDEX
-      : itemId === WATCH_ITEM_ID
+      : isWatchItem(itemId)
         ? WATCH_SLOT_INDEX
         : itemId === RADIO_ITEM_ID
           ? RADIO_SLOT_INDEX

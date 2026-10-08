@@ -10,6 +10,8 @@ import {
 } from "./items.js";
 import {
   officeManagerRoomForBuilding,
+  policeJailCellForBuilding,
+  policeSergeantRoomForBuilding,
   retailManagerRoomForBuilding,
 } from "./interior.js";
 
@@ -96,16 +98,48 @@ export function managerOfficeLockTile(
   return null;
 }
 
-/** Easy, for a manager office that spawned locked. Other tiles are not pick locks. */
+/** Sergeant's office door. Every police station spawns this lock. */
+export function policeSergeantLockTile(
+  bx: number,
+  by: number,
+): { x: number; y: number } | null {
+  const office = policeSergeantRoomForBuilding(bx, by);
+  if (!office) return null;
+  return { x: office.entranceX, y: office.entranceY };
+}
+
+/** Jail cell door. Every police station spawns this lock. */
+export function policeCellLockTile(
+  bx: number,
+  by: number,
+): { x: number; y: number } | null {
+  const cell = policeJailCellForBuilding(bx, by);
+  if (!cell) return null;
+  return { x: cell.entranceX, y: cell.entranceY };
+}
+
+function tileIs(
+  tile: { x: number; y: number } | null,
+  tx: number,
+  ty: number,
+): boolean {
+  return !!tile && tile.x === tx && tile.y === ty;
+}
+
+/**
+ * Easy, for a manager office, sergeant's office, or jail cell that spawned
+ * locked. Other tiles are not pick locks.
+ */
 export function lockDifficultyAt(
   bx: number,
   by: number,
   tx: number,
   ty: number,
 ): LockDifficulty | null {
-  const tile = managerOfficeLockTile(bx, by);
-  if (!tile || tile.x !== tx || tile.y !== ty) return null;
-  return "easy";
+  if (tileIs(managerOfficeLockTile(bx, by), tx, ty)) return "easy";
+  if (tileIs(policeSergeantLockTile(bx, by), tx, ty)) return "easy";
+  if (tileIs(policeCellLockTile(bx, by), tx, ty)) return "easy";
+  return null;
 }
 
 /**

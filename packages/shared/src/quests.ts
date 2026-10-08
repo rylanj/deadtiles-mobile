@@ -49,6 +49,7 @@ import {
 import { questTargetBuildingLabel } from "./questTargets.js";
 import { ASHEN_MARKET_TRADER_NAME } from "./trade.js";
 import { getBuildingAt } from "./worldgen.js";
+import { QUEST_ID_FOUND_ON_THE_ROAD, STORY_QUESTS } from "./storyQuests.js";
 
 export type QuestFaction = "redOrder" | "ashenTraders" | "ashenMilitia" | "none";
 
@@ -66,7 +67,8 @@ export type QuestObjectiveKind =
   | "killNpcKind"
   | "clearBuilding"
   | "searchShelf"
-  | "escort";
+  | "escort"
+  | "story";
 
 export type QuestObjective = {
   id: string;
@@ -124,6 +126,8 @@ export type QuestDefinition = {
   stub?: boolean;
   /** Icon on the jobs list when the job is not a single item turn-in. */
   iconItemId?: string;
+  /** Linked story. Not posted on the job board, and not abandonable. */
+  story?: boolean;
 };
 
 export type QuestStatus = "available" | "active" | "completed" | "failed";
@@ -1206,6 +1210,7 @@ export const QUEST_REGISTRY: readonly QuestDefinition[] = [
   QUEST_DONT_HOCK_THEM,
   ...ASHEN_TRADER_QUESTS,
   ...QUEST_STUBS,
+  ...STORY_QUESTS,
 ];
 
 const QUEST_BY_ID = new Map(QUEST_REGISTRY.map((q) => [q.id, q]));
@@ -1348,7 +1353,7 @@ export function serializeQuestsJson(state: PlayerQuestsState): string {
 }
 
 export function isOfferableQuest(def: QuestDefinition | undefined): boolean {
-  return !!def && !def.stub;
+  return !!def && !def.stub && !def.story;
 }
 
 export function questGiverLabel(def: QuestDefinition): string {
@@ -1448,20 +1453,15 @@ export function questCompletionsRemaining(
 }
 
 /**
- * While the tutorial is still running, Davis posts First Sweep and nothing else.
- * Turning that job in, or ending the tutorial, opens the rest of his board.
+ * While the tutorial is still running, Davis does not post the job board.
+ * The story is the work. Ending or finishing the tutorial opens the board.
  * Jobs already accepted stay listed so they can be turned in.
  */
 export function davisPostsOnlyFirstSweep(
-  state: PlayerQuestsState,
+  _state: PlayerQuestsState,
   tutorialDone: boolean,
 ): boolean {
-  if (tutorialDone) return false;
-  const prev = state.quests[QUEST_ID_FIRST_SWEEP];
-  if (prev?.status === "completed" || (prev?.timesCompleted ?? 0) > 0) {
-    return false;
-  }
-  return true;
+  return !tutorialDone;
 }
 
 export function canAcceptQuest(
@@ -1484,6 +1484,8 @@ export function canAbandonQuest(
   state: PlayerQuestsState,
   questId: string,
 ): boolean {
+  const def = getQuestDefinition(questId);
+  if (def?.id === QUEST_ID_FOUND_ON_THE_ROAD) return false;
   return isQuestActive(state, questId);
 }
 
@@ -1565,6 +1567,112 @@ export function acceptQuest(
 ): PlayerQuestsState | null {
   if (!canAcceptQuest(state, questId, now)) return null;
   const prev = state.quests[questId];
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        questId,
+        status: "active",
+        progress: {},
+        acceptedAt: now,
+        completedAt: prev?.completedAt,
+        timesCompleted: prev?.timesCompleted,
+        targetX: assignment?.targetX,
+        targetY: assignment?.targetY,
+        altTargetX: assignment?.altTargetX,
+        altTargetY: assignment?.altTargetY,
+      },
+    },
+  };
+}
+
+function storyQuestIndex(questId: string): number {
+  return STORY_QUESTS.findIndex((quest) => quest.id === questId);
+}
+
+function storyQuestFinished(
+  state: PlayerQuestsState,
+  questId: string,
+): boolean {
+  const prev = state.quests[questId];
+  return prev?.status === "completed" || (prev?.timesCompleted ?? 0) > 0;
+}
+
+/** Put the next story quest on the giver's dialog. The player still has to accept it. */
+export function offerStoryQuest(
+  state: PlayerQuestsState,
+  questId: string,
+  _now = Date.now(),
+  assignment?: QuestAcceptAssignment,
+): PlayerQuestsState | null {
+  const def = getQuestDefinition(questId);
+  const index = storyQuestIndex(questId);
+  if (!def?.story || index <= 0) return null;
+  const earlier = STORY_QUESTS[index - 1];
+  if (!earlier || !storyQuestFinished(state, earlier.id)) return null;
+  const prev = state.quests[questId];
+  if (prev?.status === "active" || prev?.status === "available") return null;
+  if ((prev?.timesCompleted ?? 0) > 0) return null;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        questId,
+        status: "available",
+        progress: {},
+        timesCompleted: prev?.timesCompleted,
+        targetX: assignment?.targetX,
+        targetY: assignment?.targetY,
+        altTargetX: assignment?.altTargetX,
+        altTargetY: assignment?.altTargetY,
+      },
+    },
+  };
+}
+
+/** Accept a story quest that is already offered. The first story quest is not accepted this way. */
+export function acceptStoryQuest(
+  state: PlayerQuestsState,
+  questId: string,
+  now = Date.now(),
+): PlayerQuestsState | null {
+  const def = getQuestDefinition(questId);
+  const index = storyQuestIndex(questId);
+  if (!def?.story || index <= 0) return null;
+  const earlier = STORY_QUESTS[index - 1];
+  if (!earlier || !storyQuestFinished(state, earlier.id)) return null;
+  const prev = state.quests[questId];
+  if (!prev || prev.status !== "available") return null;
+  if ((prev.timesCompleted ?? 0) > 0) return null;
+  return {
+    ...state,
+    quests: {
+      ...state.quests,
+      [questId]: {
+        ...prev,
+        status: "active",
+        progress: {},
+        acceptedAt: now,
+      },
+    },
+  };
+}
+
+/** Start a story quest without posting it on the job board. */
+export function grantActiveQuest(
+  state: PlayerQuestsState,
+  questId: string,
+  now = Date.now(),
+  assignment?: QuestAcceptAssignment,
+): PlayerQuestsState | null {
+  const def = getQuestDefinition(questId);
+  if (!def) return null;
+  const prev = state.quests[questId];
+  if (prev?.status === "active") return null;
+  if (!def.repeatable && (prev?.timesCompleted ?? 0) > 0) return null;
+  if (prev?.status === "completed" && !def.repeatable) return null;
   return {
     ...state,
     quests: {
@@ -2012,9 +2120,9 @@ export function questHasItemTurnIn(def: QuestDefinition): boolean {
   return def.objectives.some((obj) => obj.kind === "turnInItem");
 }
 
-/** Full catalog of jobs NPCs can offer. Unaccepted jobs stay off the journal. */
+/** Jobs NPCs can offer, plus story quests the journal can track. */
 export function listJournalQuests(): QuestDefinition[] {
-  return QUEST_REGISTRY.filter((q) => isOfferableQuest(q));
+  return QUEST_REGISTRY.filter((q) => isOfferableQuest(q) || !!q.story);
 }
 
 /** True after the player accepted the job from its giver (or finished / failed it). */

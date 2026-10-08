@@ -17,6 +17,7 @@ import {
   isQuestKeepsakeItem,
   isRadioSlot,
   isWatchSlot,
+  wornGearEffectHint,
   isWeaponItem,
   isWeaponSlot,
   parseInventory,
@@ -545,10 +546,7 @@ export class TraderUI {
       opts.side === "player" &&
       opts.slotIndex != null &&
       this.isEquippedSellSlot(opts.slotIndex, opts.id);
-    if (equipped) {
-      cell.classList.add("inventory-cell--equipped");
-      cell.title = "Equipped";
-    }
+    if (equipped) cell.classList.add("inventory-cell--equipped");
     if (opts.selected) cell.classList.add("inventory-cell--selected");
     if (opts.offered > 0) cell.classList.add("trader-cell--offered");
     cell.style.setProperty(
@@ -581,9 +579,17 @@ export class TraderUI {
     cell.appendChild(makeAmountPill(amount, "trader-cell-price"));
 
     const def = getItemDefinition(opts.id);
+    const itemName = def?.name ?? opts.id;
+    const effect = wornGearEffectHint(opts.id);
+    const titleBits = [itemName];
+    if (effect) titleBits.push(effect);
+    if (equipped) titleBits.push("Equipped");
+    if (effect || equipped) cell.title = titleBits.join(" · ");
     cell.setAttribute(
       "aria-label",
-      `${def?.name ?? opts.id}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}${equipped ? " · equipped" : ""}`,
+      `${itemName}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}${
+        effect ? ` · ${effect}` : ""
+      }${equipped ? " · equipped" : ""}`,
     );
 
     const selectCell = () => {
@@ -752,7 +758,10 @@ export class TraderUI {
     const equipped =
       this.selection.side === "player" &&
       this.isEquippedSellSlot(this.selection.slotIndex, this.selection.id);
-    this.detailEl.textContent = equipped ? `${label} · Equipped` : label;
+    const effect = wornGearEffectHint(this.selection.id);
+    const bits = [equipped ? `${label} · Equipped` : label];
+    if (effect) bits.push(effect);
+    this.detailEl.textContent = bits.join(" · ");
   }
 
   /**

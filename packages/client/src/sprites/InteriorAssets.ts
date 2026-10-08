@@ -57,6 +57,8 @@ export const INTERIOR_TEXTURE_KEYS = {
     minifridge: "furniture-minifridge-se",
     groundbackpack: "furniture-groundbackpack-se",
     militarybed: "furniture-militarybed-se",
+    jailbed: "furniture-jailbed-se",
+    jailtoilet: "furniture-jailtoilet-se",
     footlocker: "furniture-footlocker-se",
     kitbag: "furniture-kitbag-se",
     camptable: "furniture-camptable-se",

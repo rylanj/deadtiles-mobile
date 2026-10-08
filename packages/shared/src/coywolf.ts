@@ -48,7 +48,7 @@ export const COYWOLF_PACK_HUNT_RADIUS = 30;
 export const COYWOLF_PACK_CHASE_RADIUS = 40;
 /** Lunge reach. Longer than a zombie's grab, shorter than a bear's swipe. */
 export const COYWOLF_PACK_ATTACK_RANGE = 0.9;
-/** One bite. Zombies hit for 8, bears for 35. */
+/** One bite. Zombies hit for 15, bears for 35. */
 export const COYWOLF_PACK_DAMAGE = 18;
 /** Pause after they reach biting range, before the first snap. */
 export const COYWOLF_PACK_ATTACK_WINDUP_MS = 700;

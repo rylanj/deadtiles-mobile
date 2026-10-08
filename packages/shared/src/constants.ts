@@ -98,8 +98,20 @@ export const STARVATION_DAMAGE_INTERVAL_SEC = 5;
 
 export const ZOMBIE_SPEED = 0.55;
 export const ZOMBIE_AGGRO_RANGE = 12;
+/**
+ * Euclidean tiles. A zombie that spots a player groans and pulls every other
+ * zombie inside this radius toward that player.
+ */
+export const ZOMBIE_SPOT_ALERT_RADIUS = 10;
+/** Furniture search noise radius at stealth 0 and stealth 100. */
+export const SEARCH_NOISE_AT_0 = 10;
+export const SEARCH_NOISE_AT_100 = 2;
+/** Groan takes shipped as ZombieGroan1..N. */
+export const ZOMBIE_GROAN_COUNT = 12;
+/** How far a player hears a zombie groan, idle or when one spots a player. */
+export const ZOMBIE_GROAN_HEAR_RADIUS = 22;
 export const ZOMBIE_ATTACK_RANGE = 0.5;
-export const ZOMBIE_DAMAGE = 8;
+export const ZOMBIE_DAMAGE = 15;
 export const ZOMBIE_ATTACK_COOLDOWN_MS = 1000;
 export const PLAYER_MAX_HEALTH = 100;
 export const ZOMBIE_MAX_HEALTH = 40;
@@ -167,7 +179,7 @@ export const GUARD_NPC_RED_MAN = 3;
 
 export type GuardNpcFaction = "militia" | "trader" | "red";
 
-/** Militia, Ashen traders, and Red Order each treat their own as friendlies. */
+/** Faction of an NPC: militia, Ashen traders, or Red Order. */
 export function guardNpcFaction(npcKind: number): GuardNpcFaction {
   if (npcKind === GUARD_NPC_RED_MAN) return "red";
   if (
@@ -179,6 +191,7 @@ export function guardNpcFaction(npcKind: number): GuardNpcFaction {
   return "militia";
 }
 
+/** True when both NPCs belong to the same faction. */
 export function guardsAreAllied(aNpcKind: number, bNpcKind: number): boolean {
   return guardNpcFaction(aNpcKind) === guardNpcFaction(bNpcKind);
 }

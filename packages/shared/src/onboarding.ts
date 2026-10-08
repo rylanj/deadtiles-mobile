@@ -6,7 +6,7 @@
 export const TUTORIAL_CHAPTERS = [
   { id: "wake", title: "Chapter 1: Wake Up" },
   { id: "birchport", title: "Chapter 2: Birchport" },
-  { id: "sweep", title: "Chapter 3: First Sweep" },
+  { id: "patrol", title: "Chapter 3: The Patrol" },
   { id: "factions", title: "Chapter 4: Making a Name" },
   { id: "own", title: "Chapter 5: On Your Own" },
 ] as const;
@@ -18,20 +18,15 @@ export const ONBOARDING_STEP_IDS = [
   "intro",
   "move",
   "talk_clark",
+  "accept_aye_captain",
   "eat_drink",
   "map",
   "leave_hospital",
   "sprint",
   "talk_davis",
-  "accept_first_sweep",
-  "leave_town",
-  "equip_weapon",
-  "attack",
-  "enter_target",
-  "kill_zombie",
-  "search",
-  "clear_target",
-  "turn_in_first_sweep",
+  "turn_in_aye",
+  "accept_two_behind",
+  "search_coleman",
   "visit_traders",
   "talk_red_order",
   "finish",
@@ -48,8 +43,6 @@ export type OnboardingStepDef = {
   mobileBody?: string;
   /** Full-screen card with a button instead of the corner tracker. */
   card?: { button: string };
-  /** Only meaningful while First Sweep is accepted. */
-  needsFirstSweep?: boolean;
 };
 
 export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
@@ -124,81 +117,35 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
       "Birchport is held by the Ashen Militia. Weapons can't be drawn on its streets or inside faction buildings, so town is safe ground. " +
       "Go through the barracks gate (marked on your map) and find Captain Davis in the mess hall.",
   },
-  accept_first_sweep: {
-    id: "accept_first_sweep",
-    chapter: "birchport",
-    title: "Take Davis's first job",
+  accept_aye_captain: {
+    id: "accept_aye_captain",
+    chapter: "wake",
+    title: "Accept Aye, aye, Captain",
     body:
-      "Ask Davis for work and accept First Sweep. He'll lend you a worn hammer for it. " +
-      "Jobs raise your standing with the faction that posts them. Every faction starts out Wary of you.",
+      "Accept Aye, aye, Captain from Doctor Clark. He is sending you to Captain Davis in the barracks mess hall.",
   },
-  leave_town: {
-    id: "leave_town",
-    chapter: "sweep",
-    title: "Leave Birchport",
+  turn_in_aye: {
+    id: "turn_in_aye",
+    chapter: "patrol",
+    title: "Hear Davis out",
     body:
-      "The house is marked on your map just outside town. You can only draw a weapon once you're past the town limits.",
-    needsFirstSweep: true,
+      "Choose 'You wanted to speak to me?' and hear him out. Then turn Aye, aye, Captain in.",
   },
-  equip_weapon: {
-    id: "equip_weapon",
-    chapter: "sweep",
-    title: "Draw the hammer",
+  accept_two_behind: {
+    id: "accept_two_behind",
+    chapter: "patrol",
+    title: "Accept Two Behind It",
     body:
-      "Press 1 or 2 to equip the hammer from your hotbar, and 0 to put it away. Melee weapons wear down with every swing, and this one is nearly worn through.",
+      "Accept Two Behind It. Read it before you take it. That is how Davis says you earn the militia's trust.",
+  },
+  search_coleman: {
+    id: "search_coleman",
+    chapter: "patrol",
+    title: "Search Coleman's house",
+    body:
+      "Sergeant Coleman's house is marked on your map in Birchport. Search the furniture. You will not be told which piece matters. Bring what you find back to Davis.",
     mobileBody:
-      "Tap the hammer on your hotbar to equip it. Melee weapons wear down with every swing, and this one is nearly worn through.",
-    needsFirstSweep: true,
-  },
-  attack: {
-    id: "attack",
-    chapter: "sweep",
-    title: "Practice a swing",
-    body:
-      "Hold CTRL to aim, then click to swing toward the cursor. Melee is quiet. Gunfire is loud and draws in every walker in earshot.",
-    mobileBody:
-      "Tap the aim button, then tap where you want to strike. Melee is quiet. Gunfire is loud and draws in every walker in earshot.",
-    needsFirstSweep: true,
-  },
-  enter_target: {
-    id: "enter_target",
-    chapter: "sweep",
-    title: "Enter the marked house",
-    body: "Walk to the house marked on your map and go inside. Walkers have holed up in there.",
-    needsFirstSweep: true,
-  },
-  kill_zombie: {
-    id: "kill_zombie",
-    chapter: "sweep",
-    title: "Put down a walker",
-    body:
-      "Take walkers one at a time and back off when you're hurt. A bite can infect you, which slowly lowers your max health until it's treated.",
-    needsFirstSweep: true,
-  },
-  search: {
-    id: "search",
-    chapter: "sweep",
-    title: "Search the house",
-    body:
-      "Walk up to furniture and press E to search it. Outside Birchport, anything you find is yours. Drag items from the container into your pack.",
-    mobileBody:
-      "Tap furniture to search it. Outside Birchport, anything you find is yours. Drag items from the container into your pack.",
-    needsFirstSweep: true,
-  },
-  clear_target: {
-    id: "clear_target",
-    chapter: "sweep",
-    title: "Clear the house",
-    body: "Every walker inside has to go down before the job counts. Check every room.",
-    needsFirstSweep: true,
-  },
-  turn_in_first_sweep: {
-    id: "turn_in_first_sweep",
-    chapter: "sweep",
-    title: "Report back to Davis",
-    body:
-      "Go back to the barracks and turn in First Sweep. Davis pays in banknotes, the county's currency.",
-    needsFirstSweep: true,
+      "Sergeant Coleman's house is marked on your map in Birchport. Tap furniture to search it. You will not be told which piece matters. Bring what you find back to Davis.",
   },
   visit_traders: {
     id: "visit_traders",
@@ -221,8 +168,8 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     chapter: "own",
     title: "You're on your own",
     body:
-      "That's the basics. Scavenge, stay fed and warm, take jobs to raise your standing, and build somewhere safe to keep your loot. " +
-      "Davis and Clark both post more work. The Field Guide in your Journal covers all of this in more detail.",
+      "That's the basics. Scavenge, stay fed and warm, follow the story Davis offers, and build somewhere safe to keep your loot. " +
+      "Once this tutorial ends, Davis and Clark post more work on their boards. The Field Guide in your Journal covers all of this in more detail.",
     card: { button: "Finish" },
   },
 };

@@ -6,6 +6,7 @@ export type EntityActionKind =
   | "reload"
   | "unload"
   | "search"
+  | "inspect"
   | "crack"
   | "bandage"
   | "eat"
@@ -23,6 +24,7 @@ const ACTION_TEXT: Record<EntityActionKind, string> = {
   reload: "Reloading",
   unload: "Unloading",
   search: "Searching",
+  inspect: "Inspecting",
   crack: "Cracking",
   bandage: "Bandaging",
   eat: "Eating",

@@ -229,8 +229,8 @@ export function inGameMinuteOfDay(worldTimeMs: number): number {
   return wrapped * 24 * 60;
 }
 
-/** Peak chase speed at 01:00 for a standing zombie. Daytime speed is each zombie's base. */
-export const ZOMBIE_NIGHT_SPEED = 1;
+/** Standing-zombie chase speed at 01:00. Daytime speed stays at each zombie's base. */
+export const ZOMBIE_NIGHT_SPEED = 1.7;
 
 const ZOMBIE_NIGHT_RAMP_START_MIN = 20 * 60;
 const ZOMBIE_NIGHT_PEAK_MIN = 1 * 60;
@@ -285,6 +285,7 @@ export function formatInGameClock(worldTimeMs: number): string {
  * Interiors pass `indoor` to pin the camera void to night. At night the
  * indoor overlay is stronger than outdoors so rooms read darker than the street.
  * `alwaysLit` skips night overlay (powered interiors such as hospitals).
+ * `underground` forces the night-indoor look even while the sun is up.
  * `firelitAmount` (0..1) lifts indoor night lighting by up to 20% when a
  * fireplace is burning.
  * Outdoor weather amounts (0..1) tint the sky only. Indoor cloudy still
@@ -296,6 +297,8 @@ export function dayNightLook(
   opts?: {
     indoor?: boolean;
     alwaysLit?: boolean;
+    /** Cellar and other underground rooms stay night-dark in daylight. */
+    underground?: boolean;
     firelitAmount?: number;
     cloudyAmount?: number;
     fogAmount?: number;
@@ -307,8 +310,9 @@ export function dayNightLook(
   const phase = phaseOfDay(worldTimeMs);
   const sunlight = sunlightLevel(worldTimeMs);
   const alwaysLit = !!opts?.alwaysLit;
-  const darkness = alwaysLit ? 0 : 1 - sunlight;
   const indoor = !!opts?.indoor;
+  const underground = indoor && !!opts?.underground;
+  const darkness = alwaysLit ? 0 : underground ? 1 : 1 - sunlight;
   const cloudyAmt = clamp01(opts?.cloudyAmount ?? 0);
   const cloudy = indoor ? 0 : cloudyAmt;
   const fog = indoor ? 0 : clamp01(opts?.fogAmount ?? 0);
@@ -327,7 +331,9 @@ export function dayNightLook(
     sky = lerpRgb(sky, RAIN_SKY, rain * 0.22);
     sky = lerpRgb(sky, SNOW_SKY, snow * 0.35);
   }
-  const outdoorAmbient = ambientColorFor(phase, sunlight);
+  const outdoorAmbient = underground
+    ? AMBIENT_NIGHT
+    : ambientColorFor(phase, sunlight);
   const firelit =
     indoor && !alwaysLit ? clamp01(opts?.firelitAmount ?? 0) : 0;
   const fireLift = 1 - firelit * 0.2;

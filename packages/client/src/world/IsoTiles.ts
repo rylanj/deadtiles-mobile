@@ -3,6 +3,8 @@ import {
   buildingWallScreenDepth,
   cartesianToIso,
   generateTile,
+  getBirchportGraveAt,
+  getCellarAt,
   getBuildingAt,
   getFencesAt,
   getStreetlightAt,
@@ -22,6 +24,8 @@ import {
   preWarmCellsNearPlayer,
   evictDistantCells,
   WORLDGEN_QUERY_REACH,
+  type BirchportGrave,
+  type CellarDoor,
   type BuildingInfo,
   type BuildingType,
   type FenceInfo,
@@ -29,6 +33,7 @@ import {
   type TreeInfo,
   type WorldBounds,
 } from "@zombie/shared";
+import { spriteOpaqueAtWorldPoint } from "../sprites/spritePixelHit";
 import {
   CLIENT_RENDER_RADIUS,
   TILES_PER_SYNC,
@@ -93,7 +98,11 @@ import {
   type FenceCorner,
 } from "../sprites/FenceAssets";
 import { renderStats } from "../diagnostics/textureBudget";
-import { streetlightTextureKey } from "../sprites/PropAssets";
+import {
+  cellarTextureKey,
+  graveTextureKey,
+  streetlightTextureKey,
+} from "../sprites/PropAssets";
 import { ensureTreeFallFrames, entityFeetY } from "../sprites/EntitySprites";
 import {
   buildingCuboidScreenBox,
@@ -687,6 +696,90 @@ export function streetlightRenderDepth(light: StreetlightInfo): number {
   return applyBuildingStreetlightDepth(base, light.ox, light.oy);
 }
 
+/**
+ * Grave1_Idle_SE.png is 256². Opaque pixels run y 15–217 (203px) and the
+ * rocks end on row 217, so the feet origin is just below that row.
+ * Content is drawn at 50px.
+ */
+const GRAVE_SRC = 256;
+const GRAVE_CONTENT_HEIGHT = 203;
+const GRAVE_CONTENT_DISPLAY = 50;
+const GRAVE_DISPLAY_HEIGHT = Math.round(
+  GRAVE_CONTENT_DISPLAY * (GRAVE_SRC / GRAVE_CONTENT_HEIGHT),
+);
+const GRAVE_ORIGIN_Y = 218 / GRAVE_SRC;
+
+export function createGraveSprite(
+  scene: Phaser.Scene,
+  grave: BirchportGrave,
+): Phaser.GameObjects.Image {
+  const iso = cartesianToIso(grave.ox + 0.5, grave.oy + 0.5);
+  const textureKey = graveTextureKey();
+  const key = scene.textures.exists(textureKey) ? textureKey : "__DEFAULT";
+  const img = scene.add.image(iso.x, entityFeetY(iso.y), key);
+  img.setOrigin(0.5, GRAVE_ORIGIN_Y);
+  if (scene.textures.exists(textureKey)) {
+    const w = img.frame?.realWidth || 1;
+    const h = img.frame?.realHeight || 1;
+    img.setDisplaySize((w / h) * GRAVE_DISPLAY_HEIGHT, GRAVE_DISPLAY_HEIGHT);
+  } else {
+    img.setDisplaySize(GRAVE_DISPLAY_HEIGHT * 0.45, GRAVE_DISPLAY_HEIGHT);
+  }
+  img.setDepth(graveRenderDepth(grave));
+  return img;
+}
+
+export function graveRenderDepth(grave: BirchportGrave): number {
+  const base = entityRenderDepth(grave.ox + 0.5, grave.oy + 0.5);
+  return tuckBehindPlayerWalls(
+    applyBuildingStreetlightDepth(base, grave.ox, grave.oy),
+    grave.ox,
+    grave.oy,
+  );
+}
+
+/**
+ * Cellar1_Idle_SE.png is 256² and nearly full-bleed. The front stone tip
+ * sits near (142, 249). Display width is 80% of the 2-tile footprint (96px).
+ * Raised by 10% of that display height.
+ */
+const CELLAR_SRC = 256;
+const CELLAR_DISPLAY = Math.round(96 * 0.8);
+const CELLAR_RAISE = Math.round(CELLAR_DISPLAY * 0.08);
+const CELLAR_ORIGIN_X = 142 / CELLAR_SRC;
+const CELLAR_ORIGIN_Y = 250 / CELLAR_SRC;
+
+export function createCellarSprite(
+  scene: Phaser.Scene,
+  door: CellarDoor,
+): Phaser.GameObjects.Image {
+  const iso = cartesianToIso(door.ox + door.w / 2, door.oy + door.h / 2);
+  const textureKey = cellarTextureKey();
+  const key = scene.textures.exists(textureKey) ? textureKey : "__DEFAULT";
+  const img = scene.add.image(iso.x, iso.y + TILE_HEIGHT / 2 - CELLAR_RAISE, key);
+  img.setOrigin(CELLAR_ORIGIN_X, CELLAR_ORIGIN_Y);
+  if (scene.textures.exists(textureKey)) {
+    const w = img.frame?.realWidth || 1;
+    const h = img.frame?.realHeight || 1;
+    img.setDisplaySize(CELLAR_DISPLAY, (h / w) * CELLAR_DISPLAY);
+  } else {
+    img.setDisplaySize(CELLAR_DISPLAY, CELLAR_DISPLAY * 0.75);
+  }
+  img.setDepth(cellarRenderDepth(door));
+  return img;
+}
+
+export function cellarRenderDepth(door: CellarDoor): number {
+  const frontX = door.ox + door.w - 1;
+  const frontY = door.oy + door.h - 1;
+  const base = entityRenderDepth(frontX + 0.5, frontY + 0.5);
+  return tuckBehindPlayerWalls(
+    applyBuildingStreetlightDepth(base, frontX, frontY),
+    frontX,
+    frontY,
+  );
+}
+
 function fenceRenderDepth(fence: FenceInfo): number {
   const base =
     entityRenderDepth(fence.ox + 0.5, fence.oy + 0.5) +
@@ -1268,6 +1361,8 @@ export class WorldTileManager {
   private treeObjects = new Map<string, Phaser.GameObjects.Image>();
   /** Streetlight sprites keyed by tileKey. */
   private streetlightObjects = new Map<string, Phaser.GameObjects.Image>();
+  private graveObjects = new Map<string, Phaser.GameObjects.Image>();
+  private cellarObjects = new Map<string, Phaser.GameObjects.Image>();
   /** Fence sprites keyed by `tx,ty,facing`. */
   private fenceObjects = new Map<string, Phaser.GameObjects.Image>();
   private buildingHighlight: Phaser.GameObjects.Graphics;
@@ -1328,6 +1423,8 @@ export class WorldTileManager {
     for (const b of this.buildingCache.values()) b.cuboid.display.setVisible(false);
     for (const t of this.treeObjects.values()) t.setVisible(visible);
     for (const s of this.streetlightObjects.values()) s.setVisible(visible);
+    for (const g of this.graveObjects.values()) g.setVisible(visible);
+    for (const c of this.cellarObjects.values()) c.setVisible(visible);
     for (const f of this.fenceObjects.values()) f.setVisible(visible);
     for (const d of this.edgeDecalObjects.values()) d.setVisible(visible);
     for (const d of this.streetDecalObjects.values()) d.setVisible(visible);
@@ -1542,6 +1639,58 @@ export class WorldTileManager {
     this.interactionOcclusionMask.clear();
   }
 
+  /**
+   * Grave under a world point. Opaque sprite pixels win over the floor
+   * diamond, so a click on the cross still selects that marker.
+   */
+  pickGraveAtWorld(worldX: number, worldY: number): BirchportGrave | null {
+    let best: Phaser.GameObjects.Image | null = null;
+    let bestGrave: BirchportGrave | null = null;
+    for (const [key, img] of this.graveObjects) {
+      if (!img.visible) continue;
+      if (!img.getBounds().contains(worldX, worldY)) continue;
+      if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(img, worldX, worldY)) continue;
+      if (best && img.depth <= best.depth) continue;
+      const comma = key.indexOf(",");
+      const grave = getBirchportGraveAt(
+        Number(key.slice(0, comma)),
+        Number(key.slice(comma + 1)),
+      );
+      if (!grave) continue;
+      best = img;
+      bestGrave = grave;
+    }
+    if (bestGrave) return bestGrave;
+    const cart = isoToCartesian(worldX, worldY);
+    return getBirchportGraveAt(Math.floor(cart.x), Math.floor(cart.y));
+  }
+
+  /**
+   * Cellar under a world point. Opaque door pixels win over the floor
+   * diamond so a click on the bulkhead selects that door.
+   */
+  pickCellarAtWorld(worldX: number, worldY: number): CellarDoor | null {
+    let best: Phaser.GameObjects.Image | null = null;
+    let bestDoor: CellarDoor | null = null;
+    for (const [key, img] of this.cellarObjects) {
+      if (!img.visible) continue;
+      if (!img.getBounds().contains(worldX, worldY)) continue;
+      if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(img, worldX, worldY)) continue;
+      if (best && img.depth <= best.depth) continue;
+      const comma = key.indexOf(",");
+      const door = getCellarAt(
+        Number(key.slice(0, comma)),
+        Number(key.slice(comma + 1)),
+      );
+      if (!door) continue;
+      best = img;
+      bestDoor = door;
+    }
+    if (bestDoor) return bestDoor;
+    const cart = isoToCartesian(worldX, worldY);
+    return getCellarAt(Math.floor(cart.x), Math.floor(cart.y));
+  }
+
   private streetChunkKey(x: number, y: number): string {
     const chunkX = Math.floor(x / STREET_CHUNK_SIZE) * STREET_CHUNK_SIZE;
     const chunkY = Math.floor(y / STREET_CHUNK_SIZE) * STREET_CHUNK_SIZE;
@@ -1599,6 +1748,16 @@ export class WorldTileManager {
           const light = getStreetlightAt(tx, ty);
           if (light) lightImg.setDepth(streetlightRenderDepth(light));
         }
+        const graveImg = this.graveObjects.get(key);
+        if (graveImg) {
+          const grave = getBirchportGraveAt(tx, ty);
+          if (grave) graveImg.setDepth(graveRenderDepth(grave));
+        }
+        const cellar = getCellarAt(tx, ty);
+        if (cellar) {
+          const cellarImg = this.cellarObjects.get(tileKey(cellar.ox, cellar.oy));
+          if (cellarImg) cellarImg.setDepth(cellarRenderDepth(cellar));
+        }
       }
     }
   }
@@ -1619,6 +1778,20 @@ export class WorldTileManager {
       const light = getStreetlightAt(tx, ty);
       if (light) img.setDepth(streetlightRenderDepth(light));
     }
+    for (const [key, img] of this.graveObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const grave = getBirchportGraveAt(tx, ty);
+      if (grave) img.setDepth(graveRenderDepth(grave));
+    }
+    for (const [key, img] of this.cellarObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const cellar = getCellarAt(tx, ty);
+      if (cellar) img.setDepth(cellarRenderDepth(cellar));
+    }
   }
 
   /**
@@ -1633,6 +1806,24 @@ export class WorldTileManager {
       const tree = getTreeAt(tx, ty);
       if (!tree) continue;
       const depth = treeRenderDepth(tree);
+      if (img.depth !== depth) img.setDepth(depth);
+    }
+    for (const [key, img] of this.graveObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const grave = getBirchportGraveAt(tx, ty);
+      if (!grave) continue;
+      const depth = graveRenderDepth(grave);
+      if (img.depth !== depth) img.setDepth(depth);
+    }
+    for (const [key, img] of this.cellarObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const cellar = getCellarAt(tx, ty);
+      if (!cellar) continue;
+      const depth = cellarRenderDepth(cellar);
       if (img.depth !== depth) img.setDepth(depth);
     }
     for (const [key, img] of this.fenceObjects) {
@@ -1890,8 +2081,8 @@ export class WorldTileManager {
                 }
                 this.minimapKinds.set(key, "streetlight");
               } else {
-                const fences = getFencesAt(x, y);
-                if (fences.length > 0) {
+                const grave = getBirchportGraveAt(x, y);
+                if (grave) {
                   this.destroyGroundTile(key);
                   if (!this.treeGroundTiles.has(key)) {
                     const ground = createGroundTile(
@@ -1902,37 +2093,17 @@ export class WorldTileManager {
                     );
                     if (ground) this.treeGroundTiles.set(key, ground);
                   }
-                  const corner =
-                    fences.length >= 2
-                      ? fenceCornerFromFacings(
-                          fences[0]!.facing,
-                          fences[1]!.facing,
-                        )
-                      : null;
-                  if (corner) {
-                    const cKey = fenceCornerObjectKey(x, y, corner);
-                    if (!this.fenceObjects.has(cKey)) {
-                      this.fenceObjects.set(
-                        cKey,
-                        createFenceCornerSprite(this.scene, x, y, corner),
-                      );
-                    }
-                  } else {
-                    for (const fence of fences) {
-                      const fKey = fenceObjectKey(fence);
-                      if (!this.fenceObjects.has(fKey)) {
-                        this.fenceObjects.set(
-                          fKey,
-                          createFenceSprite(this.scene, fence),
-                        );
-                      }
-                    }
+                  if (!this.graveObjects.has(key)) {
+                    this.graveObjects.set(
+                      key,
+                      createGraveSprite(this.scene, grave),
+                    );
                   }
                   this.minimapKinds.set(key, "floor");
-                } else {
-                  const tree = getTreeAt(x, y);
-                  if (tree && !this.treeObjects.has(key)) {
-                    this.destroyGroundTile(key);
+                } else if (getCellarAt(x, y)) {
+                  const cellar = getCellarAt(x, y)!;
+                  this.destroyGroundTile(key);
+                  if (!this.treeGroundTiles.has(key)) {
                     const ground = createGroundTile(
                       this.scene,
                       x,
@@ -1940,13 +2111,74 @@ export class WorldTileManager {
                       this.grassLayer,
                     );
                     if (ground) this.treeGroundTiles.set(key, ground);
-                    this.treeObjects.set(
-                      key,
-                      createTreeSprite(this.scene, tree, {
-                        felled: isTreeFelled(x, y),
-                      }),
+                  }
+                  const anchorKey = tileKey(cellar.ox, cellar.oy);
+                  if (!this.cellarObjects.has(anchorKey)) {
+                    this.cellarObjects.set(
+                      anchorKey,
+                      createCellarSprite(this.scene, cellar),
                     );
+                  }
+                  this.minimapKinds.set(key, "floor");
+                } else {
+                  const fences = getFencesAt(x, y);
+                  if (fences.length > 0) {
+                    this.destroyGroundTile(key);
+                    if (!this.treeGroundTiles.has(key)) {
+                      const ground = createGroundTile(
+                        this.scene,
+                        x,
+                        y,
+                        this.grassLayer,
+                      );
+                      if (ground) this.treeGroundTiles.set(key, ground);
+                    }
+                    const corner =
+                      fences.length >= 2
+                        ? fenceCornerFromFacings(
+                            fences[0]!.facing,
+                            fences[1]!.facing,
+                          )
+                        : null;
+                    if (corner) {
+                      const cKey = fenceCornerObjectKey(x, y, corner);
+                      if (!this.fenceObjects.has(cKey)) {
+                        this.fenceObjects.set(
+                          cKey,
+                          createFenceCornerSprite(this.scene, x, y, corner),
+                        );
+                      }
+                    } else {
+                      for (const fence of fences) {
+                        const fKey = fenceObjectKey(fence);
+                        if (!this.fenceObjects.has(fKey)) {
+                          this.fenceObjects.set(
+                            fKey,
+                            createFenceSprite(this.scene, fence),
+                          );
+                        }
+                      }
+                    }
                     this.minimapKinds.set(key, "floor");
+                  } else {
+                    const tree = getTreeAt(x, y);
+                    if (tree && !this.treeObjects.has(key)) {
+                      this.destroyGroundTile(key);
+                      const ground = createGroundTile(
+                        this.scene,
+                        x,
+                        y,
+                        this.grassLayer,
+                      );
+                      if (ground) this.treeGroundTiles.set(key, ground);
+                      this.treeObjects.set(
+                        key,
+                        createTreeSprite(this.scene, tree, {
+                          felled: isTreeFelled(x, y),
+                        }),
+                      );
+                      this.minimapKinds.set(key, "floor");
+                    }
                   }
                 }
               }
@@ -3005,6 +3237,43 @@ export class WorldTileManager {
     }
     for (const key of lightKeysToRemove) {
       this.streetlightObjects.delete(key);
+      this.drawn.delete(key);
+      this.minimapKinds.delete(key);
+    }
+
+    // ── Barracks graves (1×1; grass underlay culled with tree ground) ──────
+    const graveKeysToRemove: string[] = [];
+    for (const [key, img] of this.graveObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      if (!outside(tx, ty, tx, ty)) continue;
+      graveKeysToRemove.push(key);
+      img.destroy();
+    }
+    for (const key of graveKeysToRemove) {
+      this.graveObjects.delete(key);
+      this.drawn.delete(key);
+      this.minimapKinds.delete(key);
+    }
+
+    // Cellar bulkhead. One sprite on the anchor tile; grass culls with tree ground.
+    const cellarKeysToRemove: string[] = [];
+    for (const [key, img] of this.cellarObjects) {
+      const comma = key.indexOf(",");
+      const tx = parseInt(key.slice(0, comma), 10);
+      const ty = parseInt(key.slice(comma + 1), 10);
+      const door = getCellarAt(tx, ty);
+      const minX = door?.ox ?? tx;
+      const minY = door?.oy ?? ty;
+      const maxX = door ? door.ox + door.w - 1 : tx;
+      const maxY = door ? door.oy + door.h - 1 : ty;
+      if (!outside(minX, minY, maxX, maxY)) continue;
+      cellarKeysToRemove.push(key);
+      img.destroy();
+    }
+    for (const key of cellarKeysToRemove) {
+      this.cellarObjects.delete(key);
       this.drawn.delete(key);
       this.minimapKinds.delete(key);
     }

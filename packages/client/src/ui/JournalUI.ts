@@ -11,10 +11,8 @@ import {
   parseQuestsJson,
   buffedSubSkillLevel,
   parseSkillsJson,
-  ASHEN_MILITIA_TASK_WINDOW_MS,
   getItemDefinition,
   questAssignedLocationLabel,
-  questCompletionsRemaining,
   questFlag,
   questGiverLabel,
   questHasItemTurnIn,
@@ -37,6 +35,14 @@ import { isMobileDevice } from "../device";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { appendItemIcon, markQuestKeepsake } from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
+
+const PARENT_SKILL_ICONS: Record<ParentSkillId, string> = {
+  strength: "/assets/UI/UI_strength.png",
+  endurance: "/assets/UI/UI_endurance.png",
+  dexterity: "/assets/UI/UI_dexterity.png",
+  intelligence: "/assets/UI/UI_intelligence.png",
+  charisma: "/assets/UI/UI_charisma.png",
+};
 
 export type JournalTab = "quests" | "skills" | "guide";
 
@@ -134,7 +140,7 @@ export class JournalUI {
   private tab: JournalTab = "quests";
   private questsJson = "";
   private skillsJson = "";
-  /** Temporary Bartering and Persuasion XP from worn jewelry. */
+  /** Temporary Bartering and Persuasion XP from worn jewelry and watches. */
   private jewelrySkillXp = 0;
   /** Quest id currently expanded (null = all collapsed). */
   private expandedQuestId: string | null = null;
@@ -327,15 +333,10 @@ export class JournalUI {
     def: QuestDefinition,
   ): HTMLElement {
     const status = questStatusOf(state, def.id);
-    const remaining = questCompletionsRemaining(state, def);
     const expanded = this.expandedQuestId === def.id;
     const giver = questGiverLabel(def);
     const turnIns = questTurnInItems(def);
     const notes = questRewardBanknotes(def);
-    const max = def.maxCompletionsPerWindow;
-    const used =
-      remaining != null && max != null ? Math.max(0, max - remaining) : 0;
-    const atCap = remaining === 0;
     const field = def.objectives.filter((obj) => obj.kind !== "turnInItem");
     const fieldOpen =
       status === "active" &&
@@ -349,7 +350,7 @@ export class JournalUI {
     const section = document.createElement("div");
     section.className = "craft-recipe journal-quest";
     if (expanded) section.classList.add("craft-recipe--expanded");
-    if (status === "failed" || atCap) section.classList.add("craft-recipe--capped");
+    if (status === "failed") section.classList.add("craft-recipe--capped");
     else if (status === "active") {
       section.classList.add("craft-recipe--accepted");
       if (readyToReport) section.classList.add("craft-recipe--ready");
@@ -359,19 +360,18 @@ export class JournalUI {
     summary.type = "button";
     summary.className = "craft-recipe-summary";
     summary.setAttribute("aria-expanded", expanded ? "true" : "false");
-    const chipText = atCap
-      ? "Daily limit"
-      : status === "failed"
-        ? "Failed"
-        : status === "completed"
-          ? "Completed"
-          : status === "active"
-            ? "Accepted"
-            : "";
+    const chips: { text: string; tone: "accepted" | "capped" | "neutral" | "story" }[] = [];
+    if (def.story) chips.push({ text: "Story", tone: "story" });
+    if (status === "failed") chips.push({ text: "Failed", tone: "capped" });
+    else if (status === "completed") chips.push({ text: "Completed", tone: "accepted" });
+    else if (status === "active") chips.push({ text: "Accepted", tone: "accepted" });
+    if (status === "completed" && def.repeatable) {
+      chips.push({ text: "Repeatable", tone: "neutral" });
+    }
     summary.setAttribute(
       "aria-label",
       `${expanded ? "Collapse" : "Expand"} ${def.title}${
-        chipText ? `, ${chipText}` : ""
+        chips.length > 0 ? `, ${chips.map((chip) => chip.text).join(", ")}` : ""
       }`,
     );
 
@@ -393,14 +393,11 @@ export class JournalUI {
     const nameEl = document.createElement("span");
     nameEl.className = "craft-recipe-summary-name";
     nameEl.textContent = def.title;
-    if (chipText) {
-      const chip = document.createElement("span");
-      chip.className =
-        status === "failed" || atCap
-          ? "quest-status-chip quest-status-chip--capped"
-          : "quest-status-chip quest-status-chip--accepted";
-      chip.textContent = chipText;
-      nameEl.appendChild(chip);
+    for (const chip of chips) {
+      const chipEl = document.createElement("span");
+      chipEl.className = `quest-status-chip quest-status-chip--${chip.tone}`;
+      chipEl.textContent = chip.text;
+      nameEl.appendChild(chipEl);
     }
     const meta = document.createElement("span");
     meta.className = "craft-recipe-summary-meta";
@@ -414,10 +411,8 @@ export class JournalUI {
       meta.textContent = giver ? `Failed · ${giver}` : "Failed";
     } else if (status === "completed" && !def.repeatable) {
       meta.textContent = giver ? `Already reported · ${giver}` : "Already reported";
-    } else if (atCap) {
-      meta.textContent = giver
-        ? `Daily limit reached (${max}/day) · ${giver}`
-        : `Daily limit reached (${max}/day)`;
+    } else if (status === "completed") {
+      if (giver) meta.textContent = giver;
     } else if (readyToReport) {
       meta.textContent = giver
         ? `Ready to turn in · ${giver}`
@@ -538,16 +533,6 @@ export class JournalUI {
       rewardTitle.textContent = "Rewards";
       details.appendChild(rewardTitle);
       details.appendChild(rewardRow);
-    }
-
-    if (max != null) {
-      const capHint = document.createElement("div");
-      capHint.className = "craft-recipe-hint";
-      const windowHrs = Math.round(
-        (def.completionWindowMs ?? ASHEN_MILITIA_TASK_WINDOW_MS) / 3_600_000,
-      );
-      capHint.textContent = `${used}/${max} completed in the last ${windowHrs}h`;
-      details.appendChild(capHint);
     }
 
     if (status === "active") {
@@ -678,6 +663,12 @@ export class JournalUI {
       `${expanded ? "Collapse" : "Expand"} ${PARENT_SKILL_LABELS[parentId]}`,
     );
 
+    const icon = document.createElement("img");
+    icon.className = "journal-skill-icon";
+    icon.src = PARENT_SKILL_ICONS[parentId];
+    icon.alt = "";
+    icon.draggable = false;
+
     const label = document.createElement("div");
     label.className = "craft-recipe-summary-text";
     const nameEl = document.createElement("span");
@@ -689,7 +680,7 @@ export class JournalUI {
     const bar = skillBar(progress, SKILL_LEVEL_MAX);
     bar.classList.add("journal-skill-summary-bar");
     label.append(nameEl, meta, bar);
-    summary.appendChild(label);
+    summary.append(icon, label);
 
     const chevron = document.createElement("span");
     chevron.className = "craft-recipe-chevron";

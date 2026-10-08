@@ -8,6 +8,7 @@ import {
   TRADER_POCKET,
   ZOMBIE_POCKET,
   rollLootRolls,
+  type LootRoll,
 } from "./lootTables.js";
 import { parentOfSub, type SubSkillId } from "./skills.js";
 import {
@@ -37,7 +38,41 @@ export const WATCH_SLOT_INDEX = CLOTHING_SLOT_INDEX + 1;
 export const RADIO_SLOT_INDEX = CLOTHING_SLOT_INDEX + 2;
 /** Map cell sits on the second gear row. */
 export const MAP_SLOT_INDEX = CLOTHING_SLOT_INDEX + 3;
+/** Plain watch. Still tells time. New loot rolls a named watch instead. */
 export const WATCH_ITEM_ID = "watch";
+
+/**
+ * Named watches, rarest first.
+ * A container or shop that rolls `watch` picks one of these.
+ * `weight` is that watch's share of those rolls (200 in total).
+ * Luxury weights stay thin: those pieces are rare.
+ * `value` is the banknote base price.
+ * `xp` is temporary Bartering and Persuasion XP while the watch is worn.
+ */
+export const WATCH_LOOT = [
+  { id: "luxury_gold_watch", name: "Luxury Gold Watch", value: 3000, xp: 3000, weight: 1 },
+  { id: "luxury_silver_watch", name: "Luxury Silver Watch", value: 2000, xp: 2000, weight: 2 },
+  { id: "luxury_watch", name: "Luxury Watch", value: 1400, xp: 1400, weight: 3 },
+  { id: "gold_watch", name: "Gold Watch", value: 900, xp: 900, weight: 14 },
+  { id: "gold_dress_watch", name: "Gold Dress Watch", value: 600, xp: 600, weight: 21 },
+  { id: "digital_gold_watch", name: "Digital Gold Watch", value: 400, xp: 400, weight: 28 },
+  { id: "old_gold_watch", name: "Old Gold Watch", value: 280, xp: 280, weight: 35 },
+  { id: "silver_watch", name: "Silver Watch", value: 180, xp: 180, weight: 42 },
+  { id: "old_silver_watch", name: "Old Silver Watch", value: 120, xp: 120, weight: 54 },
+] as const;
+
+const WATCH_LOOT_WEIGHT = WATCH_LOOT.reduce((sum, watch) => sum + watch.weight, 0);
+
+/** One named watch. Cheaper pieces are more common. */
+export function rollWatchVariant(rng: () => number): string {
+  let roll = rng() * WATCH_LOOT_WEIGHT;
+  for (const watch of WATCH_LOOT) {
+    if (roll < watch.weight) return watch.id;
+    roll -= watch.weight;
+  }
+  return WATCH_LOOT[WATCH_LOOT.length - 1]!.id;
+}
+
 export const RADIO_ITEM_ID = "handheld_radio";
 /** Lowest channel a player can dial. 1 and 2 are listen-only world nets. */
 export const RADIO_FREQ_MIN = 1;
@@ -396,6 +431,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     stackable: false,
     weight: 0.1,
   },
+  ...WATCH_LOOT.map((watch) => ({
+    id: watch.id,
+    name: watch.name,
+    category: "equipment",
+    stackable: false,
+    weight: 0.1,
+  })),
   {
     id: RADIO_ITEM_ID,
     name: "Handheld Radio",
@@ -579,6 +621,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   {
     id: "supply_list",
     name: "Supply List",
+    category: "junk",
+    stackable: false,
+    weight: 0.02,
+  },
+  {
+    id: "coleman_note",
+    name: "Note for Coleman",
     category: "junk",
     stackable: false,
     weight: 0.02,
@@ -840,6 +889,8 @@ export function getItemDefinition(id: string) {
 
 /** Clark's anniversary pair. Not ordinary gold earrings, and not for sale. */
 export const CLARKS_EARRINGS_ITEM_ID = "clarks_earrings";
+/** Sergeant Coleman's note. Turn it in to Captain Davis. Not for sale. */
+export const COLEMAN_NOTE_ITEM_ID = "coleman_note";
 /** Page from a caravan that came up short. Kevin wants it back. Not for sale. */
 export const CARAVAN_MANIFEST_ITEM_ID = "caravan_manifest";
 /** Last word from a caravan that stopped answering the radio. Not for sale. */
@@ -852,7 +903,8 @@ export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
     itemId === CLARKS_EARRINGS_ITEM_ID ||
     itemId === CARAVAN_MANIFEST_ITEM_ID ||
     itemId === WAGON_NOTE_ITEM_ID ||
-    itemId === SUPPLY_LIST_ITEM_ID
+    itemId === SUPPLY_LIST_ITEM_ID ||
+    itemId === COLEMAN_NOTE_ITEM_ID
   );
 }
 
@@ -1107,8 +1159,35 @@ export function isListenOnlyRadioFreq(value: number): boolean {
   );
 }
 
+const WATCH_ITEM_IDS = new Set<string>([
+  WATCH_ITEM_ID,
+  ...WATCH_LOOT.map((watch) => watch.id),
+]);
+
 export function isWatchItem(itemId: string): boolean {
-  return canonicalItemId(itemId) === WATCH_ITEM_ID;
+  return WATCH_ITEM_IDS.has(canonicalItemId(itemId));
+}
+
+/**
+ * Replace a `watch` loot token with named watches.
+ * Each unit rolls on its own, so three watches can be three different pieces.
+ */
+export function expandWatchLoot<T extends { id: string; quantity: number }>(
+  entries: readonly T[],
+  rng: () => number,
+): T[] {
+  const out: T[] = [];
+  for (const entry of entries) {
+    if (canonicalItemId(entry.id) !== WATCH_ITEM_ID) {
+      out.push(entry);
+      continue;
+    }
+    const qty = Math.max(0, Math.floor(entry.quantity));
+    for (let i = 0; i < qty; i++) {
+      out.push({ ...entry, id: rollWatchVariant(rng), quantity: 1 });
+    }
+  }
+  return out;
 }
 
 export function isRadioItem(itemId: string): boolean {
@@ -1241,20 +1320,21 @@ export function isRingItem(itemId: string): boolean {
 
 /**
  * Temporary Bartering and Persuasion XP while this piece is worn.
- * Dog tags fit the neck and grant none.
+ * Dog tags fit the neck and grant none. The plain watch tells time and grants none.
  */
 export const JEWELRY_SKILL_XP: Readonly<Record<string, number>> = {
   gold_chain: 1000,
   silver_chain: 500,
   gold_ring: 300,
   silver_ring: 150,
+  ...Object.fromEntries(WATCH_LOOT.map((watch) => [watch.id, watch.xp])),
 };
 
 export function jewelrySkillXpForItem(itemId: string): number {
   return JEWELRY_SKILL_XP[itemId] ?? 0;
 }
 
-/** Combined jewelry XP from the neck and both hands. One piece per slot. */
+/** Bartering and Persuasion XP from a worn neck piece, both rings, and a watch. */
 export function equippedJewelrySkillXp(inventory: Inventory): number {
   let xp = 0;
   const neck = inventory[NECK_SLOT_INDEX];
@@ -1263,7 +1343,18 @@ export function equippedJewelrySkillXp(inventory: Inventory): number {
   if (left && isRingItem(left.id)) xp += jewelrySkillXpForItem(left.id);
   const right = inventory[RIGHT_HAND_SLOT_INDEX];
   if (right && isRingItem(right.id)) xp += jewelrySkillXpForItem(right.id);
+  const watch = inventory[WATCH_SLOT_INDEX];
+  if (watch && isWatchItem(watch.id)) xp += jewelrySkillXpForItem(watch.id);
   return xp;
+}
+
+/** Time and skill text for a watch or jewelry piece. Empty when neither applies. */
+export function wornGearEffectHint(itemId: string): string {
+  const parts: string[] = [];
+  if (isWatchItem(itemId)) parts.push("shows the time while worn");
+  const xp = jewelrySkillXpForItem(itemId);
+  if (xp > 0) parts.push(`+${xp} Bartering and Persuasion XP while worn`);
+  return parts.join(" · ");
 }
 
 export function isBackpackSlot(slotIndex: number): boolean {
@@ -2288,7 +2379,11 @@ export function shiftSplitQuantity(quantity: number): number {
   return Math.floor(quantity / 2);
 }
 
-/** True when a shift-drag can merge half of `fromSlot` into `toSlot`. */
+/**
+ * True when a shift-drag can move half of `fromSlot` onto `toSlot`.
+ * The destination may be empty, or it may already hold the same item with
+ * room for that whole half. Other items are refused.
+ */
 export function canSplitInventoryStackHalf(
   inventory: Inventory,
   fromSlot: number,
@@ -2305,25 +2400,31 @@ export function canSplitInventoryStackHalf(
   ) {
     return false;
   }
+  if (packMoveBlocked(fromSlot, toSlot)) return false;
 
   const from = inventory[fromSlot];
   const to = inventory[toSlot];
-  if (!from || !to || from.id !== to.id || !getItemDefinition(from.id)) {
-    return false;
-  }
+  if (!from || !getItemDefinition(from.id)) return false;
+  // A packed bag is one object. Splitting it would copy whatever is inside.
+  if (backpackContentsHaveItems(from)) return false;
+  if (loadedBackpackStowBlocked(from, toSlot)) return false;
+  if (getMaxDurability(from.id) != null) return false;
   if (!itemFitsInSlot(from.id, toSlot, inventorySlotAccess(inventory, extraPockets))) {
     return false;
   }
 
   const half = shiftSplitQuantity(from.quantity);
   const cap = slotStackLimit(from.id, toSlot);
-  return half >= 1 && cap > 1 && to.quantity + half <= cap;
+  if (half < 1 || half > cap) return false;
+  if (!to) return true;
+  if (to.id !== from.id) return false;
+  return to.quantity + half <= cap;
 }
 
 /**
- * Shift-drag only merges half a stack onto a slot that already holds the
- * same item and has room for that whole half. Empty slots and other items
- * are refused. Returns the same array when the move is not allowed.
+ * Shift-drag moves half a stack onto an empty slot, or merges that half into
+ * a slot that already holds the same item and has room for all of it.
+ * Odd piles round down. Returns the same array when the move is not allowed.
  */
 export function splitInventoryStackHalf(
   inventory: Inventory,
@@ -2337,9 +2438,16 @@ export function splitInventoryStackHalf(
   const half = shiftSplitQuantity(inventory[fromSlot]!.quantity);
   const next = cloneInventory(inventory);
   const source = next[fromSlot]!;
-  const dest = next[toSlot]!;
   source.quantity -= half;
-  dest.quantity += half;
+  if (source.quantity <= 0) next[fromSlot] = null;
+  const dest = next[toSlot];
+  if (!dest) {
+    const placed = cloneInventoryEntry(inventory[fromSlot]!);
+    placed.quantity = half;
+    next[toSlot] = placed;
+  } else {
+    dest.quantity += half;
+  }
   return next;
 }
 
@@ -2542,6 +2650,7 @@ const CATEGORY_ITEMS: Record<string, string[]> = {
     "old_teddy",
     "teddy",
     "map",
+    /** Shop token. Each unit becomes one named watch, same weights as containers. */
     WATCH_ITEM_ID,
     RADIO_ITEM_ID,
   ],
@@ -2658,6 +2767,11 @@ function rollCounterSidearm(rng: () => number): InventoryEntry[] {
   return results;
 }
 
+/** Container and pocket rolls. A `watch` token becomes a named watch. */
+function rollTable(rolls: readonly LootRoll[], rng: () => number): InventoryEntry[] {
+  return expandWatchLoot(rollLootRolls(rolls, rng), rng);
+}
+
 /** Roll container loot. Fresh `Math.random` each call. */
 export function generateSearchLoot(
   objectType: string,
@@ -2666,7 +2780,7 @@ export function generateSearchLoot(
   buildingY?: number,
 ): InventoryEntry[] {
   const rng = Math.random;
-  const results = rollLootRolls(CONTAINER_LOOT[objectType] ?? [], rng);
+  const results = rollTable(CONTAINER_LOOT[objectType] ?? [], rng);
 
   const magazine = rollMagazine(objectType, rng);
   if (magazine) results.push(magazine);
@@ -2739,7 +2853,7 @@ export function generateZombieLoot(
 
   // Empty roll skips the pocket but keeps any officer sidearm above.
   if (rng() < ZOMBIE_EMPTY_LOOT_CHANCE) return results;
-  results.push(...rollLootRolls(ZOMBIE_POCKET, rng));
+  results.push(...rollTable(ZOMBIE_POCKET, rng));
   return results;
 }
 
@@ -2754,7 +2868,7 @@ export function generateGuardLoot(guardId: string, salt = ""): InventoryEntry[] 
   if (ammoQty > 0) {
     results.push({ id: "ammo_762x39", quantity: ammoQty });
   }
-  results.push(...rollLootRolls(GUARD_POCKET, rng));
+  results.push(...rollTable(GUARD_POCKET, rng));
   return results;
 }
 
@@ -2769,7 +2883,7 @@ export function generateTraderGuardLoot(
   if (ammoQty > 0) {
     results.push({ id: "ammo_9x19", quantity: ammoQty });
   }
-  results.push(...rollLootRolls(TRADER_GUARD_POCKET, rng));
+  results.push(...rollTable(TRADER_GUARD_POCKET, rng));
   return results;
 }
 
@@ -2797,7 +2911,7 @@ export function generateRedManLoot(
       quantity: ammoQty,
     });
   }
-  results.push(...rollLootRolls(TRADER_GUARD_POCKET, rng));
+  results.push(...rollTable(TRADER_GUARD_POCKET, rng));
   return results;
 }
 
@@ -2807,7 +2921,7 @@ export function generateTraderManLoot(
   salt = "",
 ): InventoryEntry[] {
   const rng = mulberry32(xmur3(`trader-man-loot:${manId}:${salt}`)());
-  return rollLootRolls(TRADER_POCKET, rng);
+  return rollTable(TRADER_POCKET, rng);
 }
 
 function normalizeInventorySlots(parsed: unknown[]): Inventory {

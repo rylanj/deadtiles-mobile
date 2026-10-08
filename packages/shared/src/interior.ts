@@ -1,4 +1,9 @@
 import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranceRun, getPlayerSpawnFootprint, houseChimneyInteriorTiles, seededRandom, type BuildingInfo } from "./worldgen.js";
+import {
+  CELLAR_INTERIOR_H,
+  CELLAR_INTERIOR_W,
+  getCellarAt,
+} from "./cellar.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
 import {
   isAshenTraderWarehouse,
@@ -40,9 +45,26 @@ export function rollQuestInteriorZombieCount(
 
 /** Compute interior tile dimensions for the building at (bx, by). 1 exterior tile = 2 interior tiles. */
 export function interiorDimensions(bx: number, by: number): { iW: number; iH: number } {
+  if (getCellarAt(bx, by)) {
+    return { iW: CELLAR_INTERIOR_W, iH: CELLAR_INTERIOR_H };
+  }
   const bld = getBuildingAt(bx, by);
   if (!bld) return { iW: INTERIOR_WIDTH, iH: INTERIOR_HEIGHT };
   return { iW: bld.w * 2, iH: bld.h * 2 };
+}
+
+/** East door, one tile wide, near the middle of the cellar's southeast edge. */
+function cellarInteriorExit(): InteriorExit {
+  const along = Math.floor(CELLAR_INTERIOR_H / 2);
+  return {
+    insideX: CELLAR_INTERIOR_W - 1,
+    insideY: along,
+    outsideX: CELLAR_INTERIOR_W,
+    outsideY: along,
+    face: "SE",
+    alongMin: along,
+    alongMax: along,
+  };
 }
 
 /** Interior doorway aligned to the building's exterior entrance face. */
@@ -98,7 +120,30 @@ export function interiorExitForBuilding(bld: BuildingInfo): InteriorExit {
   };
 }
 
+/**
+ * Chebyshev tiles around the doorway that stay clear of zombie spawns.
+ * Covers the full entrance span, not only the centre tile.
+ */
+export const INTERIOR_ENTRANCE_ZOMBIE_CLEARANCE = 1;
+
+/** True when (tx, ty) is on the interior doorway or within `clearance` tiles of it. */
+export function isNearInteriorEntrance(
+  tx: number,
+  ty: number,
+  exit: InteriorExit,
+  clearance = INTERIOR_ENTRANCE_ZOMBIE_CLEARANCE,
+): boolean {
+  const pad = Math.max(0, clearance);
+  if (exit.face === "SE") {
+    if (Math.abs(tx - exit.insideX) > pad) return false;
+    return ty >= exit.alongMin - pad && ty <= exit.alongMax + pad;
+  }
+  if (Math.abs(ty - exit.insideY) > pad) return false;
+  return tx >= exit.alongMin - pad && tx <= exit.alongMax + pad;
+}
+
 export function interiorExitForBuildingAt(bx: number, by: number): InteriorExit {
+  if (getCellarAt(bx, by)) return cellarInteriorExit();
   const bld = getBuildingAt(bx, by);
   const { iW, iH } = interiorDimensions(bx, by);
   if (!bld) {
@@ -211,6 +256,9 @@ export const FURNITURE_TYPES = [
   "groundbackpack",
   /** Birchport barracks tent / mess hall. */
   "militarybed",
+  /** Police jail. Placed by layout. Not loot. */
+  "jailbed",
+  "jailtoilet",
   "footlocker",
   "kitbag",
   "camptable",
@@ -309,6 +357,8 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   minifridge: "Mini Fridge",
   groundbackpack: "Dropped Items",
   militarybed: "Camp Bed",
+  jailbed: "Jail Bed",
+  jailtoilet: "Toilet",
   footlocker: "Footlocker",
   kitbag: "Kit Bag",
   camptable: "Camp Table",
@@ -488,12 +538,12 @@ export function furnitureFootprint(
         : furnitureFacing("counter");
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
-  // MilitaryBed1 — same span as Bed1 / HospitalBed1.
-  if (objectType === "militarybed") {
+  // MilitaryBed1 / JailBed1 — same span as Bed1 / HospitalBed1.
+  if (objectType === "militarybed" || objectType === "jailbed") {
     const f =
       facing === "SE" || facing === "SW"
         ? facing
-        : furnitureFacing("militarybed");
+        : furnitureFacing(objectType);
     return f === "SE" ? { w: 2, h: 1 } : { w: 1, h: 2 };
   }
   // CampTable1 / CanteenTable1-4 / HotDisplay1 / DrinkDisplay1.
@@ -666,6 +716,8 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   minifridge: "SE",
   groundbackpack: "SE",
   militarybed: "SE",
+  jailbed: "SE",
+  jailtoilet: "SE",
   footlocker: "SE",
   kitbag: "SE",
   camptable: "SE",
@@ -1216,7 +1268,7 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   sofa: 0.55,
   /** Residential — floor suitcase, up to 2 per house (20% per slot). */
   suitcase: 0.2,
-  /** Police — one WaterCooler beside a Desk2 (always placed). */
+  /** Police: one water cooler in the gap between the office and the cell. */
   watercooler: 1,
   /** Police — per Desk2, chance to place TrashCan1 off the desk loot approach. */
   trashcan: 0.25,
@@ -1244,7 +1296,7 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   threeseater: 1,
   threeseater2: 1,
   threeseater3: 1,
-  /** Hospital — always one by the waiting bench; police — chance near a wall. */
+  /** Hospital: always one by the waiting bench. Police: chance in the office and cell gap. */
   vendingmachine: 0.4,
   /** Motel — always one Counter1 in the lobby. */
   counter: 1,
@@ -1256,6 +1308,9 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   groundbackpack: 0,
   /** Barracks tent / mess hall — placed by layout. */
   militarybed: 1,
+  /** Police jail — placed by layout, never rolled. */
+  jailbed: 0,
+  jailtoilet: 0,
   footlocker: 1,
   kitbag: 1,
   camptable: 1,
@@ -1339,7 +1394,7 @@ export function isResidentialInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "house";
 }
 
-/** Police station interiors — Desk2 bullpen layout. */
+/** Police station interiors: corner office, corner cell, Desk2 bullpen. */
 export function isPoliceInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "police_station";
 }
@@ -2514,10 +2569,379 @@ function placeGenericFurniture(
 }
 
 /**
- * Lockers1 and Bookshelf2 always on different walls (NE vs NW).
- * Every station gets at least 2 lockers and 2 bookshelves.
- * Lockers stay at 2; bookshelves roll 2–4. Both sit flush on their wall.
- * SE → NW wall (x=0); SW → NE wall (y=0).
+ * Sergeant's office and holding cell. Both sit on the west wall so the
+ * north-east wall stays open for lockers and shelves, and the gap between
+ * the rooms can hold the cooler and vending machine.
+ * Office: north-west corner. Cell: south-west corner. Doors open east.
+ * Floor sizes are fixed for the 7×7 station (14×14 interior).
+ */
+const POLICE_OFFICE_ALONG = 5;
+const POLICE_OFFICE_DEEP = 4;
+const POLICE_CELL_ALONG = 4;
+const POLICE_CELL_DEEP = 3;
+
+export type PoliceCornerRoom = {
+  kind: "office" | "cell";
+  facing: "SE" | "SW";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  entranceX: number;
+  entranceY: number;
+  wallTiles: InteriorWallTile[];
+};
+
+function policeWallTiles(tiles: Iterable<string>): InteriorWallTile[] {
+  const wallTiles: InteriorWallTile[] = [];
+  for (const key of tiles) {
+    const comma = key.indexOf(",");
+    wallTiles.push({
+      x: Number(key.slice(0, comma)),
+      y: Number(key.slice(comma + 1)),
+    });
+  }
+  return wallTiles;
+}
+
+function policeRoomFloor(
+  rooms: readonly { x0: number; y0: number; x1: number; y1: number }[],
+  tx: number,
+  ty: number,
+): boolean {
+  for (const room of rooms) {
+    if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Corner shell. Two sides are the building exterior. `onWest` rooms open
+ * east. North-wall rooms open south. The door is on the bullpen side.
+ */
+function buildPoliceCornerRoom(
+  iW: number,
+  iH: number,
+  kind: "office" | "cell",
+  corner: "nw" | "ne" | "sw",
+  onWest: boolean,
+): PoliceCornerRoom | null {
+  const along = kind === "office" ? POLICE_OFFICE_ALONG : POLICE_CELL_ALONG;
+  const deep = kind === "office" ? POLICE_OFFICE_DEEP : POLICE_CELL_DEEP;
+  const wallSet = new Set<string>();
+  const add = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= iW || y >= iH) return;
+    wallSet.add(`${x},${y}`);
+  };
+  const doorSide = Math.floor((along - 1) / 2);
+
+  if (onWest) {
+    const x0 = 0;
+    const x1 = deep - 1;
+    const doorX = deep;
+    if (doorX + 1 >= iW) return null;
+    const y0 = corner === "nw" ? 0 : iH - along;
+    const y1 = y0 + along - 1;
+    if (y0 < 0 || y1 >= iH) return null;
+    const capY = corner === "nw" ? y1 + 1 : y0 - 1;
+    if (capY < 0 || capY >= iH) return null;
+    const doorY = y0 + doorSide;
+    for (let y = y0; y <= y1; y++) {
+      if (y === doorY) continue;
+      add(doorX, y);
+    }
+    for (let x = x0; x <= doorX; x++) add(x, capY);
+    return {
+      kind,
+      facing: "SE",
+      x0,
+      y0,
+      x1,
+      y1,
+      entranceX: doorX,
+      entranceY: doorY,
+      wallTiles: policeWallTiles(wallSet),
+    };
+  }
+
+  const y0 = 0;
+  const y1 = deep - 1;
+  const doorY = deep;
+  if (doorY + 1 >= iH) return null;
+  const x0 = corner === "ne" ? iW - along : 0;
+  const x1 = x0 + along - 1;
+  if (x0 < 0 || x1 >= iW) return null;
+  const capX = corner === "ne" ? x0 - 1 : x1 + 1;
+  if (capX < 0 || capX >= iW) return null;
+  const doorX = x0 + doorSide;
+  for (let x = x0; x <= x1; x++) {
+    if (x === doorX) continue;
+    add(x, doorY);
+  }
+  for (let y = y0; y <= doorY; y++) add(capX, y);
+  return {
+    kind,
+    facing: "SW",
+    x0,
+    y0,
+    x1,
+    y1,
+    entranceX: doorX,
+    entranceY: doorY,
+    wallTiles: policeWallTiles(wallSet),
+  };
+}
+
+function policeRoomsOverlap(a: PoliceCornerRoom, b: PoliceCornerRoom): boolean {
+  if (a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1) return true;
+  const keys = new Set(a.wallTiles.map((w) => `${w.x},${w.y}`));
+  keys.add(`${a.entranceX},${a.entranceY}`);
+  for (const w of b.wallTiles) {
+    if (keys.has(`${w.x},${w.y}`)) return true;
+  }
+  return keys.has(`${b.entranceX},${b.entranceY}`);
+}
+
+export function layoutPoliceCornerRooms(
+  bx: number,
+  by: number,
+): { office: PoliceCornerRoom; cell: PoliceCornerRoom } | null {
+  if (!isPoliceInterior(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  if (iW < 14 || iH < 14) return null;
+  const office = buildPoliceCornerRoom(iW, iH, "office", "nw", true);
+  const cell = buildPoliceCornerRoom(iW, iH, "cell", "sw", true);
+  if (!office || !cell) return null;
+  if (policeRoomsOverlap(office, cell)) return null;
+  return { office, cell };
+}
+
+export function policeSergeantRoomForBuilding(
+  bx: number,
+  by: number,
+): PoliceCornerRoom | null {
+  return layoutPoliceCornerRooms(bx, by)?.office ?? null;
+}
+
+export function policeJailCellForBuilding(
+  bx: number,
+  by: number,
+): PoliceCornerRoom | null {
+  return layoutPoliceCornerRooms(bx, by)?.cell ?? null;
+}
+
+export function policeCornerRoomAtTile(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): PoliceCornerRoom | null {
+  const rooms = layoutPoliceCornerRooms(bx, by);
+  if (!rooms) return null;
+  for (const room of [rooms.office, rooms.cell]) {
+    if (tx === room.entranceX && ty === room.entranceY) return room;
+    if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+      return room;
+    }
+  }
+  return null;
+}
+
+/** Walls, the door gap, the step inside, and the three tiles outside the door. */
+function reservePoliceRoomShell(
+  room: PoliceCornerRoom,
+  occupied: Set<string>,
+  wallSet: Set<string>,
+): void {
+  for (const w of room.wallTiles) {
+    const key = `${w.x},${w.y}`;
+    wallSet.add(key);
+    occupied.add(key);
+  }
+  occupied.add(`${room.entranceX},${room.entranceY}`);
+  const pads =
+    room.facing === "SE"
+      ? [
+          { x: room.entranceX + 1, y: room.entranceY },
+          { x: room.entranceX + 1, y: room.entranceY - 1 },
+          { x: room.entranceX + 1, y: room.entranceY + 1 },
+          { x: room.entranceX - 1, y: room.entranceY },
+        ]
+      : [
+          { x: room.entranceX, y: room.entranceY + 1 },
+          { x: room.entranceX - 1, y: room.entranceY + 1 },
+          { x: room.entranceX + 1, y: room.entranceY + 1 },
+          { x: room.entranceX, y: room.entranceY - 1 },
+        ];
+  for (const p of pads) {
+    if (p.x < 0 || p.y < 0) continue;
+    occupied.add(`${p.x},${p.y}`);
+  }
+}
+
+/**
+ * Sergeant's office: bookshelf, gun cabinet, and filing cabinet on the walls,
+ * Desk3 facing the door with a chair behind it. The cell gets a jail bed
+ * along the far wall and a toilet in the opposite corner.
+ */
+function placePoliceCornerFurniture(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  office: PoliceCornerRoom | null,
+  cell: PoliceCornerRoom | null,
+  occupied: Set<string>,
+  startIndex: number,
+): SearchableObject[] {
+  const furnitures: SearchableObject[] = [];
+  let furnitureIndex = startIndex;
+
+  const inRoom = (room: PoliceCornerRoom, tx: number, ty: number) =>
+    tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1;
+
+  const canPlace = (
+    room: PoliceCornerRoom,
+    objectType: string,
+    ox: number,
+    oy: number,
+    facing: FurnitureFacing,
+  ): boolean => {
+    const { w, h } = furnitureFootprint(objectType, facing);
+    if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    for (let ty = oy; ty < oy + h; ty++) {
+      for (let tx = ox; tx < ox + w; tx++) {
+        if (!inRoom(room, tx, ty)) return false;
+        if (occupied.has(`${tx},${ty}`)) return false;
+      }
+    }
+    const approaches = furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      facing,
+    });
+    if (approaches.length === 0) return false;
+    for (const t of approaches) {
+      if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (!inRoom(room, t.x, t.y)) return false;
+      if (occupied.has(`${t.x},${t.y}`)) return false;
+    }
+    return true;
+  };
+
+  const commit = (
+    room: PoliceCornerRoom,
+    objectType: FurnitureType,
+    ox: number,
+    oy: number,
+    facing: FurnitureFacing,
+  ): boolean => {
+    if (!canPlace(room, objectType, ox, oy, facing)) return false;
+    const { w, h } = furnitureFootprint(objectType, facing);
+    for (let ty = oy; ty < oy + h; ty++) {
+      for (let tx = ox; tx < ox + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+    for (const t of furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      facing,
+    })) {
+      occupied.add(`${t.x},${t.y}`);
+    }
+    const sequentialId = interiorSearchableId(
+      bx,
+      by,
+      "furniture",
+      furnitureIndex++,
+    );
+    furnitures.push({
+      id:
+        objectType === "guncabinet"
+          ? policeGunCabinetSearchableId(bx, by)
+          : sequentialId,
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    });
+    return true;
+  };
+
+  const placeChair = (
+    room: PoliceCornerRoom,
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+  ): boolean => {
+    if (!inRoom(room, x, y) || occupied.has(`${x},${y}`)) return false;
+    const { dx, dy } = ISO_FACING_TILE_DELTA[facing];
+    const behindX = x - dx;
+    const behindY = y - dy;
+    if (
+      !inRoom(room, behindX, behindY) ||
+      occupied.has(`${behindX},${behindY}`)
+    ) {
+      return false;
+    }
+    occupied.add(`${x},${y}`);
+    occupied.add(`${behindX},${behindY}`);
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+      kind: "furniture",
+      objectType: "officechair",
+      x,
+      y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    });
+    return true;
+  };
+
+  if (office) {
+    if (office.facing === "SE") {
+      commit(office, "bookshelf2", office.x0, office.y0, "SE");
+      commit(office, "guncabinet", office.x0, office.y1, "SE");
+      commit(office, "cabinet", office.x1, office.y0, "SW");
+      commit(office, "desk3", office.x0 + 2, office.y0 + 3, "SE");
+      placeChair(office, office.x0 + 1, office.y0 + 3, "SE");
+    } else {
+      commit(office, "guncabinet", office.x0, office.y0, "SE");
+      commit(office, "bookshelf2", office.x1, office.y0, "SW");
+      commit(office, "cabinet", office.x0, office.y0 + 2, "SE");
+      commit(office, "desk3", office.x0 + 3, office.y0 + 2, "SW");
+      placeChair(office, office.x0 + 3, office.y0 + 1, "SW");
+    }
+  }
+
+  if (cell) {
+    if (cell.facing === "SE") {
+      commit(cell, "jailbed", cell.x0, cell.y1, "SE");
+      commit(cell, "jailtoilet", cell.x0, cell.y0, "SE");
+    } else {
+      commit(cell, "jailbed", cell.x1, cell.y0, "SW");
+      commit(cell, "jailtoilet", cell.x0, cell.y0, "SW");
+    }
+  }
+
+  return furnitures;
+}
+
+/**
+ * Lockers and Bookshelf2 sit flush on the north-east wall, facing south.
+ * They stay out of the office and the cell.
+ * SW faces south (back to the north).
  */
 function placePoliceWallFurniture(
   bx: number,
@@ -2528,6 +2952,8 @@ function placePoliceWallFurniture(
   rng: () => number,
   occupied: Set<string>,
   startIndex: number,
+  rooms: readonly { x0: number; y0: number; x1: number; y1: number }[],
+  wallSet: ReadonlySet<string>,
 ): SearchableObject[] {
   const furnitures: SearchableObject[] = [];
   let furnitureIndex = startIndex;
@@ -2552,8 +2978,21 @@ function placePoliceWallFurniture(
   ): boolean => {
     const { w, h } = furnitureFootprint(objectType, facing);
     if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    const flushTile = (tx: number, ty: number): boolean => {
+      if (facing === "SE") {
+        if (tx === 0) return true;
+        return wallSet.has(`${tx - 1},${ty}`);
+      }
+      if (facing === "SW") {
+        if (ty === 0) return true;
+        return wallSet.has(`${tx},${ty - 1}`);
+      }
+      return false;
+    };
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) {
+        if (policeRoomFloor(rooms, tx, ty)) return false;
+        if (!flushTile(tx, ty)) return false;
         if (occupied.has(`${tx},${ty}`)) return false;
         if (blocksExit(tx, ty)) return false;
       }
@@ -2568,6 +3007,7 @@ function placePoliceWallFurniture(
     if (approaches.length === 0) return false;
     for (const t of approaches) {
       if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (policeRoomFloor(rooms, t.x, t.y)) return false;
       if (occupied.has(`${t.x},${t.y}`)) return false;
       if (blocksExit(t.x, t.y)) return false;
     }
@@ -2611,39 +3051,15 @@ function placePoliceWallFurniture(
   };
 
   /**
-   * Flush origins along one wall. `gapTiles` empty tiles between consecutive
-   * footprints (0 = flush side-by-side).
+   * Place `count` units in one continuous row. Picks a random start among
+   * runs long enough to fit; falls back to any single free slot.
    */
-  const wallSlots = (
+  const placeOnSlots = (
     objectType: string,
     facing: FurnitureFacing,
-    gapTiles = 0,
-  ): { x: number; y: number }[] => {
-    const { w, h } = furnitureFootprint(objectType, facing);
-    const slots: { x: number; y: number }[] = [];
-    if (facing === "SW") {
-      // NE wall — step by width (+ gap) so lockers sit along +x.
-      const step = w + gapTiles;
-      for (let x = 1; x + w <= iW - 1; x += step) slots.push({ x, y: 0 });
-    } else {
-      // NW wall — step by height (+ gap) so lockers sit along +y.
-      const step = h + gapTiles;
-      for (let y = 1; y + h <= iH - 1; y += step) slots.push({ x: 0, y });
-    }
-    return slots;
-  };
-
-  /**
-   * Place `count` units in one continuous row on the wall. Picks a random
-   * start among runs long enough to fit; falls back to the longest free run.
-   */
-  const placeOnWall = (
-    objectType: string,
-    facing: FurnitureFacing,
+    slots: { x: number; y: number }[],
     count: number,
-    gapTiles = 0,
   ): number => {
-    const slots = wallSlots(objectType, facing, gapTiles);
     const free = slots.map((s) => canPlace(objectType, s.x, s.y, facing));
 
     // Collect start indices of contiguous free runs that fit `want` pieces.
@@ -2690,37 +3106,36 @@ function placePoliceWallFurniture(
     return placed;
   };
 
-  /** Keep placing until `count` or the wall has no free slot left. */
-  const placeCount = (
-    objectType: string,
-    facing: FurnitureFacing,
-    count: number,
-  ): void => {
-    let placed = 0;
-    while (placed < count) {
-      const n = placeOnWall(objectType, facing, count - placed, 0);
-      if (n <= 0) break;
-      placed += n;
-    }
-  };
-
-  // Assign each type to a different wall at random.
-  // The rolls stay so later furniture (desks, cooler, chairs) keeps its seed.
-  const lockersOnNE = rng() < 0.5;
-  const lockersFacing: FurnitureFacing = lockersOnNE ? "SW" : "SE";
-  const shelfFacing: FurnitureFacing = lockersOnNE ? "SE" : "SW";
+  // Consumed so locker and shelf counts stay on the same seed step.
+  rng();
   const lockerCount = Math.max(2, 1 + Math.floor(rng() * 2));
   const shelfCount = Math.max(2, 1 + Math.floor(rng() * 4));
-
-  placeCount("lockers", lockersFacing, lockerCount);
-  placeCount("bookshelf2", shelfFacing, shelfCount);
+  const neSlots = (objectType: string): { x: number; y: number }[] => {
+    const { w } = furnitureFootprint(objectType, "SW");
+    const slots: { x: number; y: number }[] = [];
+    for (let x = 0; x + w <= iW; x += w) slots.push({ x, y: 0 });
+    return slots;
+  };
+  placeOnSlots("lockers", "SW", neSlots("lockers"), lockerCount);
+  let shelves = 0;
+  while (shelves < shelfCount) {
+    const n = placeOnSlots(
+      "bookshelf2",
+      "SW",
+      neSlots("bookshelf2"),
+      shelfCount - shelves,
+    );
+    if (n <= 0) break;
+    shelves += n;
+  }
   return furnitures;
 }
 
 /**
- * Police bullpen: uniform Desk2 grid — 6, 8, or 10 desks in 2–3 rows.
- * Every station gets at least 6. At least 2 empty tiles between each desk.
- * Keeps the entrance corridor clear.
+ * Police bullpen: Desk2 desks in uniform rows, clear of the corner rooms
+ * and the street door. With rooms, a full rectangle centered in the open
+ * middle (pitch 3). Without rooms, a 6, 8, or 10 desk grid. At least 2
+ * empty tiles between desks.
  */
 function placePoliceBullpen(
   bx: number,
@@ -2731,6 +3146,7 @@ function placePoliceBullpen(
   occupied: Set<string>,
   startIndex: number,
   rng: () => number,
+  rooms: readonly { x0: number; y0: number; x1: number; y1: number }[] = [],
 ): SearchableObject[] {
   const furnitures: SearchableObject[] = [];
   let furnitureIndex = startIndex;
@@ -2782,6 +3198,7 @@ function placePoliceBullpen(
     if (ox < 0 || oy < 0 || ox + dw > iW || oy + dh > iH) return false;
     for (let ty = oy; ty < oy + dh; ty++) {
       for (let tx = ox; tx < ox + dw; tx++) {
+        if (policeRoomFloor(rooms, tx, ty)) return false;
         if (occupied.has(`${tx},${ty}`)) return false;
         if (blocksExit(tx, ty)) return false;
       }
@@ -2796,6 +3213,7 @@ function placePoliceBullpen(
     if (approaches.length === 0) return false;
     for (const t of approaches) {
       if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (policeRoomFloor(rooms, t.x, t.y)) return false;
       if (occupied.has(`${t.x},${t.y}`)) return false;
       if (blocksExit(t.x, t.y)) return false;
     }
@@ -2831,6 +3249,51 @@ function placePoliceBullpen(
     });
     return true;
   };
+
+  // 14×14 station with both rooms on the west wall. A full rectangle,
+  // centered east of the office door and clear of the street-door band.
+  if (rooms.length >= 2 && iW >= 14 && iH >= 14) {
+    const safe =
+      exit.face === "SE"
+        ? { x0: 6, x1: iW - 5, y0: 2, y1: iH - 3 }
+        : { x0: 6, x1: iW - 2, y0: 2, y1: iH - 6 };
+    const safeW = safe.x1 - safe.x0 + 1;
+    const safeH = safe.y1 - safe.y0 + 1;
+    const maxCols = Math.max(1, Math.floor((safeW - dw) / colPitch) + 1);
+    const maxRows = Math.max(1, Math.floor((safeH - dh) / rowPitch) + 1);
+    let useCols = Math.min(cols, maxCols);
+    let useRows = Math.min(rows, maxRows);
+    const fits = (c: number, r: number) =>
+      (c - 1) * colPitch + dw <= safeW && (r - 1) * rowPitch + dh <= safeH;
+    while (useRows * useCols < target) {
+      const rowNext = useRows + 1;
+      const colNext = useCols + 1;
+      const canRow = rowNext <= maxRows && fits(useCols, rowNext);
+      const canCol = colNext <= maxCols && fits(colNext, useRows);
+      if (!canRow && !canCol) break;
+      const growRow = canRow && (!canCol || rows >= cols);
+      if (growRow) {
+        const next = rowNext * useCols;
+        if (next > target && useRows * useCols >= minDesks) break;
+        useRows = rowNext;
+      } else {
+        const next = useRows * colNext;
+        if (next > target && useRows * useCols >= minDesks) break;
+        useCols = colNext;
+      }
+    }
+    const spanX = (useCols - 1) * colPitch + dw;
+    const spanY = (useRows - 1) * rowPitch + dh;
+    const x0 = safe.x0 + Math.floor((safeW - spanX) / 2);
+    const y0 = safe.y0 + Math.floor((safeH - spanY) / 2);
+    for (let row = 0; row < useRows; row++) {
+      const y = y0 + row * rowPitch;
+      for (let col = 0; col < useCols; col++) {
+        placeDesk(x0 + col * colPitch, y);
+      }
+    }
+    return furnitures;
+  }
 
   const gridSpanX = (cols - 1) * colPitch + dw;
   const gridSpanY = (rows - 1) * rowPitch + dh;
@@ -2872,6 +3335,117 @@ function placePoliceBullpen(
     }
   }
 
+  return furnitures;
+}
+
+/**
+ * Tiles on the west wall between the office cap and the cell cap.
+ * The first and last free tiles sit one past each cap.
+ */
+function policeWestGapTiles(
+  office: PoliceCornerRoom,
+  cell: PoliceCornerRoom,
+): { x: number; y: number }[] {
+  if (office.facing !== "SE" || cell.facing !== "SE") return [];
+  if (office.x0 !== cell.x0) return [];
+  const north = office.y0 <= cell.y0 ? office : cell;
+  const south = north === office ? cell : office;
+  const tiles: { x: number; y: number }[] = [];
+  for (let y = north.y1 + 2; y <= south.y0 - 2; y++) {
+    tiles.push({ x: north.x0, y });
+  }
+  return tiles;
+}
+
+/**
+ * Water cooler and vending machine in the west-wall gap, facing east.
+ * The cooler always spawns. The vending machine keeps its usual chance.
+ * When both fit, the cooler sits toward the office and the machine toward
+ * the cell, with the middle tile left open.
+ */
+function placePoliceGapFixtures(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  office: PoliceCornerRoom | null,
+  cell: PoliceCornerRoom | null,
+  occupied: Set<string>,
+  startIndex: number,
+  rng: () => number,
+): SearchableObject[] {
+  if (!office || !cell) return [];
+  const gap = policeWestGapTiles(office, cell);
+  if (gap.length === 0) return [];
+  const wantVending = rng() < FURNITURE_SPAWN_CHANCE.vendingmachine;
+  const picks: { objectType: string; x: number; y: number }[] = [];
+  if (wantVending && gap.length >= 2) {
+    const north = gap[0]!;
+    const south = gap[gap.length - 1]!;
+    picks.push({ objectType: "watercooler", x: north.x, y: north.y });
+    picks.push({ objectType: "vendingmachine", x: south.x, y: south.y });
+  } else {
+    const mid = gap[Math.floor(gap.length / 2)]!;
+    picks.push({ objectType: "watercooler", x: mid.x, y: mid.y });
+  }
+
+  const facing: FurnitureFacing = "SE";
+  const furnitures: SearchableObject[] = [];
+  let furnitureIndex = startIndex;
+  const rooms = [office, cell];
+
+  const canPlace = (objectType: string, ox: number, oy: number): boolean => {
+    const { w, h } = furnitureFootprint(objectType, facing);
+    if (ox !== 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    for (let ty = oy; ty < oy + h; ty++) {
+      for (let tx = ox; tx < ox + w; tx++) {
+        if (policeRoomFloor(rooms, tx, ty)) return false;
+        if (occupied.has(`${tx},${ty}`)) return false;
+      }
+    }
+    const approaches = furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      facing,
+    });
+    if (approaches.length === 0) return false;
+    for (const t of approaches) {
+      if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (policeRoomFloor(rooms, t.x, t.y)) return false;
+      if (occupied.has(`${t.x},${t.y}`)) return false;
+    }
+    return true;
+  };
+
+  for (const pick of picks) {
+    if (!canPlace(pick.objectType, pick.x, pick.y)) continue;
+    const { w, h } = furnitureFootprint(pick.objectType, facing);
+    for (let ty = pick.y; ty < pick.y + h; ty++) {
+      for (let tx = pick.x; tx < pick.x + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+    for (const t of furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType: pick.objectType,
+      x: pick.x,
+      y: pick.y,
+      facing,
+    })) {
+      occupied.add(`${t.x},${t.y}`);
+    }
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+      kind: "furniture",
+      objectType: pick.objectType,
+      x: pick.x,
+      y: pick.y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    });
+  }
   return furnitures;
 }
 
@@ -3164,6 +3738,8 @@ function placePoliceVendingMachine(
   occupied: Set<string>,
   startIndex: number,
   rng: () => number,
+  rooms: readonly { x0: number; y0: number; x1: number; y1: number }[] = [],
+  wallSet: ReadonlySet<string> = new Set(),
 ): SearchableObject[] {
   if (rng() >= FURNITURE_SPAWN_CHANCE.vendingmachine) return [];
 
@@ -3189,8 +3765,21 @@ function placePoliceVendingMachine(
   ): boolean => {
     const { w, h } = furnitureFootprint("vendingmachine", facing);
     if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    const flushTile = (tx: number, ty: number): boolean => {
+      if (facing === "SE") {
+        if (tx === 0) return true;
+        return wallSet.has(`${tx - 1},${ty}`);
+      }
+      if (facing === "SW") {
+        if (ty === 0) return true;
+        return wallSet.has(`${tx},${ty - 1}`);
+      }
+      return false;
+    };
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) {
+        if (policeRoomFloor(rooms, tx, ty)) return false;
+        if (!flushTile(tx, ty)) return false;
         if (occupied.has(`${tx},${ty}`)) return false;
         if (onFurnitureFootprint(tx, ty)) return false;
         if (blocksExit(tx, ty)) return false;
@@ -3206,6 +3795,7 @@ function placePoliceVendingMachine(
     if (approaches.length === 0) return false;
     for (const t of approaches) {
       if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (policeRoomFloor(rooms, t.x, t.y)) return false;
       if (occupied.has(`${t.x},${t.y}`)) return false;
       if (onFurnitureFootprint(t.x, t.y)) return false;
       if (blocksExit(t.x, t.y)) return false;
@@ -3222,6 +3812,14 @@ function placePoliceVendingMachine(
   // NW wall (x = 0) — face SE into the room.
   for (let y = 1; y < iH - 1; y++) {
     slots.push({ x: 0, y, facing: "SE" });
+  }
+  // Bullpen side of the office and cell partitions.
+  for (const key of wallSet) {
+    const comma = key.indexOf(",");
+    const wx = Number(key.slice(0, comma));
+    const wy = Number(key.slice(comma + 1));
+    if (wx + 1 < iW) slots.push({ x: wx + 1, y: wy, facing: "SE" });
+    if (wy + 1 < iH) slots.push({ x: wx, y: wy + 1, facing: "SW" });
   }
   for (let i = slots.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -5010,6 +5608,33 @@ export function motelRoomAtTile(
   return null;
 }
 
+/** Floor decal on the East Forestford motel carpet. Not furniture. */
+export const BLOODSTAIN_OBJECT_TYPE = "bloodstain";
+
+/**
+ * One empty floor tile inside a motel room. Stable for a given layout:
+ * the middle tile of the sorted empty set.
+ */
+export function pickMotelRoomBloodTile(
+  bx: number,
+  by: number,
+  occupied: ReadonlySet<string>,
+): { x: number; y: number } | null {
+  const rooms = motelRoomsForBuilding(bx, by);
+  const empty: { x: number; y: number }[] = [];
+  for (const room of rooms) {
+    for (let x = room.x0; x <= room.x1; x++) {
+      for (let y = room.y0; y <= room.y1; y++) {
+        if (occupied.has(`${x},${y}`)) continue;
+        empty.push({ x, y });
+      }
+    }
+  }
+  if (empty.length === 0) return null;
+  empty.sort((a, b) => a.y - b.y || a.x - b.x);
+  return empty[Math.floor(empty.length / 2)] ?? null;
+}
+
 /**
  * Motel shell — lobby Counter1, corridor + room bays with MotelBed1,
  * optional MiniFridge1 / Suitcase1, and openable doors on each room entrance.
@@ -6493,6 +7118,22 @@ export function roomAtInteriorDoor(
     ty === retailOffice.entranceY
   ) {
     return retailOffice;
+  }
+  const policeOffice = policeSergeantRoomForBuilding(bx, by);
+  if (
+    policeOffice &&
+    tx === policeOffice.entranceX &&
+    ty === policeOffice.entranceY
+  ) {
+    return policeOffice;
+  }
+  const policeCell = policeJailCellForBuilding(bx, by);
+  if (
+    policeCell &&
+    tx === policeCell.entranceX &&
+    ty === policeCell.entranceY
+  ) {
+    return policeCell;
   }
   return null;
 }
@@ -8614,6 +9255,52 @@ function placeOfficeUpstairs(
  */
 const MANAGER_SAFE_INDEX = 65000;
 
+/** Stable searchable id for the safe in this building's manager office. */
+export function managerSafeSearchableId(bx: number, by: number): string {
+  return interiorSearchableId(bx, by, "furniture", MANAGER_SAFE_INDEX);
+}
+
+/** Building origin for a manager-office safe id, or null. */
+export function parseManagerSafeSearchableId(
+  id: string,
+): { bx: number; by: number } | null {
+  return parseFixedFurnitureId(id, MANAGER_SAFE_INDEX);
+}
+
+/**
+ * Stable id for the sergeant's gun cabinet. The office door relocks when
+ * this container's loot respawns, so the id cannot follow furniture order.
+ */
+const POLICE_GUN_CABINET_INDEX = 65001;
+
+/** Stable searchable id for the gun cabinet in this station's sergeant office. */
+export function policeGunCabinetSearchableId(bx: number, by: number): string {
+  return interiorSearchableId(bx, by, "furniture", POLICE_GUN_CABINET_INDEX);
+}
+
+/** Building origin for a sergeant gun-cabinet id, or null. */
+export function parsePoliceGunCabinetSearchableId(
+  id: string,
+): { bx: number; by: number } | null {
+  return parseFixedFurnitureId(id, POLICE_GUN_CABINET_INDEX);
+}
+
+function parseFixedFurnitureId(
+  id: string,
+  index: number,
+): { bx: number; by: number } | null {
+  const mark = `:furniture:${index}`;
+  if (!id.endsWith(mark)) return null;
+  const head = id.slice(0, id.length - mark.length);
+  const comma = head.indexOf(",");
+  if (comma <= 0) return null;
+  const bx = Number(head.slice(0, comma));
+  const by = Number(head.slice(comma + 1));
+  if (!Number.isInteger(bx) || !Number.isInteger(by)) return null;
+  if (`${bx},${by}` !== head) return null;
+  return { bx, by };
+}
+
 function placeFixedSafe(
   furnitures: SearchableObject[],
   occupied: Set<string>,
@@ -10150,6 +10837,9 @@ export function generateInteriorContent(bx: number, by: number): {
   /** Room/cubicle entrance gap tiles that become real openable doors. */
   doors: { x: number; y: number }[];
 } {
+  if (getCellarAt(bx, by)) {
+    return { furnitures: [], zombieSpawns: [], walls: [], doors: [] };
+  }
   const { iW, iH } = interiorDimensions(bx, by);
   const exit = interiorExitForBuildingAt(bx, by);
   const exitX = exit.insideX;
@@ -10280,6 +10970,14 @@ export function generateInteriorContent(bx: number, by: number): {
       ),
     );
   } else if (police) {
+    const cornerRooms = layoutPoliceCornerRooms(bx, by);
+    const office = cornerRooms?.office ?? null;
+    const cell = cornerRooms?.cell ?? null;
+    const roomList = [office, cell].filter(
+      (room): room is PoliceCornerRoom => room != null,
+    );
+    const wallSet = new Set<string>();
+    for (const room of roomList) reservePoliceRoomShell(room, occupied, wallSet);
     const wall = placePoliceWallFurniture(
       bx,
       by,
@@ -10289,6 +10987,8 @@ export function generateInteriorContent(bx: number, by: number): {
       rng,
       occupied,
       0,
+      roomList,
+      wallSet,
     );
     const desks = placePoliceBullpen(
       bx,
@@ -10299,15 +10999,15 @@ export function generateInteriorContent(bx: number, by: number): {
       occupied,
       wall.length,
       rng,
+      roomList,
     );
-    const cooler = placePoliceWaterCooler(
+    const gap = placePoliceGapFixtures(
       bx,
       by,
       iW,
       iH,
-      exit,
-      desks,
-      [...wall, ...desks],
+      office,
+      cell,
       occupied,
       wall.length + desks.length,
       rng,
@@ -10319,9 +11019,9 @@ export function generateInteriorContent(bx: number, by: number): {
       iH,
       exit,
       desks,
-      [...wall, ...desks, ...cooler],
+      [...wall, ...desks, ...gap],
       occupied,
-      wall.length + desks.length + cooler.length,
+      wall.length + desks.length + gap.length,
       rng,
     );
     const chairs = placePoliceBagChairs(
@@ -10331,9 +11031,9 @@ export function generateInteriorContent(bx: number, by: number): {
       iH,
       exit,
       desks,
-      [...wall, ...desks, ...cooler, ...trash],
+      [...wall, ...desks, ...gap, ...trash],
       occupied,
-      wall.length + desks.length + cooler.length + trash.length,
+      wall.length + desks.length + gap.length + trash.length,
       rng,
     );
     const officer = placePoliceDeadOfficer(
@@ -10343,36 +11043,42 @@ export function generateInteriorContent(bx: number, by: number): {
       iH,
       exit,
       desks,
-      [...wall, ...desks, ...cooler, ...trash, ...chairs],
+      [...wall, ...desks, ...gap, ...trash, ...chairs],
       occupied,
-      wall.length + desks.length + cooler.length + trash.length + chairs.length,
+      wall.length + desks.length + gap.length + trash.length + chairs.length,
       rng,
     );
-    const vending = placePoliceVendingMachine(
+    const placedCount =
+      wall.length +
+      desks.length +
+      gap.length +
+      trash.length +
+      chairs.length +
+      officer.length;
+    const cornerFurn = placePoliceCornerFurniture(
       bx,
       by,
       iW,
       iH,
-      exit,
-      [...wall, ...desks, ...cooler, ...trash, ...chairs, ...officer],
+      office,
+      cell,
       occupied,
-      wall.length +
-        desks.length +
-        cooler.length +
-        trash.length +
-        chairs.length +
-        officer.length,
-      rng,
+      placedCount,
     );
     furnitures = [
       ...wall,
       ...desks,
-      ...cooler,
+      ...gap,
       ...trash,
       ...chairs,
       ...officer,
-      ...vending,
+      ...cornerFurn,
     ];
+    walls = roomList.flatMap((room) => room.wallTiles);
+    doors = roomList.map((room) => ({
+      x: room.entranceX,
+      y: room.entranceY,
+    }));
   } else if (supermarket) {
     const fridges = placeSupermarketFridges(
       bx,
@@ -10434,19 +11140,13 @@ export function generateInteriorContent(bx: number, by: number): {
     furnitures = [];
   }
 
-  // Zombie spawns — never on the exit tile or the tile just inside it.
+  // Zombie spawns — never on the entrance or within one tile of it.
   const zombieSpawns: { x: number; y: number }[] = [];
-
-  const clearFrontX =
-    exit.face === "SE" ? exit.insideX - 1 : exit.insideX;
-  const clearFrontY =
-    exit.face === "SW" ? exit.insideY - 1 : exit.insideY;
 
   const freeTiles: { x: number; y: number }[] = [];
   for (let ty = 0; ty < iH; ty++) {
     for (let tx = 0; tx < iW; tx++) {
-      if (tx === exitX && ty === exitY) continue;
-      if (tx === clearFrontX && ty === clearFrontY) continue;
+      if (isNearInteriorEntrance(tx, ty, exit)) continue;
       if (occupied.has(`${tx},${ty}`)) continue;
       freeTiles.push({ x: tx, y: ty });
     }
@@ -10502,8 +11202,10 @@ function isBlockedByFurniture(
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   for (const f of furnitures) {
-    // Floor bags are walkable loot piles.
-    if (f.objectType === "groundbackpack") continue;
+    // Floor bags are walkable loot piles. Blood is a carpet decal.
+    if (f.objectType === "groundbackpack" || f.objectType === "bloodstain") {
+      continue;
+    }
     if (searchableOccupiesTile(f, tx, ty)) return true;
   }
   return false;

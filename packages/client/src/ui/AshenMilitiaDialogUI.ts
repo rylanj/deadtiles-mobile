@@ -21,7 +21,6 @@ import {
   inventoryAfterTurnIn,
   isMilitiaCaptainSkin,
   isMilitiaDoctorSkin,
-  QUEST_ID_FIRST_SWEEP,
   davisPostsOnlyFirstSweep,
   isQuestActive,
   isQuestListed,
@@ -37,8 +36,20 @@ import {
   isQuestObjectiveDone,
   questStatusOf,
   pickDialogVariant,
+  questRewardReputation,
+  STORY_QUESTS,
+  STORY_LINE_WHAT_HAPPENED,
+  STORY_LINE_YOU_WANTED,
+  STORY_FOUND_REPLY,
+  STORY_DAVIS_REPLY,
+  STORY_OBJECTIVE_ASK_CLARK,
+  STORY_OBJECTIVE_ASK_DAVIS,
+  QUEST_ID_AYE_CAPTAIN,
+  QUEST_ID_FOUND_ON_THE_ROAD,
+  COLEMAN_NOTE_ITEM_ID,
   type QuestDefinition,
   type PlayerQuestsState,
+  type QuestGiverId,
   PLAYER_MAX_HEALTH,
   type AshenMilitiaTask,
 } from "@zombie/shared";
@@ -51,6 +62,7 @@ export type AshenMilitiaDialogUIHandlers = {
   onClose: () => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
+  onChooseLine?: (lineId: string) => void;
   onHeal?: () => void;
 };
 
@@ -124,6 +136,9 @@ export class AshenMilitiaDialogUI {
   private tutorialDone = false;
   private doctorHealCost = ASHEN_MILITIA_DOCTOR_HEAL_COST;
   private activeLineId: string | null = null;
+  /** Hand-in speech kept on screen after the quest state refreshes. */
+  private scriptedLineId: string | null = null;
+  private scriptedReply: string | null = null;
   /** Task id currently expanded on the jobs reply (null = all collapsed). */
   private expandedTaskId: string | null = null;
   private denyTaskId = "";
@@ -336,6 +351,8 @@ export class AshenMilitiaDialogUI {
     document.body.classList.remove("ashen-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.expandedTaskId = null;
     this.isCaptain = false;
     this.isDoctor = false;
@@ -364,8 +381,51 @@ export class AshenMilitiaDialogUI {
 
   private dialogLines() {
     if (this.isDoctor) return ASHEN_MILITIA_DOCTOR_DIALOG_LINES;
-    if (this.isCaptain) return ASHEN_MILITIA_CAPTAIN_DIALOG_LINES;
+    if (this.isCaptain) {
+      const quests = parseQuestsJson(this.questsJson);
+      if (isQuestActive(quests, QUEST_ID_AYE_CAPTAIN)) {
+        return ASHEN_MILITIA_CAPTAIN_DIALOG_LINES;
+      }
+      return ASHEN_MILITIA_CAPTAIN_DIALOG_LINES.filter(
+        (line) => line.id !== STORY_LINE_YOU_WANTED,
+      );
+    }
     return ASHEN_MILITIA_DIALOG_LINES;
+  }
+
+  /** Ask the server to advance a story line, and keep that reply on screen. */
+  speak(lineId: string, text: string) {
+    this.scriptedLineId = lineId;
+    this.scriptedReply = text;
+    if (this.activeLineId !== lineId) this.activeLineId = lineId;
+    if (this.visible) this.render();
+  }
+
+  private storyPromptPending(lineId: string): boolean {
+    const quests = parseQuestsJson(this.questsJson);
+    if (this.isDoctor && lineId === STORY_LINE_WHAT_HAPPENED) {
+      const quest = quests.quests[QUEST_ID_FOUND_ON_THE_ROAD];
+      return (
+        !!quest &&
+        quest.status === "active" &&
+        (quest.progress[STORY_OBJECTIVE_ASK_CLARK] ?? 0) < 1
+      );
+    }
+    if (this.isCaptain && lineId === STORY_LINE_YOU_WANTED) {
+      const quest = quests.quests[QUEST_ID_AYE_CAPTAIN];
+      return (
+        !!quest &&
+        quest.status === "active" &&
+        (quest.progress[STORY_OBJECTIVE_ASK_DAVIS] ?? 0) < 1
+      );
+    }
+    return false;
+  }
+
+  private storyReplyText(lineId: string): string | null {
+    if (lineId === STORY_LINE_WHAT_HAPPENED) return STORY_FOUND_REPLY;
+    if (lineId === STORY_LINE_YOU_WANTED) return STORY_DAVIS_REPLY;
+    return null;
   }
 
   private itemCount(itemId: string): number {
@@ -394,16 +454,33 @@ export class AshenMilitiaDialogUI {
       btn.addEventListener("click", () => {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
+        const scripted = this.storyReplyText(line.id);
+        if (scripted && this.storyPromptPending(line.id)) {
+          this.scriptedLineId = line.id;
+          this.scriptedReply = scripted;
+          this.handlers.onChooseLine?.(line.id);
+        } else if (this.scriptedLineId !== line.id) {
+          this.scriptedLineId = null;
+          this.scriptedReply = null;
+        }
         this.render();
       });
       this.speechListEl.appendChild(btn);
     }
 
-    const active = lines.find((l) => l.id === this.activeLineId);
+    let active = lines.find((l) => l.id === this.activeLineId);
+    if (!active && lines[0]) {
+      this.activeLineId = lines[0].id;
+      this.scriptedLineId = null;
+      this.scriptedReply = null;
+      this.render();
+      return;
+    }
     this.responseEl.replaceChildren();
     if (!active) {
       this.responseEl.classList.add("red-dialog-response--empty");
       this.responseEl.textContent = "Waiting for you to speak…";
+      this.appendStoryQuests();
       return;
     }
 
@@ -426,12 +503,15 @@ export class AshenMilitiaDialogUI {
           ? guardLine.npcInterior
           : active.npc;
     const questsForReply = parseQuestsJson(this.questsJson);
-    const firstSweepOnly =
+    const boardClosed =
       this.isCaptain &&
       active.id === "jobs" &&
       davisPostsOnlyFirstSweep(questsForReply, this.tutorialDone);
-    reply.textContent = firstSweepOnly
-      ? "One job for now. A house just outside town. Clear it, bring the hammer back, and then the rest of the board is yours."
+    reply.textContent =
+      this.scriptedReply && this.scriptedLineId === active.id
+        ? this.scriptedReply
+        : boardClosed
+      ? "The board can wait until you're settled. The story is the work I have for you."
       : pickDialogVariant(
           variants,
           `${this.npcId}|${active.id}|${this.inInterior ? "in" : "out"}|${
@@ -462,17 +542,189 @@ export class AshenMilitiaDialogUI {
       for (const task of tasks) {
         const def = getQuestDefinition(task.id);
         if (def && !isQuestListed(quests, def)) continue;
-        if (
-          firstSweepOnly &&
-          task.id !== QUEST_ID_FIRST_SWEEP &&
-          !isQuestActive(quests, task.id)
-        ) {
+        if (boardClosed && !isQuestActive(quests, task.id)) {
           continue;
         }
         list.appendChild(this.buildTaskSection(task));
       }
       if (list.childElementCount > 0) this.responseEl.appendChild(list);
     }
+    this.appendStoryQuests();
+  }
+
+  private storyGiver(): QuestGiverId | null {
+    if (this.isDoctor) return "ashenDoctor";
+    if (this.isCaptain) return "ashenCaptain";
+    return null;
+  }
+
+  private appendStoryQuests() {
+    const giver = this.storyGiver();
+    if (!giver) return;
+    const quests = parseQuestsJson(this.questsJson);
+    const defs = STORY_QUESTS.filter((def) => {
+      const status = quests.quests[def.id]?.status;
+      if (status !== "active" && status !== "available") return false;
+      if (def.id === QUEST_ID_AYE_CAPTAIN) {
+        return status === "available"
+          ? giver === "ashenDoctor"
+          : giver === "ashenCaptain";
+      }
+      return def.giver === giver;
+    });
+    if (defs.length === 0) return;
+    const list = document.createElement("div");
+    list.className = "craft-recipe-list red-dialog-task-list";
+    for (const def of defs) list.appendChild(this.buildStorySection(def));
+    this.responseEl.appendChild(list);
+  }
+
+  private buildStorySection(def: QuestDefinition): HTMLElement {
+    const quests = parseQuestsJson(this.questsJson);
+    const offered = quests.quests[def.id]?.status === "available";
+    const ready = !offered && canTurnInQuest(quests, def.id);
+    const needsNote =
+      !offered &&
+      def.iconItemId === COLEMAN_NOTE_ITEM_ID &&
+      this.itemCount(COLEMAN_NOTE_ITEM_ID) < 1;
+    const canHandIn =
+      ready && def.id !== QUEST_ID_FOUND_ON_THE_ROAD && !needsNote;
+    const expanded = offered
+      ? this.expandedTaskId !== `hide:${def.id}`
+      : this.expandedTaskId === def.id || canHandIn;
+    const section = document.createElement("div");
+    section.className = "craft-recipe";
+    if (expanded) section.classList.add("craft-recipe--expanded");
+    if (offered) section.classList.add("craft-recipe--available");
+    if (canHandIn) section.classList.add("craft-recipe--ready");
+
+    const summary = document.createElement("button");
+    summary.type = "button";
+    summary.className = "craft-recipe-summary";
+    summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    summary.appendChild(
+      makeDisplayCell({
+        itemId: def.iconItemId ?? "map",
+        ariaLabel: def.title,
+      }),
+    );
+    const label = document.createElement("div");
+    label.className = "craft-recipe-summary-text";
+    const nameEl = document.createElement("span");
+    nameEl.className = "craft-recipe-summary-name";
+    nameEl.textContent = def.title;
+    const storyChip = document.createElement("span");
+    storyChip.className = "quest-status-chip quest-status-chip--story";
+    storyChip.textContent = "Story";
+    nameEl.appendChild(storyChip);
+    const statusChip = document.createElement("span");
+    statusChip.className = offered
+      ? "quest-status-chip quest-status-chip--available"
+      : "quest-status-chip quest-status-chip--accepted";
+    statusChip.textContent = offered ? "Available" : "Accepted";
+    nameEl.appendChild(statusChip);
+    label.appendChild(nameEl);
+    const meta = document.createElement("span");
+    meta.className = "craft-recipe-summary-meta";
+    const openStep = def.objectives.find(
+      (obj) => !isQuestObjectiveDone(quests, def, obj),
+    );
+    meta.textContent = offered
+      ? "Read it, then accept"
+      : canHandIn
+        ? "Ready to turn in"
+        : openStep
+          ? questObjectiveLine(quests, def, openStep)
+          : def.title;
+    label.appendChild(meta);
+    summary.appendChild(label);
+    summary.addEventListener("click", () => {
+      if (offered) {
+        this.expandedTaskId =
+          this.expandedTaskId === `hide:${def.id}` ? null : `hide:${def.id}`;
+      } else {
+        this.expandedTaskId = this.expandedTaskId === def.id ? null : def.id;
+      }
+      this.render();
+    });
+    section.appendChild(summary);
+
+    if (!expanded) return section;
+
+    const details = document.createElement("div");
+    details.className = "craft-recipe-details";
+    if (def.description) {
+      const description = document.createElement("div");
+      description.className = "craft-recipe-hint";
+      description.textContent = def.description;
+      details.appendChild(description);
+    }
+    for (const obj of def.objectives) {
+      const line = document.createElement("div");
+      line.className = "craft-recipe-hint";
+      line.textContent = questObjectiveLine(quests, def, obj);
+      if (isQuestObjectiveDone(quests, def, obj)) {
+        line.classList.add("quest-stage--done");
+      }
+      details.appendChild(line);
+    }
+    const rep = questRewardReputation(def, "ashenMilitia");
+    const itemRewards = def.rewards.filter((reward) => reward.itemId && reward.quantity);
+    if (rep > 0 || itemRewards.length > 0) {
+      const rewardTitle = document.createElement("div");
+      rewardTitle.className = "red-dialog-task-heading";
+      rewardTitle.textContent = "Rewards";
+      details.appendChild(rewardTitle);
+      const rewardRow = document.createElement("div");
+      rewardRow.className = "red-dialog-task-row";
+      for (const reward of itemRewards) {
+        rewardRow.appendChild(
+          makeDisplayCell({
+            itemId: reward.itemId!,
+            qtyLabel: `×${reward.quantity}`,
+            ariaLabel: reward.itemId!,
+          }),
+        );
+      }
+      if (rep > 0) {
+        rewardRow.appendChild(
+          makeDisplayCell({
+            itemId: "rep",
+            qtyLabel: `+${rep}`,
+            ariaLabel: `+${rep} Ashen Militia reputation`,
+          }),
+        );
+      }
+      details.appendChild(rewardRow);
+    }
+    if (offered) {
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.className = "red-dialog-complete-btn";
+      acceptBtn.textContent = "Accept";
+      acceptBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onAcceptQuest(def.id);
+      });
+      details.appendChild(acceptBtn);
+    } else if (needsNote && ready) {
+      const hint = document.createElement("div");
+      hint.className = "craft-recipe-hint";
+      hint.textContent = "Bring the Note for Coleman.";
+      details.appendChild(hint);
+    } else if (canHandIn) {
+      const completeBtn = document.createElement("button");
+      completeBtn.type = "button";
+      completeBtn.className = "red-dialog-complete-btn";
+      completeBtn.textContent = "Turn in";
+      completeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onCompleteTask(def.id);
+      });
+      details.appendChild(completeBtn);
+    }
+    section.appendChild(details);
+    return section;
   }
 
   private buildHealSection(): HTMLElement {

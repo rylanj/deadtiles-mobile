@@ -351,6 +351,7 @@ export class WeatherFx {
     lightningFlashAt: number,
     lightningThunderAt: number,
     alwaysLit = false,
+    underground = false,
   ) {
     const sky: SkyId = parseSky(skyRaw);
     const precip: PrecipId = parsePrecip(precipRaw);
@@ -359,7 +360,7 @@ export class WeatherFx {
     const targetCloudy =
       sky === "cloudy"
         ? indoor
-          ? alwaysLit
+          ? alwaysLit || underground
             ? 0
             : sunlight
           : 1

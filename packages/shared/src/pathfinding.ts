@@ -1,4 +1,5 @@
 import { getBuildingAt, isWallTile, buildingEntryApproachCandidates, buildingEntranceRun } from "./worldgen.js";
+import { getCellarAt } from "./cellar.js";
 import { isInWorldBounds, type WorldBounds } from "./worldBounds.js";
 import {
   canMoveInInterior,
@@ -431,6 +432,52 @@ export function planBuildingEntryPath(
     x: run.x + 0.5 + (run.face === "SE" ? 0 : mid),
     y: run.y + 0.5 + (run.face === "SE" ? mid : 0),
   });
+  return approachPath;
+}
+
+/**
+ * Path onto a cellar door. Either open side works: the alley is walled
+ * east and west, so the player may approach from the north or the south.
+ * Returns null when the click is not a cellar tile.
+ */
+export function planCellarEntryPath(
+  startX: number,
+  startY: number,
+  clickTX: number,
+  clickTY: number,
+  walkable: (tx: number, ty: number) => boolean,
+  maxNodes?: number,
+): PathPoint[] | null {
+  if (!getCellarAt(clickTX, clickTY)) return null;
+
+  let bestApproach: { x: number; y: number } | null = null;
+  let bestDist = Infinity;
+  const neighbors = [
+    { x: clickTX + 1, y: clickTY },
+    { x: clickTX - 1, y: clickTY },
+    { x: clickTX, y: clickTY + 1 },
+    { x: clickTX, y: clickTY - 1 },
+  ];
+  for (const c of neighbors) {
+    if (!walkable(c.x, c.y)) continue;
+    const d = Math.hypot(startX - (c.x + 0.5), startY - (c.y + 0.5));
+    if (d < bestDist) {
+      bestDist = d;
+      bestApproach = c;
+    }
+  }
+  if (!bestApproach) return null;
+
+  const approachPath = findPath(
+    startX,
+    startY,
+    bestApproach.x + 0.5,
+    bestApproach.y + 0.5,
+    walkable,
+    maxNodes,
+  );
+  if (approachPath === null) return null;
+  approachPath.push({ x: clickTX + 0.5, y: clickTY + 0.5 });
   return approachPath;
 }
 

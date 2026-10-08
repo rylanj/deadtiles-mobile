@@ -40,6 +40,44 @@ type ActiveSlotDrag = {
 const activeDrags = new Set<ActiveSlotDrag>();
 const DRAG_LAYER_ID = "slot-drag-layer";
 let globalGuardsInstalled = false;
+/** Shift keydown/keyup. Pointer events can miss it while the game captures Shift. */
+let shiftPhysicallyDown = false;
+let shiftTrackerInstalled = false;
+
+function installShiftTracker(): void {
+  if (shiftTrackerInstalled || typeof window === "undefined") return;
+  shiftTrackerInstalled = true;
+  const onKey = (event: KeyboardEvent) => {
+    if (
+      event.key !== "Shift" &&
+      event.code !== "ShiftLeft" &&
+      event.code !== "ShiftRight"
+    ) {
+      return;
+    }
+    // Keydown of Shift is enough to latch it. Keyup clears it unless the
+    // other Shift key is still held (shiftKey stays true in that case).
+    shiftPhysicallyDown =
+      event.type === "keydown" ||
+      (event.shiftKey && event.getModifierState("Shift"));
+  };
+  window.addEventListener("keydown", onKey, true);
+  window.addEventListener("keyup", onKey, true);
+  window.addEventListener("blur", () => {
+    shiftPhysicallyDown = false;
+  });
+}
+
+function slotDragShiftDown(event?: Event): boolean {
+  if (shiftPhysicallyDown) return true;
+  if (!event || !("shiftKey" in event)) return false;
+  const pointer = event as PointerEvent;
+  if (pointer.shiftKey) return true;
+  if (typeof pointer.getModifierState === "function" && pointer.getModifierState("Shift")) {
+    return true;
+  }
+  return false;
+}
 
 function getDragLayer(): HTMLElement {
   let layer = document.getElementById(DRAG_LAYER_ID);
@@ -109,6 +147,7 @@ export function cancelAllSlotDrags(): void {
  */
 export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   installGlobalDragGuards();
+  installShiftTracker();
 
   const { cell } = opts;
   cell.draggable = false;
@@ -127,6 +166,7 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   let suppressClick = false;
   let active: ActiveSlotDrag | null = null;
   let shiftListener: ((event: KeyboardEvent) => void) | null = null;
+  let releasingCapture = false;
 
   const destroyGhost = () => {
     ghost?.remove();
@@ -158,8 +198,16 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   const startShiftWatch = () => {
     if (shiftListener) return;
     shiftListener = (event: KeyboardEvent) => {
-      if (event.key !== "Shift") return;
-      shiftHeld = event.shiftKey;
+      if (
+        event.key !== "Shift" &&
+        event.code !== "ShiftLeft" &&
+        event.code !== "ShiftRight"
+      ) {
+        return;
+      }
+      shiftHeld =
+        event.type === "keydown" ||
+        (event.shiftKey && event.getModifierState("Shift"));
       applyGhostQuantity();
       updateHover(lastX, lastY);
     };
@@ -189,10 +237,14 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
     active = null;
   };
 
-  const endDrag = (clientX: number, clientY: number, cancelled: boolean) => {
+  const endDrag = (
+    clientX: number,
+    clientY: number,
+    cancelled: boolean,
+    dropShift = false,
+  ) => {
     const wasDragging = dragging;
     const dropTarget = wasDragging && !cancelled ? hoverTarget : null;
-    const dropShift = shiftHeld;
 
     dragging = false;
     pointerId = null;
@@ -228,14 +280,21 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
 
   const finishPointer = (event: PointerEvent, cancelled: boolean) => {
     if (pointerId !== event.pointerId) return;
+    releasingCapture = true;
     try {
       cell.releasePointerCapture(event.pointerId);
     } catch {
       /* ignore */
     }
+    releasingCapture = false;
 
     const wasDragging = dragging;
-    endDrag(event.clientX, event.clientY, cancelled);
+    endDrag(
+      event.clientX,
+      event.clientY,
+      cancelled,
+      !cancelled && (shiftHeld || slotDragShiftDown(event)),
+    );
 
     if (!wasDragging && !cancelled) {
       handleTapActivate(event.pointerType);
@@ -267,6 +326,8 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
     opts.setLastTap({ key: opts.tapKey, at: now });
   };
 
+  cell.addEventListener("selectstart", (event) => event.preventDefault());
+
   cell.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     if (pointerId !== null) return;
@@ -279,6 +340,7 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
     startY = event.clientY;
     dragging = false;
     suppressClick = false;
+    shiftHeld = slotDragShiftDown(event);
 
     try {
       cell.setPointerCapture(event.pointerId);
@@ -294,7 +356,7 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
     const dy = event.clientY - startY;
     lastX = event.clientX;
     lastY = event.clientY;
-    shiftHeld = event.shiftKey;
+    shiftHeld = slotDragShiftDown(event);
 
     if (!dragging) {
       if (Math.hypot(dx, dy) < SLOT_DRAG_THRESHOLD_PX) return;
@@ -343,8 +405,9 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   });
 
   cell.addEventListener("lostpointercapture", () => {
+    if (releasingCapture) return;
     if (!dragging && pointerId === null) return;
-    // Capture lost (cell torn down / scroll steal) — cancel without drop.
+    // Capture lost (cell torn down / scroll steal). Cancel without drop.
     cancelDrag();
   });
 

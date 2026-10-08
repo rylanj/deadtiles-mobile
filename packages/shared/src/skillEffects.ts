@@ -14,6 +14,8 @@ import {
   PLAYER_SPEED,
   STAMINA_MAX,
   ZOMBIE_AGGRO_RANGE,
+  SEARCH_NOISE_AT_0,
+  SEARCH_NOISE_AT_100,
 } from "./constants.js";
 import { CRAFT_DURATION_MS } from "./crafting.js";
 import {
@@ -108,7 +110,10 @@ export const SUB_SKILL_BENEFIT: Record<SubSkillId, readonly string[]> = {
   accuracy: ["Bullet spread reduces"],
   crafting: ["Crafting time reduces"],
   scavenging: ["Searching time reduces"],
-  stealth: ["Zombies do not notice you as easily"],
+  stealth: [
+    "Zombies do not notice you as easily",
+    "Searching alerts zombies from less far",
+  ],
   cooking: ["Food and drink restore more"],
   lockpicking: ["Picking a lock takes less time, lockpicks break less often, can pick harder locks"],
   medicine: ["Medicine is more effective and lasts longer"],
@@ -148,6 +153,8 @@ export type PlayerSkillMods = {
   lockpickConsumeChance: number;
   /** Tiles that hear a lock being picked. */
   lockpickNoiseTiles: number;
+  /** Tiles that hear a furniture search. */
+  searchNoiseTiles: number;
   /** Effective lockpicking level (capped by Dexterity). */
   lockpickLevel: number;
   stealthAggroRange: number;
@@ -164,7 +171,7 @@ export type PlayerSkillMods = {
   questRewardScale: number;
   questRepScale: number;
   carryingLevel: number;
-  /** Temporary Bartering and Persuasion XP from worn jewelry. 0 when bare. */
+  /** Temporary Bartering and Persuasion XP from worn jewelry and watches. 0 when bare. */
   jewelrySkillXp: number;
 };
 
@@ -272,6 +279,12 @@ export function computePlayerSkillMods(
       "stealth",
       LOCKPICK_NOISE_AT_0,
       LOCKPICK_NOISE_AT_100,
+    ),
+    searchNoiseTiles: lerpSkill(
+      state,
+      "stealth",
+      SEARCH_NOISE_AT_0,
+      SEARCH_NOISE_AT_100,
     ),
     lockpickLevel: effectiveSubLevel(state, "lockpicking"),
     stealthAggroRange: lerpSkill(state, "stealth", ZOMBIE_AGGRO_RANGE, 8),

@@ -16,8 +16,12 @@ import {
   officeManagerRoomAtTile,
   retailManagerRoomForBuilding,
   retailManagerRoomAtTile,
+  policeSergeantRoomForBuilding,
+  policeJailCellForBuilding,
+  policeCornerRoomAtTile,
   pickableLockDifficulty,
   interiorDimensions,
+  isCellarInterior,
   interiorExitForBuildingAt,
   furnitureNeedsCrack,
   retailShowroomBounds,
@@ -39,6 +43,7 @@ import {
   type InteriorWallTile,
   type MotelRoom,
   type OfficeMeetingRoom,
+  type PoliceCornerRoom,
   type RetailManagerRoom,
   type StructureBuildKind,
   type StructureFenceCorner,
@@ -236,6 +241,9 @@ const BED_BOTTOM_PAD = Math.round(BED_RENDER_HEIGHT * 0.125);
 /** MilitaryBed1 — bed scale, then lower by 2.5%. */
 const MILITARYBED_BOTTOM_PAD =
   BED_BOTTOM_PAD + Math.round(BED_RENDER_HEIGHT * 0.025);
+/** JailToilet1: tall 1×1 fixture. Feet sit near the bottom of the canvas. */
+const JAILTOILET_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95);
+const JAILTOILET_BOTTOM_PAD = Math.round(JAILTOILET_RENDER_HEIGHT * 0.06);
 /** Cabinet1 — raise by 5% of display height. */
 const CABINET_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.05);
 /** Bookshelf1 — raise by 5% of display height. */
@@ -519,7 +527,10 @@ function furnitureRenderHeight(objectType: string): number {
   ) {
     return CANTEENTABLE_RENDER_HEIGHT;
   }
-  if (objectType === "militarybed") return BED_RENDER_HEIGHT;
+  if (objectType === "militarybed" || objectType === "jailbed") {
+    return BED_RENDER_HEIGHT;
+  }
+  if (objectType === "jailtoilet") return JAILTOILET_RENDER_HEIGHT;
   if (objectType === "campchair") return CAMPCHAIR_RENDER_HEIGHT;
   if (objectType === "canteenchair") return CANTEENCHAIR_RENDER_HEIGHT;
   if (objectType === "footlocker") return FOOTLOCKER_RENDER_HEIGHT;
@@ -628,7 +639,10 @@ function furnitureBottomPad(objectType: string): number {
   ) {
     return CANTEENTABLE_BOTTOM_PAD;
   }
-  if (objectType === "militarybed") return MILITARYBED_BOTTOM_PAD;
+  if (objectType === "militarybed" || objectType === "jailbed") {
+    return MILITARYBED_BOTTOM_PAD;
+  }
+  if (objectType === "jailtoilet") return JAILTOILET_BOTTOM_PAD;
   if (objectType === "footlocker") return FOOTLOCKER_BOTTOM_PAD;
   if (objectType === "kitbag") return KITBAG_BOTTOM_PAD;
   if (objectType === "militarybasket") return MILITARYBASKET_BOTTOM_PAD;
@@ -690,7 +704,12 @@ export class InteriorView {
   private fadeComposite: Phaser.GameObjects.RenderTexture | null = null;
   /** Hospital cubicles + motel room bays — SW/SE faces fade while inside. */
   private fadeCubicles: Array<
-    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom | RetailManagerRoom
+    | HospitalCubicle
+    | MotelRoom
+    | HouseRoom
+    | OfficeMeetingRoom
+    | RetailManagerRoom
+    | PoliceCornerRoom
   > = [];
   /** Last cubicle fade key — skip redundant rebuild when tile unchanged. */
   private lastCubicleFadeKey = "";
@@ -962,11 +981,18 @@ export class InteriorView {
   }
 
   private groundFadeCubicles(): Array<
-    HospitalCubicle | MotelRoom | HouseRoom | OfficeMeetingRoom | RetailManagerRoom
+    | HospitalCubicle
+    | MotelRoom
+    | HouseRoom
+    | OfficeMeetingRoom
+    | RetailManagerRoom
+    | PoliceCornerRoom
   > {
     const officeRoom = officeMeetingRoomForBuilding(this.buildingX, this.buildingY);
     const managerRoom = officeManagerRoomForBuilding(this.buildingX, this.buildingY);
     const retailOffice = retailManagerRoomForBuilding(this.buildingX, this.buildingY);
+    const policeOffice = policeSergeantRoomForBuilding(this.buildingX, this.buildingY);
+    const policeCell = policeJailCellForBuilding(this.buildingX, this.buildingY);
     return [
       ...hospitalCubiclesForBuilding(this.buildingX, this.buildingY),
       ...motelRoomsForBuilding(this.buildingX, this.buildingY),
@@ -974,6 +1000,8 @@ export class InteriorView {
       ...(officeRoom ? [officeRoom] : []),
       ...(managerRoom ? [managerRoom] : []),
       ...(retailOffice ? [retailOffice] : []),
+      ...(policeOffice ? [policeOffice] : []),
+      ...(policeCell ? [policeCell] : []),
     ];
   }
 
@@ -2102,8 +2130,10 @@ export class InteriorView {
           )
         : tileCoords;
     const floorKey =
-      bType === "house" || bType === undefined
-        ? "tile-wood"
+      isCellarInterior(this.buildingX, this.buildingY)
+        ? "tile-concrete"
+        : bType === "house" || bType === undefined
+          ? "tile-wood"
         : bType === "police_station"
           ? "tile-ground-tiles"
           : bType === "hospital"
@@ -2345,6 +2375,8 @@ export class InteriorView {
     if (manager) return manager.facing;
     const retailOffice = retailManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
     if (retailOffice) return retailOffice.facing;
+    const policeRoom = policeCornerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (policeRoom) return policeRoom.facing;
     return null;
   }
 
@@ -2497,7 +2529,30 @@ export class InteriorView {
     sprite.setAlpha(1);
   }
 
+  private upsertBloodstain(item: SearchableVisual) {
+    if (!this.scene.textures.exists("decal-blood1")) return;
+    const iso = cartesianToIso(item.x + 0.5, item.y + 0.5);
+    const y = iso.y + TILE_HEIGHT / 2;
+    let sprite = this.objectSprites.get(item.id);
+    if (!sprite) {
+      sprite = this.scene.add.image(iso.x, y, "decal-blood1");
+      sprite.setOrigin(0.5, 0.85);
+      const w = sprite.width || 1;
+      sprite.setScale(48 / w);
+      this.objectSprites.set(item.id, sprite);
+    } else {
+      sprite.setPosition(iso.x, y);
+    }
+    sprite.setDepth(interiorFloorDepth(item.x, item.y) + 1);
+    sprite.setVisible(true);
+    sprite.setAlpha(1);
+  }
+
   private upsertSearchable(item: SearchableVisual, isSearching = false) {
+    if (item.objectType === "bloodstain") {
+      this.upsertBloodstain(item);
+      return;
+    }
     if (item.objectType === "furnace" || item.objectType === "mantel") {
       this.upsertFurnace(item);
       return;

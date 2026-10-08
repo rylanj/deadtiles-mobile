@@ -117,6 +117,9 @@ export class BootScene extends Phaser.Scene {
     if (!this.textures.exists("bullet-impact")) {
       createBulletImpactFallback(this);
     }
+    if (this.textures.exists("decal-blood1")) {
+      this.textures.get("decal-blood1").setFilter(Phaser.Textures.FilterMode.NEAREST);
+    }
 
     if (!groundTextureIsLoaded(this, "tile-ground")) {
       createFallbackTile(this, "tile-ground", 0x3d6b4f);

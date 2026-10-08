@@ -727,7 +727,18 @@ export type DialogTaskCompleteEvent = {
     ashenReputation?: number;
     ashenMilitiaReputation?: number;
     rewards: { id: string; quantity: number; name: string }[];
+    header?: string;
+    keepOpen?: boolean;
     taskCompletionsJson?: string;
+  };
+};
+
+export type DialogSpokenEvent = {
+  type: "dialogSpoken";
+  payload: {
+    npcId: string;
+    lineId: string;
+    text: string;
   };
 };
 
@@ -850,6 +861,18 @@ export type GunshotHeardEvent = {
     y: number;
     weaponIndex: number;
     sfxVariant: number;
+    inInterior: boolean;
+    buildingX: number;
+    buildingY: number;
+  };
+};
+
+export type ZombieSpotGroanEvent = {
+  type: "zombieSpotGroan";
+  payload: {
+    x: number;
+    y: number;
+    variant: number;
     inInterior: boolean;
     buildingX: number;
     buildingY: number;
@@ -1007,6 +1030,7 @@ export type ServerEvent =
   | DialogOpenEvent
   | DialogTaskDeniedEvent
   | DialogTaskCompleteEvent
+  | DialogSpokenEvent
   | DialogHealCompleteEvent
   | SafeDepositCloseEvent
   | QuestSyncEvent
@@ -1019,6 +1043,7 @@ export type ServerEvent =
   | ShotMissEvent
   | EntityHitEvent
   | GunshotHeardEvent
+  | ZombieSpotGroanEvent
   | BulletImpactEvent
   | ShotTraceEvent
   | BargateOpenEvent

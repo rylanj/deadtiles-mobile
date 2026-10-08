@@ -15,6 +15,14 @@ import {
   getStandingTreeAt,
   isTreeFelled,
   playerReadyToChopTree,
+  playerReadyToInspectGrave,
+  nearestCellarTile,
+  getCellarAt,
+  isCellarInterior,
+  graveInspectTargetId,
+  graveInscriptionAt,
+  GRAVE_INSPECT_MS,
+  INSPECT_GRAVE_ID_PREFIX,
   syncFelledTrees,
   INITIAL_WORLD_BOUNDS,
   isInWeaponRange,
@@ -79,7 +87,6 @@ import {
   isRawMeat,
   isInBirchport,
   isMilitiaCaptainSkin,
-  QUEST_ID_FIRST_SWEEP,
   isWatchItem,
   isMapItem,
   isRadioItem,
@@ -156,6 +163,10 @@ import {
   militiaGuardDieAnimMs,
   playerAdjacentToSearchable,
   furnitureIsSearchable,
+  INSPECT_BLOOD_ID_PREFIX,
+  STORY_INSPECT_MS,
+  QUEST_ID_TWO_BEHIND,
+  QUEST_ID_DEAL_WITH_DEVIL,
   furnitureNeedsCrack,
   SAFE_CRACK_DURATION_MS,
   furnitureIsStairs,
@@ -367,7 +378,7 @@ import {
   type FireplaceAudioSource,
   type GunshotSource,
 } from "../audio/AudioManager";
-import { OnboardingUI, type FirstSweepState } from "../ui/OnboardingUI";
+import { OnboardingUI } from "../ui/OnboardingUI";
 import { EntityActionLabelManager } from "../ui/EntityActionLabel";
 import {
   MapOverlayUI,
@@ -808,6 +819,13 @@ export class WorldScene extends Phaser.Scene {
   private lastTreeChopClickAt = 0;
   /** Last time we sent chopTree while pursuing — retry if the server ignored us. */
   private treeChopStartSentAt = 0;
+  /** Named grave the player clicked. Walk up, then inspect for 5s. */
+  private graveInspectTargetTile: { x: number; y: number } | null = null;
+  private graveInspectApproachTile: { x: number; y: number } | null = null;
+  private graveInspectSprint = false;
+  private lastGraveClickKey: string | null = null;
+  private lastGraveClickAt = 0;
+  private graveInspectStartSentAt = 0;
   /** Set right before sending placeStructure for a door — used to offer a lock prompt on success. */
   private pendingOwnDoorPlacement: { x: number; y: number } | null = null;
   private fireplaceUI?: FireplaceUI;
@@ -1336,6 +1354,36 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  /** Groan from a zombie that just spotted a player. Same clip bank as idle groans. */
+  private playZombieSpotGroan(source: {
+    x: number;
+    y: number;
+    variant: number;
+    inInterior: boolean;
+    buildingX: number;
+    buildingY: number;
+  }) {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me) return;
+    if (!!me.inInterior !== source.inInterior) return;
+    if (source.inInterior) {
+      if ((me.interiorLevel ?? 0) !== 0) return;
+      if (me.buildingX !== source.buildingX || me.buildingY !== source.buildingY) return;
+    }
+    this.syncGunshotListener();
+    AudioManager.get().playZombieGroan(
+      {
+        x: source.x,
+        y: source.y,
+        noiseRadius: ZOMBIE_GROAN_HEAR_RADIUS,
+        inInterior: source.inInterior,
+        buildingX: source.buildingX,
+        buildingY: source.buildingY,
+      },
+      { ignoreCap: true, variant: source.variant },
+    );
+  }
+
   /** Loop crackle for every lit fireplace in earshot. */
   private syncFireplaceAudio() {
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -1715,6 +1763,7 @@ export class WorldScene extends Phaser.Scene {
       this.clearDoorTarget();
       this.clearFireplaceTarget();
       this.clearTreeChopTarget();
+      this.clearGraveInspectTarget();
       this.stopPlayerMovement();
     } else {
       this.localAimFacing = null;
@@ -2000,6 +2049,7 @@ export class WorldScene extends Phaser.Scene {
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.ashenMilitiaDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenMilitiaCompleteTask(taskId),
+      onChooseLine: (lineId) => this.sendAshenMilitiaChooseLine(lineId),
       onHeal: () => this.sendAshenMilitiaHeal(),
     });
     this.mapOverlayUI = new MapOverlayUI();
@@ -2353,8 +2403,7 @@ export class WorldScene extends Phaser.Scene {
       });
 
       room.onMessage("tutorialEvent", (msg: TutorialEventMessage) => {
-        if (msg?.event === "zombieKill") this.notifyTutorial("kill_zombie");
-        else if (msg?.event === "weaponBroke") this.notifyTip("weapon_broke");
+        if (msg?.event === "weaponBroke") this.notifyTip("weapon_broke");
         else if (msg?.event === "theftWarning") this.notifyTip("theft_warning");
       });
 
@@ -2496,12 +2545,17 @@ export class WorldScene extends Phaser.Scene {
             msg.payload.reason,
           );
         } else if (msg.type === "dialogTaskComplete") {
-          this.closeRedOrderDialog();
-          this.closeAshenMilitiaDialog();
-          this.closeAshenTraderDialog();
-          this.lootPopup?.show(msg.payload.rewards, {
-            header: "You received:",
-          });
+          if (!msg.payload.keepOpen) {
+            this.closeRedOrderDialog();
+            this.closeAshenMilitiaDialog();
+            this.closeAshenTraderDialog();
+          }
+          const header = msg.payload.header ?? "You received:";
+          if (msg.payload.rewards.length > 0 || msg.payload.header) {
+            this.lootPopup?.show(msg.payload.rewards, { header });
+          }
+        } else if (msg.type === "dialogSpoken") {
+          this.ashenMilitiaDialogUI?.speak(msg.payload.lineId, msg.payload.text);
         } else if (msg.type === "dialogHealComplete") {
           this.closeAshenMilitiaDialog();
           this.lootPopup?.show([], {
@@ -2566,6 +2620,8 @@ export class WorldScene extends Phaser.Scene {
             msg.payload.sfxVariant,
             msg.payload,
           );
+        } else if (msg.type === "zombieSpotGroan") {
+          this.playZombieSpotGroan(msg.payload);
         } else if (msg.type === "bulletImpact") {
           this.handleBulletImpact(msg.payload);
         } else if (msg.type === "shotTrace") {
@@ -2851,6 +2907,8 @@ export class WorldScene extends Phaser.Scene {
     this.updateFireplaceHover();
     this.updatePrefabHover();
     this.updateTreeChopHover();
+    this.updateGraveHover();
+    this.updateCellarHover();
     this.updateBuildModeHover();
     this.updateCombatPursuit();
     this.updateInteractPursuit();
@@ -2861,6 +2919,7 @@ export class WorldScene extends Phaser.Scene {
     this.updateStorageBoxPursuit();
     this.updatePrefabPursuit();
     this.updateTreeChopPursuit();
+    this.updateGraveInspectPursuit();
     this.updateTraderProximity();
     this.updateMarketProximity();
     this.updateRedOrderDialogProximity();
@@ -3077,6 +3136,7 @@ export class WorldScene extends Phaser.Scene {
     this.clearFireplaceTarget();
     this.clearPrefabTarget();
     this.clearTreeChopTarget();
+    this.clearGraveInspectTarget();
     this.clearBarracksBargateAnim();
     this.fireplaceUI?.close();
     this.prefabDepositUI?.close();
@@ -4055,6 +4115,10 @@ export class WorldScene extends Phaser.Scene {
           searching &&
           !lockpicking &&
           this.isCrackingSafe(player.searchTargetId);
+        const inspecting =
+          searching &&
+          (player.searchTargetId.startsWith(INSPECT_BLOOD_ID_PREFIX) ||
+            player.searchTargetId.startsWith(INSPECT_GRAVE_ID_PREFIX));
 
         this.entityActionLabels.sync(
           id,
@@ -4073,7 +4137,14 @@ export class WorldScene extends Phaser.Scene {
         this.entityActionLabels.sync(
           id,
           "search",
-          searching && !lockpicking && !crackingSafe,
+          searching && !lockpicking && !crackingSafe && !inspecting,
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "inspect",
+          inspecting,
           labelSprite,
           stackBelowPx,
         );
@@ -4949,7 +5020,6 @@ export class WorldScene extends Phaser.Scene {
     if (getEntryWetness(syncedInventory[msg.equippedClothingSlot]) >= 0.4) {
       this.notifyTip("wet");
     }
-    if (msg.equippedWeaponIndex >= 0) this.notifyTutorial("equip_weapon");
     this.journalUI?.setJewelrySkillXp(equippedJewelrySkillXp(syncedInventory));
     this.refreshInventoryUI();
     this.refreshHotbar();
@@ -5041,7 +5111,7 @@ export class WorldScene extends Phaser.Scene {
     ) {
       AudioManager.get().play("journal");
     }
-    this.onboardingUI?.setFirstSweepState(firstSweepStateOf(next));
+    this.onboardingUI?.setQuestState(next);
   }
 
   private localExtraPockets(): number {
@@ -5305,7 +5375,8 @@ export class WorldScene extends Phaser.Scene {
     this.room?.state?.players?.forEach((player) => {
       if (
         player.searchTargetId &&
-        !player.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX)
+        !player.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX) &&
+        !player.searchTargetId.startsWith(INSPECT_GRAVE_ID_PREFIX)
       ) {
         ids.add(player.searchTargetId);
       }
@@ -7313,6 +7384,13 @@ export class WorldScene extends Phaser.Scene {
     this.treeChopStartSentAt = 0;
   }
 
+  private clearGraveInspectTarget() {
+    this.graveInspectTargetTile = null;
+    this.graveInspectApproachTile = null;
+    this.graveInspectSprint = false;
+    this.graveInspectStartSentAt = 0;
+  }
+
   /** Prefer inventorySync — schema weapon index can lag / desync for the owner. */
   private localEquippedWeaponIndex(): number {
     const me = this.room?.state?.players?.get(this.sessionId);
@@ -8103,6 +8181,202 @@ export class WorldScene extends Phaser.Scene {
 
     this.game.canvas.style.cursor = "pointer";
     this.tileManager?.highlightInteractionTile(tx, ty);
+  }
+
+  private graveUnderPointer(
+    screenX: number,
+    screenY: number,
+  ): { ox: number; oy: number; inscription?: string } | null {
+    const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
+    return this.tileManager?.pickGraveAtWorld(worldPt.x, worldPt.y) ?? null;
+  }
+
+  /** Walk to the neighbour facing the player. Returns false if no stand exists. */
+  private walkBesideBlockedTile(
+    me: { x: number; y: number },
+    tx: number,
+    ty: number,
+    sprint: boolean,
+    now: number,
+  ): { x: number; y: number } | null {
+    const goal = blockedTileApproachGoal(me.x, me.y, tx, ty, (nx, ny) =>
+      this.overworldMoveWalkable(nx, ny),
+    );
+    if (!goal) return null;
+    const ax = Math.floor(goal.x);
+    const ay = Math.floor(goal.y);
+    this.sendMoveToCoords(ax + 0.5, ay + 0.5, sprint);
+    this.drawMoveTarget(ax + 0.5, ay + 0.5, sprint);
+    this.moveTargetFadeUntil = now + 800;
+    this.lastPursuitMoveSentAt = now;
+    return { x: ax, y: ay };
+  }
+
+  /**
+   * Click a cross. Named graves walk up and inspect. The unmarked cross
+   * only walks you beside it.
+   */
+  private tryInteractGraveAt(screenX: number, screenY: number): boolean {
+    if (!this.room || this.structureBuildMode) return false;
+    const me = this.room.state?.players?.get(this.sessionId);
+    if (!me?.alive || me.inInterior) return false;
+
+    const grave = this.graveUnderPointer(screenX, screenY);
+    if (!grave) return false;
+
+    const now = Date.now();
+    const clickKey = `${grave.ox},${grave.oy}`;
+    const isDoubleClick =
+      clickKey === this.lastGraveClickKey &&
+      now - this.lastGraveClickAt < WorldScene.DOUBLE_CLICK_MS;
+    this.lastGraveClickKey = clickKey;
+    this.lastGraveClickAt = now;
+    this.lastClickTime = now;
+
+    this.clearCombatTarget();
+    this.clearInteractTarget();
+    this.clearLootTarget();
+    this.clearDoorTarget();
+    this.clearFireplaceTarget();
+    this.clearTreeChopTarget();
+
+    const sprint = isDoubleClick && (me.stamina ?? 0) > 0;
+    if (!graveInscriptionAt(grave.ox, grave.oy)) {
+      this.clearGraveInspectTarget();
+      this.walkBesideBlockedTile(me, grave.ox, grave.oy, sprint, now);
+      return true;
+    }
+
+    this.graveInspectTargetTile = { x: grave.ox, y: grave.oy };
+    this.graveInspectSprint = sprint;
+    this.graveInspectStartSentAt = 0;
+
+    if (this.tryStartGraveInspect(me, grave.ox, grave.oy)) return true;
+    if (playerReadyToInspectGrave(me.x, me.y, grave.ox, grave.oy)) return true;
+
+    const approach = this.walkBesideBlockedTile(
+      me,
+      grave.ox,
+      grave.oy,
+      sprint,
+      now,
+    );
+    if (!approach) {
+      this.clearGraveInspectTarget();
+      return true;
+    }
+    this.graveInspectApproachTile = approach;
+    return true;
+  }
+
+  /**
+   * True once the inspect channel is running. While adjacent, keep retrying
+   * the start and do not send moveTo: a move cancels the channel.
+   */
+  private tryStartGraveInspect(
+    me: { x: number; y: number; searchTargetId?: string },
+    tx: number,
+    ty: number,
+  ): boolean {
+    if (!this.room || !graveInscriptionAt(tx, ty)) return false;
+    const id = graveInspectTargetId(tx, ty);
+    if (me.searchTargetId === id) {
+      this.clearGraveInspectTarget();
+      return true;
+    }
+    if (this.isBusyWithTimedAction(me)) return false;
+    if (!playerReadyToInspectGrave(me.x, me.y, tx, ty)) return false;
+
+    const now = Date.now();
+    if (now - this.graveInspectStartSentAt < 350) return false;
+
+    const message: ClientMessage = {
+      type: "inspectGrave",
+      payload: { x: tx, y: ty },
+    };
+    this.room.send("action", message);
+    this.beginLocalTimedAction("search", GRAVE_INSPECT_MS, "Inspecting", true);
+    this.graveInspectStartSentAt = now;
+    return false;
+  }
+
+  private updateGraveInspectPursuit() {
+    if (!this.graveInspectTargetTile) return;
+    const { x: tx, y: ty } = this.graveInspectTargetTile;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me?.alive || me.inInterior || !graveInscriptionAt(tx, ty)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryStartGraveInspect(me, tx, ty)) return;
+    if (this.isBusyWithTimedAction(me)) return;
+    if (playerReadyToInspectGrave(me.x, me.y, tx, ty)) return;
+
+    const now = Date.now();
+    if (now - this.lastPursuitMoveSentAt <= 300) return;
+
+    let ax = this.graveInspectApproachTile?.x;
+    let ay = this.graveInspectApproachTile?.y;
+    if (ax == null || ay == null) {
+      const goal = blockedTileApproachGoal(me.x, me.y, tx, ty, (nx, ny) =>
+        this.overworldMoveWalkable(nx, ny),
+      );
+      if (!goal) {
+        this.clearGraveInspectTarget();
+        return;
+      }
+      ax = Math.floor(goal.x);
+      ay = Math.floor(goal.y);
+      this.graveInspectApproachTile = { x: ax, y: ay };
+    }
+
+    const sprint =
+      this.graveInspectSprint &&
+      me.stamina > 0 &&
+      Math.max(Math.abs(Math.floor(me.x) - ax), Math.abs(Math.floor(me.y) - ay)) > 0;
+    this.sendMoveToCoords(ax + 0.5, ay + 0.5, sprint);
+    this.lastPursuitMoveSentAt = now;
+  }
+
+  private updateGraveHover(
+    pointer: { x: number; y: number } = this.input.activePointer,
+  ) {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (
+      !me?.alive ||
+      me.inInterior ||
+      this.isOverlayOpen() ||
+      this.chatOpen ||
+      this.structureBuildMode
+    ) {
+      return;
+    }
+    const grave = this.graveUnderPointer(pointer.x, pointer.y);
+    if (!grave || !graveInscriptionAt(grave.ox, grave.oy)) return;
+    this.game.canvas.style.cursor = "pointer";
+    this.tileManager?.highlightInteractionTile(grave.ox, grave.oy);
+  }
+
+  private updateCellarHover(
+    pointer: { x: number; y: number } = this.input.activePointer,
+  ) {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (
+      !me?.alive ||
+      me.inInterior ||
+      this.isOverlayOpen() ||
+      this.chatOpen ||
+      this.structureBuildMode
+    ) {
+      return;
+    }
+    const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const cellar = this.tileManager?.pickCellarAtWorld(worldPt.x, worldPt.y);
+    if (!cellar) return;
+    const cart = isoToCartesian(worldPt.x, worldPt.y);
+    const near = nearestCellarTile(cellar, cart.x, cart.y);
+    this.game.canvas.style.cursor = "pointer";
+    this.tileManager?.highlightInteractionTile(near.x, near.y);
   }
 
   private clearOverworldTempWallSprites() {
@@ -9077,13 +9351,34 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    if (this.tryBuildWallAt(screenX, screenY)) return;
-    if (this.tryInteractDoorAt(screenX, screenY)) return;
-    if (this.tryInteractBargateAt(screenX, screenY)) return;
-    if (this.tryInteractFireplaceAt(screenX, screenY)) return;
-    if (this.tryInteractStorageBoxAt(screenX, screenY)) return;
-    if (this.tryInteractPrefabAt(screenX, screenY)) return;
-    if (this.tryInteractTreeChopAt(screenX, screenY)) return;
+    if (this.tryBuildWallAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractDoorAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractBargateAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractFireplaceAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractStorageBoxAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractPrefabAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
+    if (this.tryInteractTreeChopAt(screenX, screenY)) {
+      this.clearGraveInspectTarget();
+      return;
+    }
 
     // The outside doorway always leaves. A zombie or a body on that strip must
     // not turn the click into a fight or a search.
@@ -9100,6 +9395,7 @@ export class WorldScene extends Phaser.Scene {
         this.clearDoorTarget();
         this.clearFireplaceTarget();
         this.clearTreeChopTarget();
+        this.clearGraveInspectTarget();
         this.handleCombatClick();
         return;
       }
@@ -9112,6 +9408,7 @@ export class WorldScene extends Phaser.Scene {
         this.clearDoorTarget();
         this.clearFireplaceTarget();
         this.clearTreeChopTarget();
+        this.clearGraveInspectTarget();
         this.handleInteractClick();
         return;
       }
@@ -9126,8 +9423,10 @@ export class WorldScene extends Phaser.Scene {
         this.clearDoorTarget();
         this.clearFireplaceTarget();
         this.clearTreeChopTarget();
+        this.clearGraveInspectTarget();
         return;
       }
+      if (this.tryInteractGraveAt(screenX, screenY)) return;
     }
     this.lastLootClickId = null;
     // Clicking ground or building → cancel any pursuit and move
@@ -9137,6 +9436,7 @@ export class WorldScene extends Phaser.Scene {
     this.clearDoorTarget();
     this.clearFireplaceTarget();
     this.clearTreeChopTarget();
+    this.clearGraveInspectTarget();
     // Show building highlight if clicking a wall tile
     const worldPt2 = this.cameras.main.getWorldPoint(screenX, screenY);
     const cart2 = isoToCartesian(worldPt2.x, worldPt2.y);
@@ -9203,6 +9503,21 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // Cellar art rises above its tiles. A click on the door targets that tile
+    // so the server can step onto it and enter.
+    if (!me?.inInterior) {
+      const cellar = this.tileManager?.pickCellarAtWorld(world.x, world.y);
+      if (cellar) {
+        const near = nearestCellarTile(
+          cellar,
+          me?.x ?? clickTX + 0.5,
+          me?.y ?? clickTY + 0.5,
+        );
+        clickTX = near.x;
+        clickTY = near.y;
+      }
+    }
+
     let tileX = clickTX + 0.5;
     let tileY = clickTY + 0.5;
 
@@ -9263,23 +9578,26 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     } else if (isWallTile(clickTX, clickTY)) {
-      const bld = getBuildingAt(clickTX, clickTY);
-      if (bld) {
-        const run = buildingEntranceRun(bld);
-        const mid = (run.span - 1) * 0.5;
-        tileX = run.x + 0.5 + (run.face === "SE" ? 0 : mid);
-        tileY = run.y + 0.5 + (run.face === "SE" ? mid : 0);
-      } else {
-        const approach = blockedTileApproachGoal(
-          me?.x ?? clickTX + 0.5,
-          me?.y ?? clickTY + 0.5,
-          clickTX,
-          clickTY,
-          (tx, ty) => this.overworldMoveWalkable(tx, ty),
-        );
-        if (approach) {
-          tileX = approach.x;
-          tileY = approach.y;
+      const cellarDoor = getCellarAt(clickTX, clickTY);
+      if (!cellarDoor) {
+        const bld = getBuildingAt(clickTX, clickTY);
+        if (bld) {
+          const run = buildingEntranceRun(bld);
+          const mid = (run.span - 1) * 0.5;
+          tileX = run.x + 0.5 + (run.face === "SE" ? 0 : mid);
+          tileY = run.y + 0.5 + (run.face === "SE" ? mid : 0);
+        } else {
+          const approach = blockedTileApproachGoal(
+            me?.x ?? clickTX + 0.5,
+            me?.y ?? clickTY + 0.5,
+            clickTX,
+            clickTY,
+            (tx, ty) => this.overworldMoveWalkable(tx, ty),
+          );
+          if (approach) {
+            tileX = approach.x;
+            tileY = approach.y;
+          }
         }
       }
     } else if (this.isOverworldMovementBlocked(clickTX, clickTY)) {
@@ -10028,7 +10346,7 @@ export class WorldScene extends Phaser.Scene {
       const stairs = furnitureIsStairs(target.objectType);
       if (craftStation || furnace || stairs) {
         // Stations and stairs stay usable even if previously flagged searched/depleted.
-      } else if (target.depleted || !furnitureIsSearchable(target.objectType)) {
+      } else if (!this.searchableCanBeClicked(target)) {
         this.clearLootTarget();
         return false;
       }
@@ -10095,7 +10413,6 @@ export class WorldScene extends Phaser.Scene {
         target.cracked || target.searched,
       );
       this.room.send("action", message);
-      this.notifyTutorial("search");
       return true;
     }
 
@@ -10837,6 +11154,51 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
+  private isBloodInspectTarget(objectType?: string, id?: string): boolean {
+    return (
+      objectType === "bloodstain" ||
+      (id ?? "").startsWith(INSPECT_BLOOD_ID_PREFIX)
+    );
+  }
+
+  /** Blood stain or a named grave. Both use the quiet 5s inspect channel. */
+  private isInspectAction(objectType?: string, id?: string): boolean {
+    return (
+      this.isBloodInspectTarget(objectType, id) ||
+      (id ?? "").startsWith(INSPECT_GRAVE_ID_PREFIX)
+    );
+  }
+
+  /** Blood decals, and Coleman's bed even after someone else emptied it. */
+  private searchableCanBeClicked(item: {
+    objectType: string;
+    depleted?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): boolean {
+    if (item.objectType === "bloodstain") {
+      const quest = parseQuestsJson(this.cachedQuestsJson).quests[
+        QUEST_ID_DEAL_WITH_DEVIL
+      ];
+      return (
+        quest?.status === "active" &&
+        quest.targetX === item.buildingX &&
+        quest.targetY === item.buildingY
+      );
+    }
+    if (item.objectType === "bed") {
+      const quest = parseQuestsJson(this.cachedQuestsJson).quests[QUEST_ID_TWO_BEHIND];
+      if (
+        quest?.status === "active" &&
+        quest.targetX === item.buildingX &&
+        quest.targetY === item.buildingY
+      ) {
+        return true;
+      }
+    }
+    return !item.depleted && furnitureIsSearchable(item.objectType);
+  }
+
   private beginOptimisticSearch(
     kind: "furniture" | "loot" = "loot",
     objectType?: string,
@@ -10844,17 +11206,24 @@ export class WorldScene extends Phaser.Scene {
   ) {
     const cracking =
       kind === "furniture" && furnitureNeedsCrack(objectType ?? "") && !searched;
+    const inspecting = this.isBloodInspectTarget(objectType);
     this.beginLocalTimedAction(
       "search",
-      cracking ? SAFE_CRACK_DURATION_MS : this.localSkillMods().searchDurationMs,
-      cracking ? "Cracking" : "Searching",
+      inspecting
+        ? STORY_INSPECT_MS
+        : cracking
+          ? SAFE_CRACK_DURATION_MS
+          : this.localSkillMods().searchDurationMs,
+      inspecting ? "Inspecting" : cracking ? "Cracking" : "Searching",
       true,
     );
     const audio = AudioManager.get();
-    if (cracking) audio.playLockpick();
+    if (inspecting) {
+      // Quiet. The stain is not a container.
+    } else if (cracking) audio.playLockpick();
     else audio.playSearch(kind === "furniture" ? "furniture" : "body", objectType);
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (me && this.isOutsideTown(me)) this.notifyTip("search_noise");
+    if (!inspecting && me && this.isOutsideTown(me)) this.notifyTip("search_noise");
   }
 
   private beginOptimisticReload() {
@@ -11191,7 +11560,6 @@ export class WorldScene extends Phaser.Scene {
       type: "fire",
       payload: { targetX: aim.x, targetY: aim.y },
     } satisfies ClientMessage);
-    this.notifyTutorial("attack");
   }
 
   /**
@@ -11239,7 +11607,6 @@ export class WorldScene extends Phaser.Scene {
       payload: { targetX: aim.x, targetY: aim.y, sfxVariant },
     } satisfies ClientMessage);
     this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
-    this.notifyTutorial("attack");
     this.notifyTip("gunshot");
   }
 
@@ -11294,7 +11661,6 @@ export class WorldScene extends Phaser.Scene {
       payload: { targetX: aimX, targetY: aimY, targetId, sfxVariant },
     } satisfies ClientMessage);
     if (!melee) this.playSyncedGunshot(me.equippedWeaponIndex, sfxVariant, me);
-    this.notifyTutorial("attack");
     if (!melee) this.notifyTip("gunshot");
   }
 
@@ -11684,7 +12050,7 @@ export class WorldScene extends Phaser.Scene {
         const stairs = furnitureIsStairs(item.objectType);
         if (craftStation || furnace || stairs) {
           // Stations and stairs stay interactable even if previously marked searched.
-        } else if (item.depleted || !furnitureIsSearchable(item.objectType)) {
+        } else if (!this.searchableCanBeClicked(item)) {
           return false;
         }
         if (me.inInterior) {
@@ -12268,6 +12634,8 @@ export class WorldScene extends Phaser.Scene {
     const indoor = !!me?.inInterior;
     const alwaysLit =
       indoor && !!me && buildingInteriorIsPowered(me.buildingX, me.buildingY);
+    const underground =
+      indoor && !!me && isCellarInterior(me.buildingX, me.buildingY);
     const sky = parseSky(this.room.state.sky);
     const precip = parsePrecip(this.room.state.weather);
     this.weatherFx?.update(
@@ -12279,6 +12647,7 @@ export class WorldScene extends Phaser.Scene {
       this.room.state.lightningFlashAt ?? 0,
       this.room.state.lightningThunderAt ?? 0,
       alwaysLit,
+      underground,
     );
     if (this.weatherFx?.consumeThunder()) {
       AudioManager.get().playThunder(indoor);
@@ -12390,6 +12759,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.dayNightLighting.update(worldTimeMs, indoor, lights, {
       alwaysLit,
+      underground,
       firelit,
       dtMs: dt,
       cloudyAmount: weather.cloudy,
@@ -12453,19 +12823,6 @@ export class WorldScene extends Phaser.Scene {
 
     if (me.inInterior === false) {
       ui.notifyStep("leave_hospital");
-      if (!isInBirchport(me.x, me.y)) ui.notifyStep("leave_town");
-    }
-    if (me.inInterior) {
-      const target = parseQuestsJson(this.cachedQuestsJson).quests[
-        QUEST_ID_FIRST_SWEEP
-      ];
-      if (
-        target?.status === "active" &&
-        target.targetX === me.buildingX &&
-        target.targetY === me.buildingY
-      ) {
-        ui.notifyStep("enter_target");
-      }
     }
 
     if (me.hunger <= HUNGER_MAX * 0.25) ui.notifyTip("hungry");
@@ -12773,11 +13130,19 @@ export class WorldScene extends Phaser.Scene {
     } else if (searching) {
       const target = this.searchablesCache.find((item) => item.id === me.searchTargetId);
       const cracking = this.isCrackingSafe(me.searchTargetId);
+      const inspecting = this.isInspectAction(
+        target?.objectType,
+        me.searchTargetId,
+      );
       if (target || !this.localTimedAction || this.localTimedAction.kind !== "search") {
         this.beginLocalTimedAction(
           "search",
-          cracking ? SAFE_CRACK_DURATION_MS : this.localSkillMods().searchDurationMs,
-          cracking ? "Cracking" : "Searching",
+          inspecting
+            ? STORY_INSPECT_MS
+            : cracking
+              ? SAFE_CRACK_DURATION_MS
+              : this.localSkillMods().searchDurationMs,
+          inspecting ? "Inspecting" : cracking ? "Cracking" : "Searching",
           false,
         );
       } else {
@@ -12852,7 +13217,11 @@ export class WorldScene extends Phaser.Scene {
           age >= action.durationMs - 150
         ) {
           // A crack has no loot window. A search holds at 100% until the loot UI.
-          if (action.label === "Cracking" || age > action.durationMs + 3000) {
+          if (
+            action.label === "Cracking" ||
+            action.label === "Inspecting" ||
+            age > action.durationMs + 3000
+          ) {
             this.localTimedAction = null;
             AudioManager.get().stopSearch();
             AudioManager.get().stopLockpick();
@@ -17185,6 +17554,17 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private sendAshenMilitiaChooseLine(lineId: string) {
+    if (!this.room || !this.ashenMilitiaDialogUI?.isOpen()) return;
+    const npcId = this.ashenMilitiaDialogUI.getNpcId();
+    if (!npcId) return;
+    const message: ClientMessage = {
+      type: "dialogChoose",
+      payload: { npcId, lineId },
+    };
+    this.room.send("action", message);
+  }
+
   private sendAshenMilitiaCompleteTask(taskId: string) {
     if (!this.room || !this.ashenMilitiaDialogUI?.isOpen()) return;
     const npcId = this.ashenMilitiaDialogUI.getNpcId();
@@ -17642,10 +18022,3 @@ function isFirearmItemId(itemId: string): boolean {
   return !!weapon && !isMeleeWeapon(weapon);
 }
 
-function firstSweepStateOf(state: PlayerQuestsState): FirstSweepState {
-  const q = state.quests[QUEST_ID_FIRST_SWEEP];
-  if (!q) return "none";
-  if (q.status === "completed" || (q.timesCompleted ?? 0) > 0) return "done";
-  if (q.status !== "active") return "none";
-  return (q.progress.clear_house ?? 0) >= 1 ? "cleared" : "active";
-}

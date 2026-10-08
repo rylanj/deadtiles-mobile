@@ -27,7 +27,7 @@ import {
   getEntryWetness,
   isListenOnlyRadioFreq,
   isRadioItem,
-  jewelrySkillXpForItem,
+  wornGearEffectHint,
   getItemDefinition,
   getMaxDurability,
   WEAPON_SLOT_COUNT,
@@ -605,9 +605,13 @@ export class InventoryUI {
           : "";
       const wet = getEntryWetness(slot);
       const wetLabel = wet > 0.005 ? ` · ${Math.round(wet * 100)}% wet` : "";
+      const effect = wornGearEffectHint(slot.id);
+      const effectLabel = effect ? ` · ${effect}` : "";
+      const itemName = def?.name ?? slot.id;
+      if (effect) cell.title = `${itemName} · ${effect}`;
       cell.setAttribute(
         "aria-label",
-        `${def?.name ?? slot.id}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${freqLabel}${dur}${wetLabel}`,
+        `${itemName}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${freqLabel}${dur}${wetLabel}${effectLabel}`,
       );
 
       const toggleEquip = () => {
@@ -636,7 +640,7 @@ export class InventoryUI {
           if (!Number.isFinite(toSlot) || toSlot === index) return false;
           const fromItem = this.currentInventory[index];
           if (!fromItem) return false;
-          if (shift) {
+          if (shift && shiftSplitQuantity(fromItem.quantity) >= 1) {
             return canSplitInventoryStackHalf(
               this.currentInventory,
               index,
@@ -656,7 +660,9 @@ export class InventoryUI {
         onDropOn: (target, shift) => {
           const toSlot = Number(target.dataset.slotIndex);
           if (!Number.isFinite(toSlot) || toSlot === index) return;
-          this.handlers.onMoveSlot(index, toSlot, shift);
+          const qty = this.currentInventory[index]?.quantity ?? 0;
+          const split = shift && shiftSplitQuantity(qty) >= 1;
+          this.handlers.onMoveSlot(index, toSlot, split);
           this.selectedSlot = toSlot;
         },
         shiftGhostQuantity: (shift) => {
@@ -777,10 +783,8 @@ export class InventoryUI {
     else if (wet > 0.005) zoneHint += ` · ${Math.round(wet * 100)}% wet`;
     const loadedRounds = this.slotLoadedRounds(this.selectedSlot, slot.id);
     if (loadedRounds > 0) zoneHint += ` · ${loadedRounds} loaded`;
-    const wornXp = jewelrySkillXpForItem(slot.id);
-    if (wornXp > 0) {
-      zoneHint += ` · +${wornXp} Bartering and Persuasion XP while worn`;
-    }
+    const effect = wornGearEffectHint(slot.id);
+    if (effect) zoneHint += ` · ${effect}`;
     if (isRadioItem(slot.id)) {
       const freq = getEntryRadioFreq(slot);
       zoneHint +=

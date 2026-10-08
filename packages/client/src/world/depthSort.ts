@@ -97,7 +97,8 @@ export function interiorFurnitureDepthBias(objectType: string): number {
     objectType === "hospitalbed2" ||
     objectType === "hospitalbed3" ||
     objectType === "motelbed" ||
-    objectType === "militarybed"
+    objectType === "militarybed" ||
+    objectType === "jailbed"
   ) {
     return LONG_BED_DEPTH_BIAS;
   }

@@ -172,6 +172,13 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
 export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDialogLine[] =
   [
     {
+      id: "you_wanted",
+      player: "You wanted to speak to me?",
+      npc: [
+        "I wanted to know what kind of trouble you got yourself into. The patrol that rescued you has since gone missing. They have not answered a radio call. That is not like them. They were with the National Guard before the world turned to shit. It is a shame you do not remember what happened before they brought you to the hospital.",
+      ],
+    },
+    {
       id: "who",
       player: "Who are you?",
       npc: [

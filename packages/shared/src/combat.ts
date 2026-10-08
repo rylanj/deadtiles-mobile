@@ -4,6 +4,7 @@ import {
   getStandingTreeAt,
   isBuildingTile,
 } from "./worldgen.js";
+import { getCellarAt } from "./cellar.js";
 import type { WorldBounds } from "./worldBounds.js";
 import { isInWorldBounds } from "./worldBounds.js";
 import {
@@ -571,7 +572,7 @@ export function fireRaycast(params: {
 
     if (!inInterior && isInWorldBounds(cx, cy, bounds)) {
       // Buildings fully block. Trees / wooden fences are soft cover only.
-      if (isBuildingTile(tx, ty)) {
+      if (isBuildingTile(tx, ty) || getCellarAt(tx, ty)) {
         return { kind: "impact", x: cx, y: cy, treeCover, furnitureCover };
       }
       if (
@@ -880,7 +881,7 @@ export function freeAimRaycast(params: {
     }
 
     if (isInWorldBounds(cx, cy, bounds)) {
-      if (isBuildingTile(tx, ty)) {
+      if (isBuildingTile(tx, ty) || getCellarAt(tx, ty)) {
         return { ...stopBefore(t), surface: "building" };
       }
       if (getStandingTreeAt(tx, ty)) {
@@ -1000,7 +1001,7 @@ export function hasEntityLineOfSight(params: {
     if (blocksSightAt?.(tx, ty)) return false;
 
     if (!inInterior) {
-      if (isBuildingTile(tx, ty)) return false;
+      if (isBuildingTile(tx, ty) || getCellarAt(tx, ty)) return false;
       continue;
     }
 

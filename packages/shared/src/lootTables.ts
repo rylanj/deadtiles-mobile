@@ -126,7 +126,11 @@ const SUITCASE: readonly LootRoll[] = [
   pct("small_spring", 2),
 ];
 
-/** Keys are searchable furniture types. An empty list rolls nothing. */
+/**
+ * Keys are searchable furniture types. An empty list rolls nothing.
+ * `watch` is a rarity token. Each unit becomes one named watch, with old
+ * and silver pieces common and luxury pieces rare.
+ */
 export const CONTAINER_LOOT: Record<string, readonly LootRoll[]> = {
   desk: [
     pct("weapon_hammer", 10),
@@ -566,6 +570,7 @@ export const CONTAINER_LOOT: Record<string, readonly LootRoll[]> = {
     pct("gold_earrings", 12),
     pct("gold_chain", 10),
   ],
+  /** Watch case. High chance of one watch, then the rarity weights apply. */
   retailcase2: [pct("watch", 70)],
   /**
    * Manager's safe. Junk is common. Cash, jewelry, sidearms, parts, and ammo

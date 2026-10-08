@@ -52,6 +52,8 @@ export type AnimatedFurnitureType =
   | "minifridge"
   | "groundbackpack"
   | "militarybed"
+  | "jailbed"
+  | "jailtoilet"
   | "footlocker"
   | "kitbag"
   | "camptable"
@@ -1191,7 +1193,9 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
   ...idlePair("retailshelf2", "Furniture/RetailShelf2", "RetailShelf2"),
   ...idlePair("retailshelf3", "Furniture/RetailShelf3", "RetailShelf3"),
   ...idlePair("retailcase1", "Furniture/RetailCase1", "RetailCase1", 9),
-  ...idlePair("retailcase2", "Furniture/RetailCase2", "RetailCase2"),
+  ...idlePair("retailcase2", "Furniture/RetailCase2", "RetailCase2", 9),
   ...idlePair("retailcheckout1", "Furniture/RetailCheckout1", "RetailCheckout1"),
   ...idlePair("safe1", "Furniture/Safe1", "Safe1", 9),
+  ...idlePair("jailbed", "Furniture/JailBed1", "JailBed1"),
+  ...idlePair("jailtoilet", "Furniture/JailToilet1", "JailToilet1"),
 ];

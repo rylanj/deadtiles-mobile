@@ -10,6 +10,9 @@ import {
   isQuestKeepsakeItem,
   lootCategoryItemIds,
   maxStackForItem,
+  rollWatchVariant,
+  WATCH_ITEM_ID,
+  WATCH_LOOT,
   removeFromInventorySlot,
   type Inventory,
   type InventoryEntry,
@@ -126,6 +129,7 @@ export const ITEM_TRADE_VALUES: Record<string, number> = {
   caravan_manifest: 0,
   wagon_note: 0,
   supply_list: 0,
+  coleman_note: 0,
   gold_ring: 150,
   silver_chain: 90,
   silver_ring: 50,
@@ -150,6 +154,7 @@ export const ITEM_TRADE_VALUES: Record<string, number> = {
   magazine_bartering: 160,
   magazine_lockpicking: 160,
   watch: 80,
+  ...Object.fromEntries(WATCH_LOOT.map((watch) => [watch.id, watch.value])),
   handheld_radio: 150,
   canned_beans: 20,
   canned_tuna: 16,
@@ -798,6 +803,21 @@ function traderShopLimits(traderId?: string): {
   };
 }
 
+/** A shop `watch` token becomes one named watch per unit. */
+function addShopStock(
+  stock: InventoryEntry[],
+  itemId: string,
+  quantity: number,
+): InventoryEntry[] {
+  if (itemId !== WATCH_ITEM_ID) return addToTraderStock(stock, itemId, quantity);
+  let next = stock;
+  const count = Math.max(0, Math.floor(quantity));
+  for (let i = 0; i < count; i++) {
+    next = addToTraderStock(next, rollWatchVariant(Math.random), 1);
+  }
+  return next;
+}
+
 /** Non-deterministic shop stock + banknote float (fresh roll each call). */
 export function generateTraderShop(traderId?: string): TraderShopState {
   const limits = traderShopLimits(traderId);
@@ -824,7 +844,7 @@ export function generateTraderShop(traderId?: string): TraderShopState {
         qty = Math.min(qty, limits.itemCount - stock.length);
       }
       if (qty <= 0) break;
-      stock = addToTraderStock(stock, picked.id, qty);
+      stock = addShopStock(stock, picked.id, qty);
     }
   } else {
     const picks = Math.min(limits.itemCount, available.length);
@@ -835,7 +855,7 @@ export function generateTraderShop(traderId?: string): TraderShopState {
       const qty =
         picked.minQty +
         Math.floor(Math.random() * (picked.maxQty - picked.minQty + 1));
-      stock = addToTraderStock(stock, picked.id, qty);
+      stock = addShopStock(stock, picked.id, qty);
     }
   }
   return { banknotes, stock, capacity: limits.capacity };

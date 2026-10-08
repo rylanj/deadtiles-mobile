@@ -87,7 +87,7 @@ export type DropItemMessage = {
 export type MoveInventorySlotMessage = {
   fromSlot: number;
   toSlot: number;
-  /** Move half the stack onto a slot that already holds the same item. */
+  /** Move half the stack onto an empty slot, or onto the same item. */
   splitHalf?: boolean;
 };
 
@@ -207,6 +207,12 @@ export type DialogCompleteTaskMessage = {
   taskId: string;
 };
 
+/** Player picked a dialog line that can advance a story quest. */
+export type DialogChooseMessage = {
+  npcId: string;
+  lineId: string;
+};
+
 /** Pay Doctor Clark for a full heal while talking. */
 export type DialogHealMessage = {
   npcId: string;
@@ -309,6 +315,11 @@ export type FireplaceExtinguishMessage = {
 
 /** Chop a standing overworld tree with an equipped hatchet. */
 export type ChopTreeMessage = {
+  x: number;
+  y: number;
+};
+
+export type InspectGraveMessage = {
   x: number;
   y: number;
 };
@@ -438,6 +449,7 @@ export type ClientMessage =
   | { type: "safeDepositPay"; payload: MarketOpenMessage }
   | { type: "safeDepositClose" }
   | { type: "dialogOpen"; payload: DialogOpenMessage }
+  | { type: "dialogChoose"; payload: DialogChooseMessage }
   | { type: "dialogCompleteTask"; payload: DialogCompleteTaskMessage }
   | { type: "dialogHeal"; payload: DialogHealMessage }
   | { type: "dialogClose" }
@@ -455,6 +467,7 @@ export type ClientMessage =
   | { type: "fireplaceCook"; payload: FireplaceCookMessage }
   | { type: "fireplaceClose" }
   | { type: "chopTree"; payload: ChopTreeMessage }
+  | { type: "inspectGrave"; payload: InspectGraveMessage }
   | { type: "placeTempWall"; payload: PlaceTempWallMessage }
   | { type: "toggleStructureBuild" }
   | { type: "placeStructure"; payload: PlaceStructureMessage }
@@ -762,6 +775,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isIdString(p.npcId)) return null;
       return { type, payload: { npcId: p.npcId } };
     }
+    case "dialogChoose": {
+      if (!isIdString(p.npcId) || !isIdString(p.lineId)) return null;
+      return { type, payload: { npcId: p.npcId, lineId: p.lineId } };
+    }
     case "dialogCompleteTask": {
       if (!isIdString(p.npcId) || !isIdString(p.taskId)) return null;
       return { type, payload: { npcId: p.npcId, taskId: p.taskId } };
@@ -848,6 +865,7 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     case "fireplaceLight":
     case "fireplaceExtinguish":
     case "chopTree":
+    case "inspectGrave":
     case "prefabOpen":
     case "prefabStartBuild":
     case "prefabCancel": {
@@ -1038,8 +1056,20 @@ export type ServerMessage =
         ashenReputation?: number;
         ashenMilitiaReputation?: number;
         rewards: { id: string; quantity: number; name: string }[];
+        /** Replaces "You received:" when the turn-in is mostly a briefing. */
+        header?: string;
+        /** Leave the dialog open so the next story quest can be accepted. */
+        keepOpen?: boolean;
         /** Updated rolling-window counts for capped tasks. */
         taskCompletionsJson?: string;
+      };
+    }
+  | {
+      type: "dialogSpoken";
+      payload: {
+        npcId: string;
+        lineId: string;
+        text: string;
       };
     }
   | {
@@ -1114,6 +1144,18 @@ export type ServerMessage =
         y: number;
         weaponIndex: number;
         sfxVariant: number;
+        inInterior: boolean;
+        buildingX: number;
+        buildingY: number;
+      };
+    }
+  | {
+      /** A zombie just spotted a player. Heard by anyone in groan range. */
+      type: "zombieSpotGroan";
+      payload: {
+        x: number;
+        y: number;
+        variant: number;
         inInterior: boolean;
         buildingX: number;
         buildingY: number;

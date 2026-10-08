@@ -4,19 +4,20 @@ import {
   CONTROLS_MOBILE,
   ONBOARDING_STEP_IDS,
   ONBOARDING_STEPS,
+  QUEST_ID_AYE_CAPTAIN,
+  QUEST_ID_FOUND_ON_THE_ROAD,
+  QUEST_ID_TWO_BEHIND,
   TUTORIAL_TIPS,
   onboardingChapterTitle,
   parseTutorialFlagsJson,
   type OnboardingStepDef,
   type OnboardingStepId,
+  type PlayerQuestsState,
   type TutorialCompleteStepMessage,
   type TutorialFlagsState,
   type TutorialTipId,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
-
-/** Where the player is with Davis's First Sweep job. */
-export type FirstSweepState = "none" | "active" | "cleared" | "done";
 
 export type OnboardingUIHandlers = {
   send: (payload: TutorialCompleteStepMessage) => void;
@@ -33,7 +34,8 @@ const STEP_DONE_FLASH_MS = 900;
 export class OnboardingUI {
   private flags: TutorialFlagsState = parseTutorialFlagsJson("");
   private loaded = false;
-  private sweep: FirstSweepState = "none";
+  private quests: PlayerQuestsState = { quests: {} };
+  private questsReady = false;
   private mobile = isMobileDevice();
   private currentId: OnboardingStepId | null = null;
 
@@ -213,9 +215,9 @@ export class OnboardingUI {
     this.render();
   }
 
-  setFirstSweepState(state: FirstSweepState) {
-    if (state === this.sweep) return;
-    this.sweep = state;
+  setQuestState(state: PlayerQuestsState) {
+    this.quests = state;
+    this.questsReady = true;
     if (this.loaded) this.render();
   }
 
@@ -300,29 +302,54 @@ export class OnboardingUI {
     }
   }
 
+  private storyActive(questId: string): boolean {
+    return this.quests.quests[questId]?.status === "active";
+  }
+
+  private storyDone(questId: string): boolean {
+    const quest = this.quests.quests[questId];
+    return quest?.status === "completed" || (quest?.timesCompleted ?? 0) > 0;
+  }
+
   /**
-   * First step not yet done. First Sweep steps finish themselves once the
-   * job is turned in, and point back at "take the job" if it was dropped.
+   * First step not yet done. Story steps finish themselves once the quest
+   * moves on, and point back at the accept step if it was dropped.
    */
   private resolveCurrent(): OnboardingStepId | null {
-    const steps = this.flags.steps ?? {};
+    const ayeOn = this.storyActive(QUEST_ID_AYE_CAPTAIN) || this.storyDone(QUEST_ID_AYE_CAPTAIN);
+    const ayeDone = this.storyDone(QUEST_ID_AYE_CAPTAIN);
+    const twoOn = this.storyActive(QUEST_ID_TWO_BEHIND) || this.storyDone(QUEST_ID_TWO_BEHIND);
+    const noteFound = this.storyDone(QUEST_ID_TWO_BEHIND);
     const autoDone: OnboardingStepId[] = [];
-    if (this.sweep !== "none") autoDone.push("talk_davis", "accept_first_sweep");
-    if (this.sweep === "cleared" || this.sweep === "done") autoDone.push("clear_target");
-    if (this.sweep === "done") autoDone.push("turn_in_first_sweep");
+    if (ayeOn) autoDone.push("accept_aye_captain");
+    if (ayeDone) autoDone.push("talk_davis", "turn_in_aye");
+    if (twoOn) autoDone.push("accept_two_behind");
+    if (noteFound) autoDone.push("search_coleman");
+    const found = this.quests.quests[QUEST_ID_FOUND_ON_THE_ROAD];
+    const onStory =
+      ayeOn ||
+      found?.status === "active" ||
+      found?.status === "completed" ||
+      (found?.timesCompleted ?? 0) > 0;
+    if (this.questsReady && !onStory) {
+      autoDone.push(
+        "accept_aye_captain",
+        "turn_in_aye",
+        "accept_two_behind",
+        "search_coleman",
+      );
+    }
     for (const id of autoDone) {
-      if (!steps[id]) this.markStep(id);
+      if (!this.flags.steps?.[id]) this.markStep(id);
     }
     for (const id of ONBOARDING_STEP_IDS) {
       if (this.flags.steps?.[id]) continue;
-      const def = ONBOARDING_STEPS[id];
-      if (def.needsFirstSweep) {
-        if (this.sweep === "done") {
-          this.markStep(id);
-          continue;
-        }
-        if (this.sweep === "none") return "accept_first_sweep";
+      if (id === "talk_davis" && onStory && !ayeOn) return "accept_aye_captain";
+      if (id === "turn_in_aye" && !ayeOn) return "accept_aye_captain";
+      if ((id === "accept_two_behind" || id === "search_coleman") && !ayeDone) {
+        return ayeOn ? "turn_in_aye" : "accept_aye_captain";
       }
+      if (id === "search_coleman" && !twoOn) return "accept_two_behind";
       return id;
     }
     return null;
@@ -423,14 +450,20 @@ export class OnboardingUI {
 
   private skipCurrent() {
     if (!this.currentId) return;
-    // Skipping "take the job" while it is not taken moves on past the whole job.
-    if (this.currentId === "accept_first_sweep" && this.sweep === "none") {
-      for (const id of ONBOARDING_STEP_IDS) {
-        if (id === "accept_first_sweep" || ONBOARDING_STEPS[id].needsFirstSweep) {
-          if (!this.flags.steps?.[id]) this.markStep(id);
-        }
+    // Skipping the first story accept moves on past the rest of that chapter.
+    if (
+      this.currentId === "accept_aye_captain" &&
+      !this.storyActive(QUEST_ID_AYE_CAPTAIN) &&
+      !this.storyDone(QUEST_ID_AYE_CAPTAIN)
+    ) {
+      for (const id of [
+        "accept_aye_captain",
+        "turn_in_aye",
+        "accept_two_behind",
+        "search_coleman",
+      ] as const) {
+        if (!this.flags.steps?.[id]) this.markStep(id);
       }
-      if (!this.flags.steps?.talk_davis) this.markStep("talk_davis");
     } else {
       this.markStep(this.currentId);
     }
