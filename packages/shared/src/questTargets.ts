@@ -4,11 +4,13 @@
  */
 
 import {
+  findAshenTraderWarehouse,
   isAshenTraderWarehouse,
   isBirchportHospital,
   isBuildingInBirchport,
 } from "./birchport.js";
 import { isInBirchportBarracks } from "./birchportBarracks.js";
+import { CELLAR_DOORS, getCellarAt } from "./cellar.js";
 import { PLAYER_SPAWN_HUB_NAME } from "./constants.js";
 import {
   furnitureInRetailManagerOffice,
@@ -16,6 +18,7 @@ import {
   interiorDimensions,
   interiorExitForBuildingAt,
   isClothingRack,
+  isRedOrderOwnedSupermarket,
   isSupplyFridge,
   isSupplyShelf,
   searchableFootprint,
@@ -299,7 +302,7 @@ function cityNameAt(x: number, y: number): string | null {
 
 export function questTargetBuildingLabel(ox: number, oy: number): string {
   const bld = getBuildingAt(ox, oy);
-  const kind = questBuildingKind(bld?.buildingType);
+  const kind = getCellarAt(ox, oy) ? "cellar hatch" : questBuildingKind(bld?.buildingType);
   const cx = bld ? bld.ox + bld.w / 2 : ox;
   const cy = bld ? bld.oy + bld.h / 2 : oy;
   const city = cityNameAt(cx, cy);
@@ -507,6 +510,73 @@ export function isColemanMotel(bx: number, by: number): boolean {
   return !!motel && motel.ox === bx && motel.oy === by;
 }
 
+let hollandHouseCache: BuildingInfo | null | undefined;
+
+/** Corporal Holland's place: the Birchport house nearest Coleman's, other than his. */
+export function hollandHouse(): BuildingInfo | null {
+  if (hollandHouseCache !== undefined) return hollandHouseCache;
+  const coleman = colemanHouse();
+  const f = getPlayerSpawnFootprint();
+  const houses = listBuildingsInRect(f.minX, f.maxX, f.minY, f.maxY).filter(
+    (bld) =>
+      bld.buildingType === "house" &&
+      isBuildingInBirchport(bld.ox, bld.oy) &&
+      !(coleman && bld.ox === coleman.ox && bld.oy === coleman.oy) &&
+      interiorQuestFit(bld.ox, bld.oy).lootFurniture >= 1,
+  );
+  hollandHouseCache = nearestBuilding(houses, COLEMAN_HOUSE_X, COLEMAN_HOUSE_Y);
+  return hollandHouseCache;
+}
+
+export function isHollandHouse(bx: number, by: number): boolean {
+  const house = hollandHouse();
+  return !!house && house.ox === bx && house.oy === by;
+}
+
+let redOrderSupermarketCache: BuildingInfo | null | undefined;
+
+/** The Red Order's supermarket in Birchport (boarded up windows). */
+export function birchportRedOrderSupermarket(): BuildingInfo | null {
+  if (redOrderSupermarketCache !== undefined) return redOrderSupermarketCache;
+  const f = getPlayerSpawnFootprint();
+  const markets = listBuildingsInRect(f.minX, f.maxX, f.minY, f.maxY).filter(
+    (bld) =>
+      bld.buildingType === "supermarket" &&
+      isBuildingInBirchport(bld.ox, bld.oy) &&
+      isRedOrderOwnedSupermarket(bld.ox, bld.oy),
+  );
+  const cx = (f.minX + f.maxX) / 2;
+  const cy = (f.minY + f.maxY) / 2;
+  redOrderSupermarketCache = nearestBuilding(markets, cx, cy);
+  return redOrderSupermarketCache;
+}
+
+/** Any Red Order supermarket inside Birchport counts for showing Holland's tag. */
+export function isBirchportRedOrderSupermarket(bx: number, by: number): boolean {
+  return (
+    isBuildingInBirchport(bx, by) &&
+    getBuildingAt(bx, by)?.buildingType === "supermarket" &&
+    isRedOrderOwnedSupermarket(bx, by)
+  );
+}
+
+/** Kevin's market warehouse in Birchport. */
+export function ashenMarketBuilding(): BuildingInfo | null {
+  const origin = findAshenTraderWarehouse();
+  return origin ? getBuildingAt(origin.ox, origin.oy) : null;
+}
+
+/** The cellar Coleman was moved to. */
+export function colemanCellar(): { ox: number; oy: number } | null {
+  const door = CELLAR_DOORS[0];
+  return door ? { ox: door.ox, oy: door.oy } : null;
+}
+
+export function isColemanCellar(bx: number, by: number): boolean {
+  const cellar = colemanCellar();
+  return !!cellar && cellar.ox === bx && cellar.oy === by;
+}
+
 /** House outside Birchport, rural or in another settlement. */
 export function pickClarkHouse(
   exclude?: QuestTargetExclude,
@@ -541,7 +611,7 @@ export function pickFloorSpaceWarehouse(
 
 /**
  * Any building outside Birchport. Type does not matter.
- * The furniture check drops empty shells (gun shop, diner, apartment today).
+ * The furniture check drops buildings with an empty interior.
  * The trader market stays off the board.
  */
 function isOtherCityBuilding(bld: BuildingInfo): boolean {

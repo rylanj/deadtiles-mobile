@@ -554,6 +554,9 @@ export function fireRaycast(params: {
 
   const originTX = Math.floor(originX);
   const originTY = Math.floor(originY);
+  // Head capsules sit up-screen of the feet and can reach through a wall.
+  // A target whose feet are behind hard cover is skipped for the rest of the ray.
+  const behindCover = new Set<string>();
 
   for (let t = 0; t < dist; t += stepSize) {
     const cx = originX + (dx / dist) * t;
@@ -620,6 +623,7 @@ export function fireRaycast(params: {
     for (const target of activeTargets) {
       if (target.isDead || target.health <= 0) continue;
       if (target.meleeImmune) continue;
+      if (behindCover.has(target.id)) continue;
       const headX = target.x - headOffset;
       const headY = target.y - headOffset;
       const sdx = headX - target.x;
@@ -630,6 +634,23 @@ export function fireRaycast(params: {
       const closestY = target.y + u * sdy;
       const zdist = Math.hypot(cx - closestX, cy - closestY);
       if (zdist < HIT_RADIUS) {
+        if (
+          hardCoverBetween({
+            fromX: originX,
+            fromY: originY,
+            toX: target.x,
+            toY: target.y,
+            inInterior,
+            bounds,
+            walls,
+            furnitures,
+            blocksSightAt,
+            stopOnTreesAndFurniture: false,
+          })
+        ) {
+          behindCover.add(target.id);
+          continue;
+        }
         return {
           kind: "impact",
           x: cx,
@@ -717,6 +738,87 @@ function segmentBoxSpan(
   return exit < 0 ? null : { enter, exit };
 }
 
+/**
+ * Hard cover on the ground line between two points.
+ * The tiles under each endpoint are ignored: a closed door can sit on the
+ * shooter, and the target's own tile is where they stand.
+ * Free aim also stops on trees and bullet-blocking furniture. The click
+ * raycast treats those as soft cover, so it leaves them out.
+ */
+function hardCoverBetween(params: {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  inInterior: boolean;
+  bounds: WorldBounds;
+  walls?: InteriorWallTile[];
+  furnitures?: SearchableObject[];
+  blocksSightAt?: (tx: number, ty: number) => boolean;
+  stopOnTreesAndFurniture: boolean;
+}): boolean {
+  const {
+    fromX,
+    fromY,
+    toX,
+    toY,
+    inInterior,
+    bounds,
+    walls,
+    furnitures,
+    blocksSightAt,
+    stopOnTreesAndFurniture,
+  } = params;
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= 0.001) return false;
+
+  const stepSize = 0.05;
+  const fromTX = Math.floor(fromX);
+  const fromTY = Math.floor(fromY);
+  const toTX = Math.floor(toX);
+  const toTY = Math.floor(toY);
+  let lastTX = fromTX;
+  let lastTY = fromTY;
+
+  for (let t = stepSize; t < dist; t += stepSize) {
+    const cx = fromX + (dx / dist) * t;
+    const cy = fromY + (dy / dist) * t;
+    const tx = Math.floor(cx);
+    const ty = Math.floor(cy);
+    if (tx === lastTX && ty === lastTY) continue;
+    lastTX = tx;
+    lastTY = ty;
+    if (tx === toTX && ty === toTY) return false;
+    if (tx === fromTX && ty === fromTY) continue;
+
+    if (blocksSightAt?.(tx, ty)) return true;
+
+    if (inInterior) {
+      if (interiorWallOccupiesTile(walls, tx, ty)) return true;
+      if (stopOnTreesAndFurniture) {
+        for (const f of furnitures ?? []) {
+          if (
+            furnitureBlocksBullets(f.objectType) &&
+            searchableOccupiesTile(f, tx, ty)
+          ) {
+            return true;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (isInWorldBounds(cx, cy, bounds)) {
+      if (isBuildingTile(tx, ty) || getCellarAt(tx, ty)) return true;
+      if (stopOnTreesAndFurniture && getStandingTreeAt(tx, ty)) return true;
+    }
+  }
+
+  return false;
+}
+
 export type FreeAimResult = {
   /** Visual impact point, held just short of the blocker's near face. */
   x: number;
@@ -739,8 +841,9 @@ export type FreeAimResult = {
  *  - Cover uses the ground shadow, the tiles the round genuinely passes over.
  *    A tall building beside or behind the shooter overlaps the shot on screen
  *    but is never under it, so it must not block.
- *  - Bodies use the drawn silhouette, since a body standing in the visible line
- *    of fire is one the player expects to hit.
+ *  - Bodies use the drawn silhouette, but only when the target's feet are not
+ *    behind hard cover. The sprite hangs up-screen of the feet and can overlap
+ *    a shot that is still on the near side of a wall.
  *
  * Returns null only when the aim point is on the muzzle.
  */
@@ -812,6 +915,22 @@ export function freeAimRaycast(params: {
   let bodyId: string | undefined;
   for (const target of targets) {
     if (target.isDead || target.health <= 0) continue;
+    if (
+      hardCoverBetween({
+        fromX: shooterX,
+        fromY: shooterY,
+        toX: target.x,
+        toY: target.y,
+        inInterior,
+        bounds,
+        walls,
+        furnitures,
+        blocksSightAt,
+        stopOnTreesAndFurniture: true,
+      })
+    ) {
+      continue;
+    }
     const box = entityScreenBox(
       target.x,
       target.y,

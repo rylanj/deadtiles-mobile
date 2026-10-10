@@ -30,7 +30,9 @@ import {
   questRewardReputation,
   questStatusOf,
   questTurnInItems,
+  storySpeechLines,
   type QuestDefinition,
+  type StorySpeechLine,
 } from "@zombie/shared";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { appendItemIcon, fillSpeechButton, markQuestKeepsake } from "./itemIcons";
@@ -49,6 +51,7 @@ export type AshenTraderDialogUIHandlers = {
   onPayDeposit: (traderId: string) => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
+  onChooseLine?: (lineId: string) => void;
 };
 
 const TRADER_MAN_AVATAR = "/assets/UI/TraderMan1/TraderMan1_Avatar.png";
@@ -82,6 +85,9 @@ export class AshenTraderDialogUI {
   private npcKind = GUARD_NPC_TRADER_MAN;
   private ashenReputation = ASHEN_REP_START;
   private activeLineId: string | null = null;
+  /** Story reply kept on screen after its line goes away. */
+  private scriptedLineId: string | null = null;
+  private scriptedReply: string | null = null;
   private questsJson = "";
   private inventoryJson = "[]";
   private extraPockets = 0;
@@ -238,6 +244,8 @@ export class AshenTraderDialogUI {
     this.playerAvatarEl.src = playerAvatarSrc(opts.clothingSkin);
     this.ashenReputation = opts.ashenReputation ?? ASHEN_REP_START;
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("ashen-dialog-open");
@@ -251,6 +259,8 @@ export class AshenTraderDialogUI {
     document.body.classList.remove("ashen-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
@@ -280,6 +290,21 @@ export class AshenTraderDialogUI {
 
   private itemCount(itemId: string): number {
     return countItemInInventory(parseInventory(this.inventoryJson), itemId);
+  }
+
+  /** Server answer to a story line. */
+  speak(lineId: string, text: string) {
+    this.scriptedLineId = lineId;
+    this.scriptedReply = text;
+    this.activeLineId = lineId;
+    if (this.visible) this.render();
+  }
+
+  private storyLines(): StorySpeechLine[] {
+    if (!this.isMarketTrader()) return [];
+    return storySpeechLines("kevin", parseQuestsJson(this.questsJson), (itemId) =>
+      this.itemCount(itemId),
+    );
   }
 
   private render() {
@@ -341,11 +366,38 @@ export class AshenTraderDialogUI {
       });
       this.speechListEl.appendChild(btn);
     }
+    const storyLines = this.storyLines();
+    for (const line of storyLines) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "red-dialog-speech-btn ashen-dialog-speech-btn";
+      if (this.activeLineId === line.id) {
+        btn.classList.add("red-dialog-speech-btn--active");
+        btn.classList.add("ashen-dialog-speech-btn--active");
+      }
+      fillSpeechButton(btn, line.player);
+      btn.addEventListener("click", () => {
+        this.activeLineId = line.id;
+        this.scriptedLineId = line.id;
+        this.scriptedReply = line.reply ?? "…";
+        this.handlers.onChooseLine?.(line.id);
+        this.render();
+      });
+      this.speechListEl.appendChild(btn);
+    }
 
     const active = ASHEN_TRADER_DIALOG_LINES.find(
       (l) => l.id === this.activeLineId,
     );
     this.responseEl.replaceChildren();
+    if (!active && this.scriptedReply && this.scriptedLineId === this.activeLineId) {
+      this.responseEl.classList.remove("red-dialog-response--empty");
+      const kept = document.createElement("div");
+      kept.className = "red-dialog-response-text";
+      kept.textContent = this.scriptedReply;
+      this.responseEl.appendChild(kept);
+      return;
+    }
     if (!active) {
       this.responseEl.classList.add("red-dialog-response--empty");
       this.responseEl.textContent = "Waiting for you to speak…";

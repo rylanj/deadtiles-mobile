@@ -126,6 +126,14 @@ const SUITCASE: readonly LootRoll[] = [
   pct("small_spring", 2),
 ];
 
+/** Empty diner booth. Booth3 is the East Forestford quest booth and rolls the same. */
+const DINER_BOOTH_LOOT: readonly LootRoll[] = [
+  pct("banknote", 10, 1, 5),
+  pct("blue_cigarettes", 5),
+  pct("lighter", 4),
+  pct("silver_ring", 2),
+];
+
 /**
  * Keys are searchable furniture types. An empty list rolls nothing.
  * `watch` is a rarity token. Each unit becomes one named watch, with old
@@ -686,6 +694,98 @@ export const CONTAINER_LOOT: Record<string, readonly LootRoll[]> = {
   canteentable1: CANTEEN,
   canteentable2: CANTEEN,
   canteentable3: CANTEEN,
+  /** Diner. Cushions hide pocket change. A laid table adds the leftovers. */
+  booth1: DINER_BOOTH_LOOT,
+  booth3: DINER_BOOTH_LOOT,
+  booth2: [
+    pct("cola", 14, 1, 2),
+    pct("lemonada", 10),
+    pct("water", 8),
+    pct("salted_chips", 8),
+    pct("banknote", 8, 1, 5),
+    pct("blue_cigarettes", 5),
+    pct("lighter", 4),
+  ],
+  /** Diner counter shelves. The register is where the takings are. */
+  dinercounter1: [
+    pct("rags", 10, 1, 3),
+    pct("lighter", 4),
+    pct("blue_cigarettes", 4),
+    pct("water", 5),
+  ],
+  dinercounter2: [
+    pct("banknote", 45, 5, 40),
+    pct("blue_cigarettes", 6),
+    pct("lighter", 5),
+    pct("map", 4),
+  ],
+  dinercounter3: [
+    pct("cola", 18, 1, 2),
+    pct("lemonada", 14, 1, 2),
+    pct("salted_chips", 10),
+    pct("canned_peaches", 6),
+    pct("rags", 6, 1, 2),
+  ],
+  dinercounter4: [
+    pct("canned_beans", 14),
+    pct("canned_tuna", 10),
+    pct("hot_chips", 8),
+    pct("water", 10, 1, 2),
+    pct("rags", 6, 1, 2),
+  ],
+  sink2: [pct("water", 45), pct("rags", 8, 1, 3)],
+  /** Apartment utility closet. Mop rags and cleaning spirit under the basin. */
+  sink1: [pct("water", 40), pct("rags", 18, 1, 3), pct("alcohol", 4), pct("duct_tape", 4)],
+  /**
+   * Gun shop pistol case. Looted before the shop fell, so per-case odds sit
+   * below police lockers. The shop pays off through its number of containers.
+   */
+  guncase1: [
+    pct("weapon_pistol", 6),
+    pct("weapon_revolver", 4),
+    pct("ammo_9x19", 14, 1, 8),
+    pct("ammo_44", 8, 1, 4),
+  ],
+  /** Gun shop register case. The till first, a pistol left in the glass is rare. */
+  guncase2: [
+    pct("banknote", 55, 10, 150),
+    pct("weapon_pistol", 2),
+    pct("ammo_9x19", 8, 1, 6),
+    pct("blue_cigarettes", 5),
+    pct("lighter", 4),
+  ],
+  /** Gun shop parts case. Scopes, springs, and civilian gun parts. Never a whole gun. */
+  guncase3: [
+    pct("scope", 8),
+    pct("small_spring", 12),
+    pct("large_spring", 8),
+    pct("pistol_frame", 4),
+    pct("pistol_slide", 6),
+    pct("pistol_trigger", 4),
+    pct("revolver_frame", 3),
+    pct("revolver_cylinder", 4),
+    pct("revolver_barrel", 3),
+    pct("revolver_trigger", 3),
+    pct("shotgun_receiver", 2),
+    pct("shotgun_barrel", 3),
+    pct("shotgun_stock", 4),
+    pct("shotgun_trigger", 4),
+    pct("rifle_receiver", 1.5),
+    pct("rifle_barrel", 2),
+    pct("rifle_stock", 3),
+    pct("rifle_trigger", 3),
+  ],
+  /** Stocked gun racks. Most guns are chained in place, so a roll is rare. */
+  gunrack2: [pct("weapon_hunting_rifle", 0.25)],
+  gunrack3: [pct("weapon_shotgun", 0.5), pct("weapon_hunting_rifle", 0.25)],
+  gunrack4: [pct("weapon_shotgun", 0.5)],
+  /** Gun shop ammo shelf. Civilian calibers only, no 5.56. Mostly picked clean. */
+  ammoshelf1: [
+    pct("ammo_9x19", 24, 2, 10),
+    pct("ammo_44", 12, 1, 6),
+    pct("ammo_buckshot", 14, 1, 6),
+    pct("ammo_762x39", 8, 2, 8),
+  ],
   /** Player drop. Contents are whatever was placed, never a random roll. */
   groundbackpack: [],
   /** Felled tree. Wood is seeded by the chop, never a random roll. */

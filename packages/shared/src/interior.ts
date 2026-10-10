@@ -192,6 +192,8 @@ export const SEARCH_DURATION_MS = 5000;
 export const SAFE_OBJECT_TYPE = "safe1" as const;
 export const SAFE_CRACK_DURATION_MS = 60_000;
 export const SAFE_OPEN_NOTE = "The safe is open.";
+/** Search popup for a stocked gun rack that rolled nothing. */
+export const GUN_RACK_STUCK_NOTE = "I could not remove the gun from the rack";
 
 export function furnitureNeedsCrack(objectType: string): boolean {
   return objectType === SAFE_OBJECT_TYPE;
@@ -226,6 +228,8 @@ export const FURNITURE_TYPES = [
   "dinnertable",
   "nightstand",
   "deadofficer",
+  /** East Forestford PD. Placed by layout. Not loot. */
+  "deadbody",
   "bagchair",
   /** House seating. Not placed in kitchens. */
   "armchair",
@@ -289,6 +293,8 @@ export const FURNITURE_TYPES = [
   "whiteboard",
   /** Office stairs between storeys. Not loot. */
   "stairs",
+  /** Apartment concrete stairs between storeys. Not loot. */
+  "stairs2",
   /** Large retail. Placed by layout, not rolled. */
   "clothingrack1",
   "clothingrack2",
@@ -306,6 +312,35 @@ export const FURNITURE_TYPES = [
   "retailcheckout1",
   /** Manager's office. Cracked, then searched. Placed by layout, never rolled. */
   "safe1",
+  /** Diner booths. Booth1 is empty, Booth2 has a laid table. Placed by layout. */
+  "booth1",
+  "booth2",
+  /** East Forestford quest diner only. One per diner. Same loot as Booth1. */
+  "booth3",
+  /** Diner counter run. 1 empty, 2 cash register, 3 and 4 have items on top. */
+  "dinercounter1",
+  "dinercounter2",
+  "dinercounter3",
+  "dinercounter4",
+  /** Diner jukebox. Not loot. */
+  "juke1",
+  /** Diner kitchen. Commercial double sink. */
+  "sink2",
+  /** Apartment utility closet. Steel utility sink. */
+  "sink1",
+  /** Gun shop glass counters. 1 pistols, 2 cash register, 3 weapon parts. Placed by layout. */
+  "guncase1",
+  "guncase2",
+  "guncase3",
+  /** Gun shop wall racks. Display only, not loot. 1 is empty, 4 is fullest. */
+  "gunrack1",
+  "gunrack2",
+  "gunrack3",
+  "gunrack4",
+  /** Gun shop ammunition shelf. Placed by layout. */
+  "ammoshelf1",
+  /** Gun shop gunsmith bench. Not loot. */
+  "gunbench1",
 ] as const;
 
 export type FurnitureType = (typeof FURNITURE_TYPES)[number];
@@ -331,6 +366,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   dinnertable: "Dinner Table",
   nightstand: "Nightstand",
   deadofficer: "Dead Officer",
+  deadbody: "Body",
   bagchair: "Chair",
   armchair: "Armchair",
   sofa: "Sofa",
@@ -380,6 +416,7 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   officechair: "Office Chair",
   whiteboard: "Whiteboard",
   stairs: "Stairs",
+  stairs2: "Stairs",
   clothingrack1: "Clothing Rack",
   clothingrack2: "Clothing Rack",
   clothingrack3: "Clothing Rack",
@@ -395,6 +432,25 @@ const FURNITURE_DISPLAY_NAMES: Record<string, string> = {
   retailcase2: "Watch Case",
   retailcheckout1: "Checkout",
   safe1: "Safe",
+  booth1: "Booth",
+  booth2: "Booth",
+  booth3: "Booth",
+  dinercounter1: "Counter",
+  dinercounter2: "Register",
+  dinercounter3: "Counter",
+  dinercounter4: "Counter",
+  juke1: "Jukebox",
+  sink2: "Sink",
+  sink1: "Sink",
+  guncase1: "Gun Case",
+  guncase2: "Register",
+  guncase3: "Parts Case",
+  gunrack1: "Gun Rack",
+  gunrack2: "Gun Rack",
+  gunrack3: "Gun Rack",
+  gunrack4: "Gun Rack",
+  ammoshelf1: "Ammo Shelf",
+  gunbench1: "Gun Bench",
   fallentree: "Fallen Tree",
   zombie: "Zombie",
   guard: "Guard",
@@ -609,13 +665,13 @@ export function furnitureFootprint(
         : furnitureFacing(objectType);
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
-  // Desk3 — office bullpen. SW 2×1, SE 1×2.
+  // Desk3 office bullpen and manager desks. SE/NW 1×2, SW/NE 2×1.
   if (objectType === "desk3") {
     const f =
-      facing === "SE" || facing === "SW"
+      facing === "NE" || facing === "NW" || facing === "SE" || facing === "SW"
         ? facing
         : furnitureFacing("desk3");
-    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
+    return f === "SE" || f === "NW" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
   // ClothingRack1-3: long rail. SE 1x2, SW 2x1.
   if (
@@ -653,13 +709,44 @@ export function furnitureFootprint(
         : furnitureFacing(objectType);
     return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
   }
-  // Stairs1 — 2×3, flush to a wall on the long side.
-  // SE runs along X (3×2, north edge on the wall). SW runs along Y (2×3, west edge on the wall).
-  if (objectType === "stairs") {
+  // Gun shop cases, racks, ammo shelf, and bench. SE 1x2, SW 2x1.
+  if (isGunShopFixtureType(objectType)) {
     const f =
       facing === "SE" || facing === "SW"
         ? facing
-        : furnitureFacing("stairs");
+        : furnitureFacing(objectType);
+    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
+  }
+  // Booth1-3: two benches facing across a table. Square either facing.
+  if (
+    objectType === "booth1" ||
+    objectType === "booth2" ||
+    objectType === "booth3"
+  ) {
+    return { w: 2, h: 2 };
+  }
+  // DinerCounter1-4 (stools on the front side), Sink1, and Sink2. SE 1x2, SW 2x1.
+  if (
+    objectType === "dinercounter1" ||
+    objectType === "dinercounter2" ||
+    objectType === "dinercounter3" ||
+    objectType === "dinercounter4" ||
+    objectType === "sink1" ||
+    objectType === "sink2"
+  ) {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing(objectType);
+    return f === "SE" ? { w: 1, h: 2 } : { w: 2, h: 1 };
+  }
+  // Stairs1 / Stairs2 — 2×3, flush to a wall on the long side.
+  // SE runs along X (3×2, north edge on the wall). SW runs along Y (2×3, west edge on the wall).
+  if (objectType === "stairs" || objectType === "stairs2") {
+    const f =
+      facing === "SE" || facing === "SW"
+        ? facing
+        : furnitureFacing(objectType);
     return f === "SE" ? { w: 3, h: 2 } : { w: 2, h: 3 };
   }
   return { w: 1, h: 1 };
@@ -690,6 +777,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   dinnertable: "SE",
   nightstand: "SE",
   deadofficer: "SW",
+  deadbody: "SE",
   bagchair: "SW",
   armchair: "SE",
   sofa: "SE",
@@ -739,6 +827,7 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   officechair: "SW",
   whiteboard: "SW",
   stairs: "SW",
+  stairs2: "SW",
   clothingrack1: "SE",
   clothingrack2: "SE",
   clothingrack3: "SE",
@@ -754,6 +843,25 @@ const FURNITURE_FACING: Record<string, FurnitureFacing> = {
   retailcase2: "SE",
   retailcheckout1: "SE",
   safe1: "SE",
+  booth1: "SE",
+  booth2: "SE",
+  booth3: "SE",
+  dinercounter1: "SE",
+  dinercounter2: "SE",
+  dinercounter3: "SE",
+  dinercounter4: "SE",
+  juke1: "SE",
+  sink2: "SE",
+  sink1: "SE",
+  guncase1: "SE",
+  guncase2: "SE",
+  guncase3: "SE",
+  gunrack1: "SE",
+  gunrack2: "SE",
+  gunrack3: "SE",
+  gunrack4: "SE",
+  ammoshelf1: "SE",
+  gunbench1: "SE",
 };
 
 /** Facings available for Drawers1 art (SE + SW). */
@@ -869,6 +977,7 @@ const BULLET_BLOCKING_FURNITURE = new Set([
   "retailshelf2",
   "retailshelf3",
   "safe1",
+  "juke1",
 ]);
 
 export function furnitureBlocksBullets(objectType: string): boolean {
@@ -880,9 +989,9 @@ export function furnitureIsFurnace(objectType: string): boolean {
   return objectType === "furnace" || objectType === "mantel";
 }
 
-/** Stairs1. Changes interior storey. Not a loot container. */
+/** Stairs1 or Stairs2. Changes interior storey. Not a loot container. */
 export function furnitureIsStairs(objectType: string): boolean {
-  return objectType === "stairs";
+  return objectType === "stairs" || objectType === "stairs2";
 }
 
 /** Shop shelves a supply scout can count. */
@@ -961,7 +1070,7 @@ export function furnitureFrontApproachTiles(obj: {
   const { w, h } = searchableFootprint(obj);
 
   // Stairs are walked from the open side, opposite the wall they sit against.
-  if (obj.objectType === "stairs") {
+  if (furnitureIsStairs(obj.objectType)) {
     const out: { x: number; y: number }[] = [];
     if (h > w) {
       for (let ty = obj.y; ty < obj.y + h; ty++) out.push({ x: obj.x + w, y: ty });
@@ -1261,6 +1370,8 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   nightstand: 0.55,
   /** Police — at most one, beside a Desk2. */
   deadofficer: 0.45,
+  /** East Forestford PD only. Placed by layout, never rolled. */
+  deadbody: 0,
   /** Police desk chair. Also one roll in a house living room or rural cabin. */
   bagchair: 0.55,
   /** Houses, outside the kitchen. */
@@ -1338,6 +1449,8 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   whiteboard: 0,
   /** Office stairs — placed by layout when the exterior has a second storey. */
   stairs: 0,
+  /** Apartment stairs: placed by layout, one flight per storey. */
+  stairs2: 0,
   /** Large retail: placed by layout, never rolled. */
   clothingrack1: 0,
   clothingrack2: 0,
@@ -1355,6 +1468,28 @@ const FURNITURE_SPAWN_CHANCE: Record<FurnitureType, number> = {
   retailcheckout1: 0,
   /** Manager offices only. Placed by layout, never rolled. */
   safe1: 0,
+  /** Diner: placed by layout, never rolled. Booth3 is quest-only. */
+  booth1: 0,
+  booth2: 0,
+  booth3: 0,
+  dinercounter1: 0,
+  dinercounter2: 0,
+  dinercounter3: 0,
+  dinercounter4: 0,
+  juke1: 0,
+  sink2: 0,
+  /** Apartment utility closet: placed by layout, never rolled. */
+  sink1: 0,
+  /** Gun shop: placed by layout, never rolled. */
+  guncase1: 0,
+  guncase2: 0,
+  guncase3: 0,
+  gunrack1: 0,
+  gunrack2: 0,
+  gunrack3: 0,
+  gunrack4: 0,
+  ammoshelf1: 0,
+  gunbench1: 0,
 };
 
 /** Per motel room — chance to place a Suitcase1 on the floor. */
@@ -1419,7 +1554,7 @@ export function isTentInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "tent";
 }
 
-/** Birchport barracks mess hall — tables and a kitchen line. */
+/** Birchport barracks mess hall: canteen, kitchen, and the captain's office. */
 export function isMessHallInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "mess_hall";
 }
@@ -1432,6 +1567,16 @@ export function isOfficeInterior(bx: number, by: number): boolean {
 /** Department-store interiors: sales floor plus a corner manager's office. */
 export function isLargeRetailInterior(bx: number, by: number): boolean {
   return getBuildingAt(bx, by)?.buildingType === "large_retail";
+}
+
+/** Diner interiors: counter run, window booths, and a back kitchen. */
+export function isDinerInterior(bx: number, by: number): boolean {
+  return getBuildingAt(bx, by)?.buildingType === "diner";
+}
+
+/** Gun shop interiors: case counter, wall racks, and a locked back office. */
+export function isGunShopInterior(bx: number, by: number): boolean {
+  return getBuildingAt(bx, by)?.buildingType === "gun_shop";
 }
 
 const CANTEEN_TABLE_TYPES = [
@@ -2783,8 +2928,8 @@ function reservePoliceRoomShell(
 
 /**
  * Sergeant's office: bookshelf, gun cabinet, and filing cabinet on the walls,
- * Desk3 facing the door with a chair behind it. The cell gets a jail bed
- * along the far wall and a toilet in the opposite corner.
+ * Desk3 facing away from the door with a chair behind it. The cell gets a
+ * jail bed along the far wall and a toilet in the opposite corner.
  */
 function placePoliceCornerFurniture(
   bx: number,
@@ -2882,8 +3027,14 @@ function placePoliceCornerFurniture(
     x: number,
     y: number,
     facing: FurnitureFacing,
+    freeFootprint = false,
   ): boolean => {
-    if (!inRoom(room, x, y) || occupied.has(`${x},${y}`)) return false;
+    const key = `${x},${y}`;
+    if (freeFootprint) occupied.delete(key);
+    if (!inRoom(room, x, y) || occupied.has(key)) {
+      if (freeFootprint) occupied.add(key);
+      return false;
+    }
     const { dx, dy } = ISO_FACING_TILE_DELTA[facing];
     const behindX = x - dx;
     const behindY = y - dy;
@@ -2891,6 +3042,7 @@ function placePoliceCornerFurniture(
       !inRoom(room, behindX, behindY) ||
       occupied.has(`${behindX},${behindY}`)
     ) {
+      if (freeFootprint) occupied.add(key);
       return false;
     }
     occupied.add(`${x},${y}`);
@@ -2914,14 +3066,16 @@ function placePoliceCornerFurniture(
       commit(office, "bookshelf2", office.x0, office.y0, "SE");
       commit(office, "guncabinet", office.x0, office.y1, "SE");
       commit(office, "cabinet", office.x1, office.y0, "SW");
-      commit(office, "desk3", office.x0 + 2, office.y0 + 3, "SE");
-      placeChair(office, office.x0 + 1, office.y0 + 3, "SE");
+      if (commit(office, "desk3", office.x0 + 2, office.y0 + 2, "NW")) {
+        placeChair(office, office.x0 + 1, office.y0 + 3, "SE", true);
+      }
     } else {
       commit(office, "guncabinet", office.x0, office.y0, "SE");
       commit(office, "bookshelf2", office.x1, office.y0, "SW");
       commit(office, "cabinet", office.x0, office.y0 + 2, "SE");
-      commit(office, "desk3", office.x0 + 3, office.y0 + 2, "SW");
-      placeChair(office, office.x0 + 3, office.y0 + 1, "SW");
+      if (commit(office, "desk3", office.x0 + 2, office.y0 + 2, "NE")) {
+        placeChair(office, office.x0 + 3, office.y0 + 1, "SW", true);
+      }
     }
   }
 
@@ -3952,6 +4106,40 @@ function placePoliceDeadOfficer(
   }
 
   return [];
+}
+
+/**
+ * One DeadBody1 on a fixed floor tile inside the East Forestford holding
+ * cell, between the toilet and the bed. Other stations never get it. The
+ * tile is reserved before bullpen furniture so nothing covers it. It is not loot.
+ */
+function placeEastForestfordDeadBody(
+  bx: number,
+  by: number,
+  occupied: Set<string>,
+): SearchableObject[] {
+  if (!isEastForestfordPoliceStation(bx, by)) return [];
+  const cell = policeJailCellForBuilding(bx, by);
+  if (!cell || cell.facing !== "SE") return [];
+  // One tile east of the west wall, two tiles south of the toilet row.
+  const x = cell.x0 + 1;
+  const y = cell.y0 + 2;
+  if (x < cell.x0 || x > cell.x1 || y < cell.y0 || y > cell.y1) return [];
+  if (occupied.has(`${x},${y}`)) return [];
+  occupied.add(`${x},${y}`);
+  return [
+    {
+      id: eastForestfordDeadBodyId(bx, by),
+      kind: "furniture",
+      objectType: "deadbody",
+      x,
+      y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing: "SE",
+    },
+  ];
 }
 
 /** Checkout1 count near supermarket entrances. */
@@ -7135,7 +7323,29 @@ export function roomAtInteriorDoor(
   ) {
     return policeCell;
   }
-  return null;
+  const messRooms = messHallBackRoomsForBuilding(bx, by);
+  if (messRooms) {
+    for (const room of [messRooms.kitchen, messRooms.office]) {
+      if (tx === room.entranceX && ty === room.entranceY) return room;
+    }
+  }
+  const dinerKitchen = dinerKitchenForBuilding(bx, by);
+  if (
+    dinerKitchen &&
+    tx === dinerKitchen.entranceX &&
+    ty === dinerKitchen.entranceY
+  ) {
+    return dinerKitchen;
+  }
+  const gunShopOffice = gunShopOfficeForBuilding(bx, by);
+  if (
+    gunShopOffice &&
+    tx === gunShopOffice.entranceX &&
+    ty === gunShopOffice.entranceY
+  ) {
+    return gunShopOffice;
+  }
+  return apartmentRoomAtDoor(bx, by, 0, tx, ty);
 }
 
 /** True when the player's tile is on the room's walkable floor (not the door gap). */
@@ -7152,20 +7362,23 @@ export function playerInRoomFloor(
 /**
  * Tiles directly inside / outside a room door along its facing axis.
  * SE doors open east (room −x, hallway +x); SW doors open south (room −y, hallway +y).
+ * A room that lies past the door (apartment utility closet) swaps the two.
  */
 export function roomDoorFrontTiles(room: RoomDoorRef): {
   inside: { x: number; y: number };
   outside: { x: number; y: number };
 } {
   if (room.facing === "SE") {
+    const step = room.entranceX < room.x0 ? -1 : 1;
     return {
-      inside: { x: room.entranceX - 1, y: room.entranceY },
-      outside: { x: room.entranceX + 1, y: room.entranceY },
+      inside: { x: room.entranceX - step, y: room.entranceY },
+      outside: { x: room.entranceX + step, y: room.entranceY },
     };
   }
+  const step = room.entranceY < room.y0 ? -1 : 1;
   return {
-    inside: { x: room.entranceX, y: room.entranceY - 1 },
-    outside: { x: room.entranceX, y: room.entranceY + 1 },
+    inside: { x: room.entranceX, y: room.entranceY - step },
+    outside: { x: room.entranceX, y: room.entranceY + step },
   };
 }
 
@@ -8105,8 +8318,189 @@ function placeTentBunks(
 }
 
 /**
- * Barracks mess hall (16×14 interior): range on the NW wall, serving
- * counters two tiles SE of it, canteen tables in rows toward the door.
+ * Back rooms of a mess hall. Floor is 5 tiles deep from the wall opposite
+ * the entrance. A shared partition splits that strip into a kitchen and
+ * Captain Davis's office, and the pair covers the full width. Doors open
+ * into the canteen.
+ */
+const MESS_BACK_FLOOR = 5;
+
+export type MessHallBackRoom = {
+  kind: "kitchen" | "office";
+  facing: "SE" | "SW";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  entranceX: number;
+  entranceY: number;
+  wallTiles: InteriorWallTile[];
+};
+
+function messTile(doorOnEast: boolean, depth: number, along: number): { x: number; y: number } {
+  return doorOnEast ? { x: depth, y: along } : { x: along, y: depth };
+}
+
+/** Facing in the SE-door plan, rotated when the entrance is on the south. */
+function messFace(doorOnEast: boolean, face: FurnitureFacing): FurnitureFacing {
+  if (doorOnEast) return face;
+  switch (face) {
+    case "SE":
+      return "SW";
+    case "SW":
+      return "SE";
+    case "NW":
+      return "NE";
+    case "NE":
+      return "NW";
+  }
+}
+
+export function layoutMessHallBackRooms(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+): { kitchen: MessHallBackRoom; office: MessHallBackRoom } | null {
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const depthMax = doorOnEast ? iW : iH;
+  const wallDepth = MESS_BACK_FLOOR;
+  if (span < 12 || depthMax <= wallDepth + 3) return null;
+  const half = Math.floor(span / 2);
+  // Swap the two widths: the kitchen gets the narrower side, the office the wider.
+  const kitchenTiles = span - half - 1;
+  const wallAlong = kitchenTiles;
+  const kitchenAlong1 = kitchenTiles - 1;
+  const officeAlong0 = wallAlong + 1;
+  const officeAlong1 = span - 1;
+  if (kitchenAlong1 < 4 || officeAlong1 - officeAlong0 < 4) return null;
+
+  const facing: "SE" | "SW" = doorOnEast ? "SE" : "SW";
+  const wallSet = new Set<string>();
+  const addWall = (depth: number, along: number) => {
+    const t = messTile(doorOnEast, depth, along);
+    if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return;
+    wallSet.add(`${t.x},${t.y}`);
+  };
+  // Two counters need four tiles, and a centered door with its side pads
+  // needs three more. A shorter kitchen puts the door on the office end.
+  const kitchenDoorAlong =
+    kitchenTiles >= 7 ? Math.floor(kitchenAlong1 / 2) : kitchenAlong1;
+  const officeDoorAlong =
+    officeAlong0 + Math.floor((officeAlong1 - officeAlong0) / 2);
+  for (let along = 0; along <= kitchenAlong1; along++) {
+    if (along === kitchenDoorAlong) continue;
+    addWall(wallDepth, along);
+  }
+  for (let along = officeAlong0; along <= officeAlong1; along++) {
+    if (along === officeDoorAlong) continue;
+    addWall(wallDepth, along);
+  }
+  for (let depth = 0; depth <= wallDepth; depth++) addWall(depth, wallAlong);
+
+  const floorBox = (along0: number, along1: number) => {
+    const a = messTile(doorOnEast, 0, along0);
+    const b = messTile(doorOnEast, MESS_BACK_FLOOR - 1, along1);
+    return {
+      x0: Math.min(a.x, b.x),
+      y0: Math.min(a.y, b.y),
+      x1: Math.max(a.x, b.x),
+      y1: Math.max(a.y, b.y),
+    };
+  };
+  const tilesFor = (
+    predicate: (depth: number, along: number) => boolean,
+  ): InteriorWallTile[] => {
+    const out: InteriorWallTile[] = [];
+    for (const key of wallSet) {
+      const comma = key.indexOf(",");
+      const x = Number(key.slice(0, comma));
+      const y = Number(key.slice(comma + 1));
+      const depth = doorOnEast ? x : y;
+      const along = doorOnEast ? y : x;
+      if (predicate(depth, along)) out.push({ x, y });
+    }
+    return out;
+  };
+
+  const kitchenDoor = messTile(doorOnEast, wallDepth, kitchenDoorAlong);
+  const officeDoor = messTile(doorOnEast, wallDepth, officeDoorAlong);
+  const kitchenFloor = floorBox(0, kitchenAlong1);
+  const officeFloor = floorBox(officeAlong0, officeAlong1);
+  return {
+    kitchen: {
+      kind: "kitchen",
+      facing,
+      ...kitchenFloor,
+      entranceX: kitchenDoor.x,
+      entranceY: kitchenDoor.y,
+      wallTiles: tilesFor(
+        (depth, along) =>
+          along <= wallAlong && (depth === wallDepth || along === wallAlong),
+      ),
+    },
+    office: {
+      kind: "office",
+      facing,
+      ...officeFloor,
+      entranceX: officeDoor.x,
+      entranceY: officeDoor.y,
+      wallTiles: tilesFor(
+        (depth, along) =>
+          along >= wallAlong && (depth === wallDepth || along === wallAlong),
+      ),
+    },
+  };
+}
+
+export function messHallBackRoomsForBuilding(
+  bx: number,
+  by: number,
+): { kitchen: MessHallBackRoom; office: MessHallBackRoom } | null {
+  if (!isMessHallInterior(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  return layoutMessHallBackRooms(iW, iH, interiorExitForBuildingAt(bx, by));
+}
+
+/** Kitchen or office floor tile. The door gap itself is not floor. */
+export function messHallBackFloorAt(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): "kitchen" | "office" | null {
+  const rooms = messHallBackRoomsForBuilding(bx, by);
+  if (!rooms) return null;
+  for (const room of [rooms.kitchen, rooms.office]) {
+    if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+      return room.kind;
+    }
+  }
+  return null;
+}
+
+export function messHallBackRoomAtTile(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): MessHallBackRoom | null {
+  const rooms = messHallBackRoomsForBuilding(bx, by);
+  if (!rooms) return null;
+  for (const room of [rooms.kitchen, rooms.office]) {
+    if (tx === room.entranceX && ty === room.entranceY) return room;
+    if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+      return room;
+    }
+  }
+  return null;
+}
+
+/**
+ * Barracks mess hall (16×14 interior). The back width is a kitchen and
+ * Davis's office. Facing the kitchen's back wall, the run is the range,
+ * the sink, then the fridge. Hot and drink counters stay in the canteen,
+ * just outside the kitchen door.
  */
 function placeMessHall(
   bx: number,
@@ -8117,9 +8511,14 @@ function placeMessHall(
   occupied: Set<string>,
   startIndex: number,
   rng: () => number,
-): SearchableObject[] {
+): {
+  furnitures: SearchableObject[];
+  walls: InteriorWallTile[];
+  doors: { x: number; y: number }[];
+} {
   const furnitures: SearchableObject[] = [];
   let furnitureIndex = startIndex;
+  const rooms = layoutMessHallBackRooms(iW, iH, exit);
 
   const blocksExit = (tx: number, ty: number): boolean => {
     if (tx === exit.insideX && ty === exit.insideY) return true;
@@ -8133,19 +8532,37 @@ function placeMessHall(
     return false;
   };
 
+  const onRoomFloor = (tx: number, ty: number): boolean => {
+    if (!rooms) return false;
+    for (const room of [rooms.kitchen, rooms.office]) {
+      if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const canPlace = (
     objectType: string,
     ox: number,
     oy: number,
     facing: FurnitureFacing,
     reserveApproach: boolean,
+    room: MessHallBackRoom | null,
   ): boolean => {
     const { w, h } = furnitureFootprint(objectType, facing);
     if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    const tileOk = (tx: number, ty: number): boolean => {
+      if (occupied.has(`${tx},${ty}`)) return false;
+      if (blocksExit(tx, ty)) return false;
+      if (room) {
+        return tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1;
+      }
+      return !onRoomFloor(tx, ty);
+    };
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) {
-        if (occupied.has(`${tx},${ty}`)) return false;
-        if (blocksExit(tx, ty)) return false;
+        if (!tileOk(tx, ty)) return false;
       }
     }
     if (!reserveApproach) return true;
@@ -8159,27 +8576,24 @@ function placeMessHall(
     if (approaches.length === 0) return false;
     for (const t of approaches) {
       if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
-      if (occupied.has(`${t.x},${t.y}`)) return false;
-      if (blocksExit(t.x, t.y)) return false;
+      if (!tileOk(t.x, t.y)) return false;
     }
     return true;
   };
 
   const commit = (
-    objectType: string,
+    objectType: FurnitureType,
     ox: number,
     oy: number,
-    facing?: FurnitureFacing,
-    opts?: { reserveApproach?: boolean },
+    facing: FurnitureFacing,
+    opts?: { reserveApproach?: boolean; room?: MessHallBackRoom | null },
   ): boolean => {
-    const face = facing ?? furnitureFacing(objectType);
     const reserveApproach = opts?.reserveApproach !== false;
-    if (!canPlace(objectType, ox, oy, face, reserveApproach)) return false;
-    const { w, h } = furnitureFootprint(objectType, face);
+    const room = opts?.room ?? null;
+    if (!canPlace(objectType, ox, oy, facing, reserveApproach, room)) return false;
+    const { w, h } = furnitureFootprint(objectType, facing);
     for (let ty = oy; ty < oy + h; ty++) {
-      for (let tx = ox; tx < ox + w; tx++) {
-        occupied.add(`${tx},${ty}`);
-      }
+      for (let tx = ox; tx < ox + w; tx++) occupied.add(`${tx},${ty}`);
     }
     if (reserveApproach) {
       for (const t of furnitureFrontApproachTiles({
@@ -8187,7 +8601,7 @@ function placeMessHall(
         objectType,
         x: ox,
         y: oy,
-        facing: face,
+        facing,
       })) {
         occupied.add(`${t.x},${t.y}`);
       }
@@ -8201,29 +8615,843 @@ function placeMessHall(
       searched: false,
       buildingX: bx,
       buildingY: by,
-      facing: face,
+      facing,
     });
     return true;
   };
 
-  // Range flush to the NW wall (x = 0), facing the room. Serving line
-  // sits two tiles SE, HotDisplay and DrinkDisplay side by side.
-  commit("range", 0, 6, "SE");
-  commit("hotdisplay", 2, 5, "SE");
-  commit("drinkdisplay", 2, 7, "SE");
+  if (!rooms) {
+    commit("range", 0, 6, "SE");
+    commit("hotdisplay", 2, 5, "SE");
+    commit("drinkdisplay", 2, 7, "SE");
+    for (const x of [6, 9]) {
+      for (const y of [2, 6, 10]) {
+        const table =
+          CANTEEN_TABLE_TYPES[Math.floor(rng() * CANTEEN_TABLE_TYPES.length)]!;
+        if (!commit(table, x, y, "SE", { reserveApproach: false })) continue;
+        const chairX = x + furnitureFootprint(table, "SE").w;
+        commit("canteenchair", chairX, y, "SE", { reserveApproach: false });
+        commit("canteenchair", chairX, y + 1, "SE", { reserveApproach: false });
+      }
+    }
+    return { furnitures, walls: [], doors: [] };
+  }
 
-  for (const x of [6, 9]) {
-    for (const y of [2, 6, 10]) {
-      const table =
-        CANTEEN_TABLE_TYPES[Math.floor(rng() * CANTEEN_TABLE_TYPES.length)]!;
-      if (!commit(table, x, y, "SE", { reserveApproach: false })) continue;
-      const chairX = x + furnitureFootprint(table, "SE").w;
-      commit("canteenchair", chairX, y, "SE", { reserveApproach: false });
-      commit("canteenchair", chairX, y + 1, "SE", { reserveApproach: false });
+  const doorOnEast = rooms.kitchen.facing === "SE";
+  const walls: InteriorWallTile[] = [];
+  const wallKeys = new Set<string>();
+  for (const room of [rooms.kitchen, rooms.office]) {
+    for (const w of room.wallTiles) {
+      const key = `${w.x},${w.y}`;
+      if (wallKeys.has(key)) continue;
+      wallKeys.add(key);
+      walls.push(w);
+      occupied.add(key);
     }
   }
 
-  return furnitures;
+  const reserveDoor = (room: MessHallBackRoom) => {
+    occupied.add(`${room.entranceX},${room.entranceY}`);
+    const pads =
+      room.facing === "SE"
+        ? [
+            { x: room.entranceX + 1, y: room.entranceY },
+            { x: room.entranceX + 1, y: room.entranceY - 1 },
+            { x: room.entranceX + 1, y: room.entranceY + 1 },
+            { x: room.entranceX - 1, y: room.entranceY },
+          ]
+        : [
+            { x: room.entranceX, y: room.entranceY + 1 },
+            { x: room.entranceX - 1, y: room.entranceY + 1 },
+            { x: room.entranceX + 1, y: room.entranceY + 1 },
+            { x: room.entranceX, y: room.entranceY - 1 },
+          ];
+    for (const p of pads) {
+      if (p.x < 0 || p.y < 0 || p.x >= iW || p.y >= iH) continue;
+      occupied.add(`${p.x},${p.y}`);
+    }
+  };
+  reserveDoor(rooms.kitchen);
+  reserveDoor(rooms.office);
+
+  const place = (
+    objectType: FurnitureType,
+    depth: number,
+    along: number,
+    planFace: FurnitureFacing,
+    opts?: { reserveApproach?: boolean; room?: MessHallBackRoom | null },
+  ): boolean => {
+    const pos = messTile(doorOnEast, depth, along);
+    return commit(objectType, pos.x, pos.y, messFace(doorOnEast, planFace), opts);
+  };
+
+  const kitchen = rooms.kitchen;
+  const office = rooms.office;
+  const depth0 = doorOnEast ? kitchen.x0 : kitchen.y0;
+  const along0 = doorOnEast ? kitchen.y0 : kitchen.x0;
+  const kitchenAlong1 = doorOnEast ? kitchen.y1 : kitchen.x1;
+  const officeDepth0 = doorOnEast ? office.x0 : office.y0;
+  const officeAlong0 = doorOnEast ? office.y0 : office.x0;
+  const officeAlong1 = doorOnEast ? office.y1 : office.x1;
+  const counterDepth = (doorOnEast ? kitchen.x1 : kitchen.y1) + 2;
+
+  // Keep the old searchable ids for the range and the two counters.
+  // Facing the back wall, left to right: range, sink, fridge.
+  // The door is on the office end, so the counters sit on the other end.
+  place("range", depth0, kitchenAlong1, "SE", { room: kitchen });
+  place("hotdisplay", counterDepth, along0, "SE");
+  place("drinkdisplay", counterDepth, along0 + 2, "SE");
+  furnitureIndex = Math.max(furnitureIndex, startIndex + 100);
+
+  place("kitchensink", depth0, kitchenAlong1 - 2, "SE", { room: kitchen });
+  place("fridge", depth0, kitchenAlong1 - 3, "SE", { room: kitchen });
+  place("militarybasket", depth0, along0, "SE", { room: kitchen });
+
+  // Command office: same desk as the sergeant. Lockers take the south
+  // corner of the back wall (SE faces into the room, back on the shell).
+  // The gun cabinet stays on that wall, beside the bookshelf.
+  place("bookshelf2", officeDepth0, officeAlong0, "SE", { room: office });
+  place("guncabinet", officeDepth0, officeAlong0 + 1, "SE", { room: office });
+  place("cabinet", officeDepth0 + 4, officeAlong0, "SW", { room: office });
+  place("whiteboard", officeDepth0 + 2, officeAlong0, "SW", { room: office });
+  place("lockers", officeDepth0, officeAlong1 - 1, "SE", { room: office });
+  place("footlocker", officeDepth0 + 3, officeAlong1, "SE", { room: office });
+  if (place("desk3", officeDepth0 + 2, officeAlong0 + 2, "NW", { room: office })) {
+    const face = messFace(doorOnEast, "SE");
+    const pos = messTile(doorOnEast, officeDepth0 + 1, officeAlong0 + 3);
+    const key = `${pos.x},${pos.y}`;
+    occupied.delete(key);
+    const { dx, dy } = ISO_FACING_TILE_DELTA[face];
+    const behindX = pos.x - dx;
+    const behindY = pos.y - dy;
+    const behindKey = `${behindX},${behindY}`;
+    const inOffice = (tx: number, ty: number) =>
+      tx >= office.x0 && tx <= office.x1 && ty >= office.y0 && ty <= office.y1;
+    if (
+      inOffice(pos.x, pos.y) &&
+      !occupied.has(key) &&
+      inOffice(behindX, behindY) &&
+      !occupied.has(behindKey)
+    ) {
+      occupied.add(key);
+      occupied.add(behindKey);
+      furnitures.push({
+        id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+        kind: "furniture",
+        objectType: "officechair",
+        x: pos.x,
+        y: pos.y,
+        searched: false,
+        buildingX: bx,
+        buildingY: by,
+        facing: face,
+      });
+    } else {
+      occupied.add(key);
+    }
+  }
+
+  // Two columns and three rows, past the serving line. Chairs face the
+  // door and stay off the entrance (the east chairs end one tile west of it).
+  const tableDepths = [counterDepth + 2, counterDepth + 5];
+  const tableAlongs = [2, 6, 10];
+  for (const depth of tableDepths) {
+    for (const along of tableAlongs) {
+      const table =
+        CANTEEN_TABLE_TYPES[Math.floor(rng() * CANTEEN_TABLE_TYPES.length)]!;
+      if (!place(table, depth, along, "SE", { reserveApproach: false })) continue;
+      place("canteenchair", depth + 1, along, "SE", { reserveApproach: false });
+      place("canteenchair", depth + 1, along + 1, "SE", { reserveApproach: false });
+    }
+  }
+
+  return {
+    furnitures,
+    walls,
+    doors: [
+      { x: kitchen.entranceX, y: kitchen.entranceY },
+      { x: office.entranceX, y: office.entranceY },
+    ],
+  };
+}
+
+/**
+ * Diner kitchen in the back corner at along 0. The partition runs from the
+ * back wall toward the street, and its door opens onto the staff aisle
+ * behind the counter. A dining strip stays free between the kitchen and the
+ * street wall, so the entrance can sit anywhere on the façade.
+ */
+const DINER_KITCHEN_ALONG = 5;
+const DINER_KITCHEN_DEPTH = 4;
+const DINER_KITCHEN_DOOR_DEPTH = 1;
+const DINER_COUNTER_MIN = 2;
+const DINER_COUNTER_MAX = 6;
+
+export type DinerKitchenRoom = {
+  facing: "SE" | "SW";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  entranceX: number;
+  entranceY: number;
+  wallTiles: InteriorWallTile[];
+};
+
+export function layoutDinerKitchen(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+): DinerKitchenRoom | null {
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const depthMax = doorOnEast ? iW : iH;
+  const along1 = DINER_KITCHEN_ALONG;
+  const depth1 = DINER_KITCHEN_DEPTH;
+  // Dining strip in front of the kitchen, plus room for the counter run.
+  if (depthMax < depth1 + 3 || span < along1 + 9) return null;
+
+  const wallTiles: InteriorWallTile[] = [];
+  for (let depth = 0; depth <= depth1; depth++) {
+    if (depth === DINER_KITCHEN_DOOR_DEPTH) continue;
+    wallTiles.push(messTile(doorOnEast, depth, along1));
+  }
+  for (let along = 0; along < along1; along++) {
+    wallTiles.push(messTile(doorOnEast, depth1, along));
+  }
+  const door = messTile(doorOnEast, DINER_KITCHEN_DOOR_DEPTH, along1);
+  const a = messTile(doorOnEast, 0, 0);
+  const b = messTile(doorOnEast, depth1 - 1, along1 - 1);
+  return {
+    // The partition runs along the depth axis, so its door faces along +along.
+    facing: doorOnEast ? "SW" : "SE",
+    x0: Math.min(a.x, b.x),
+    y0: Math.min(a.y, b.y),
+    x1: Math.max(a.x, b.x),
+    y1: Math.max(a.y, b.y),
+    entranceX: door.x,
+    entranceY: door.y,
+    wallTiles,
+  };
+}
+
+export function dinerKitchenForBuilding(
+  bx: number,
+  by: number,
+): DinerKitchenRoom | null {
+  if (!isDinerInterior(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  return layoutDinerKitchen(iW, iH, interiorExitForBuildingAt(bx, by));
+}
+
+/** Kitchen floor or its door tile, or null. */
+export function dinerKitchenAtTile(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): DinerKitchenRoom | null {
+  const room = dinerKitchenForBuilding(bx, by);
+  if (!room) return null;
+  if (tx === room.entranceX && ty === room.entranceY) return room;
+  if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+    return room;
+  }
+  return null;
+}
+
+/** Kitchen floor tile (not the door gap), for floor art. */
+export function dinerKitchenFloorAt(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const room = dinerKitchenForBuilding(bx, by);
+  if (!room) return false;
+  return tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1;
+}
+
+function rollDinerCounter(rng: () => number): FurnitureType {
+  const r = rng();
+  if (r < 0.7) return "dinercounter1";
+  if (r < 0.85) return "dinercounter3";
+  return "dinercounter4";
+}
+
+function rollDinerBooth(rng: () => number): FurnitureType {
+  return rng() < 0.7 ? "booth1" : "booth2";
+}
+
+/**
+ * Diner, laid out in door-relative depth (0 = back wall) and along axes.
+ * The back wall holds the staff aisle, then a straight counter run with one
+ * tile of floor behind it and a passage at each end. The register sits on
+ * the counter nearest the entrance. Booths line the street windows, more
+ * fill the back wall past the counter, and a jukebox takes the far corner.
+ */
+function placeDiner(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  rng: () => number,
+  occupied: Set<string>,
+  startIndex: number,
+): {
+  furnitures: SearchableObject[];
+  walls: InteriorWallTile[];
+  doors: { x: number; y: number }[];
+} {
+  const furnitures: SearchableObject[] = [];
+  const kitchen = layoutDinerKitchen(iW, iH, exit);
+  if (!kitchen) return { furnitures, walls: [], doors: [] };
+
+  let furnitureIndex = startIndex;
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const front = (doorOnEast ? iW : iH) - 1;
+  const keyAt = (depth: number, along: number): string => {
+    const t = messTile(doorOnEast, depth, along);
+    return `${t.x},${t.y}`;
+  };
+
+  for (const w of kitchen.wallTiles) occupied.add(`${w.x},${w.y}`);
+  occupied.add(`${kitchen.entranceX},${kitchen.entranceY}`);
+  const doorFront = roomDoorFrontTiles(kitchen);
+  occupied.add(`${doorFront.inside.x},${doorFront.inside.y}`);
+  occupied.add(`${doorFront.outside.x},${doorFront.outside.y}`);
+
+  const nearEntrance = (depth: number, along: number): boolean =>
+    depth >= front - 2 &&
+    along >= exit.alongMin - 1 &&
+    along <= exit.alongMax + 1;
+
+  const inKitchen = (tx: number, ty: number): boolean =>
+    tx >= kitchen.x0 && tx <= kitchen.x1 && ty >= kitchen.y0 && ty <= kitchen.y1;
+
+  const tileFree = (tx: number, ty: number, kitchenOnly: boolean): boolean => {
+    if (tx < 0 || ty < 0 || tx >= iW || ty >= iH) return false;
+    if (occupied.has(`${tx},${ty}`)) return false;
+    return kitchenOnly ? inKitchen(tx, ty) : !inKitchen(tx, ty);
+  };
+
+  const place = (
+    objectType: FurnitureType,
+    depth: number,
+    along: number,
+    planFace: FurnitureFacing,
+    opts?: { reserveApproach?: boolean; kitchen?: boolean },
+  ): boolean => {
+    const reserveApproach = opts?.reserveApproach !== false;
+    const kitchenOnly = opts?.kitchen === true;
+    const facing = messFace(doorOnEast, planFace);
+    const origin = messTile(doorOnEast, depth, along);
+    const { w, h } = furnitureFootprint(objectType, facing);
+    for (let ty = origin.y; ty < origin.y + h; ty++) {
+      for (let tx = origin.x; tx < origin.x + w; tx++) {
+        if (!tileFree(tx, ty, kitchenOnly)) return false;
+        const d = doorOnEast ? tx : ty;
+        const a = doorOnEast ? ty : tx;
+        if (nearEntrance(d, a)) return false;
+      }
+    }
+    const desc = { kind: "furniture", objectType, x: origin.x, y: origin.y, facing };
+    const approaches = reserveApproach ? furnitureFrontApproachTiles(desc) : [];
+    for (const t of approaches) {
+      if (!tileFree(t.x, t.y, kitchenOnly)) return false;
+    }
+    for (let ty = origin.y; ty < origin.y + h; ty++) {
+      for (let tx = origin.x; tx < origin.x + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+    for (const t of approaches) occupied.add(`${t.x},${t.y}`);
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+      kind: "furniture",
+      objectType,
+      x: origin.x,
+      y: origin.y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    });
+    return true;
+  };
+
+  // Kitchen: fridge, double sink, and range along the back wall, all facing
+  // the street. A bin stands against the end wall by the front partition.
+  place("fridge", 0, 0, "SE", { kitchen: true });
+  place("sink2", 0, 1, "SE", { kitchen: true });
+  place("range", 0, 3, "SE", { kitchen: true });
+  place("trashcan", DINER_KITCHEN_DEPTH - 1, 0, "SW", { kitchen: true });
+
+  // Counter run. Depth 0 is the staff aisle, depth 2 is the stool row.
+  const passageA = DINER_KITCHEN_ALONG + 1;
+  const counterA0 = passageA + 1;
+  const counterRoom = span - 4 - counterA0 + 1;
+  const counterCount = Math.max(
+    DINER_COUNTER_MIN,
+    Math.min(DINER_COUNTER_MAX, Math.floor(counterRoom / 2)),
+  );
+  const counterA1 = counterA0 + counterCount * 2 - 1;
+  const passageB = counterA1 + 1;
+  for (let along = passageA; along <= passageB; along++) occupied.add(keyAt(0, along));
+  for (let depth = 0; depth <= 2; depth++) {
+    occupied.add(keyAt(depth, passageA));
+    occupied.add(keyAt(depth, passageB));
+  }
+
+  // The register goes on the counter nearest the street door.
+  const doorMid = (exit.alongMin + exit.alongMax) / 2;
+  let registerIdx = 0;
+  let registerDist = Infinity;
+  for (let i = 0; i < counterCount; i++) {
+    const dist = Math.abs(counterA0 + i * 2 + 0.5 - doorMid);
+    if (dist < registerDist) {
+      registerDist = dist;
+      registerIdx = i;
+    }
+  }
+  for (let i = 0; i < counterCount; i++) {
+    const type = i === registerIdx ? "dinercounter2" : rollDinerCounter(rng);
+    place(type, 1, counterA0 + i * 2, "SE");
+  }
+
+  // Jukebox in the far back corner, then booths on the back wall between it
+  // and the end of the counter.
+  const jukeA = span - 1;
+  if (jukeA > passageB) {
+    place("juke1", 0, jukeA, "SE", { reserveApproach: false });
+  }
+  for (let along = passageB + 1; along + 1 < jukeA; along += 2) {
+    place(rollDinerBooth(rng), 0, along, "SE");
+  }
+
+  // Window booths, table end against the street wall. The aisle in front of
+  // each one stays clear so every booth can be reached and searched.
+  const boothDepth = front - 1;
+  for (let along = 0; along + 1 < span; ) {
+    if (place(rollDinerBooth(rng), boothDepth, along, "SE", { reserveApproach: false })) {
+      occupied.add(keyAt(boothDepth - 1, along));
+      occupied.add(keyAt(boothDepth - 1, along + 1));
+      along += 2;
+    } else {
+      along += 1;
+    }
+  }
+
+  // The East Forestford quest diner keeps one window booth as Booth3.
+  // Same footprint as the booth it replaces, so reachability is unchanged.
+  if (isEastForestfordQuestDiner(bx, by)) {
+    const windowDepth = front - 1;
+    let questBooth: SearchableObject | null = null;
+    let questScore = Infinity;
+    for (const item of furnitures) {
+      if (item.objectType !== "booth1" && item.objectType !== "booth2") continue;
+      const depth = doorOnEast ? item.x : item.y;
+      const along = doorOnEast ? item.y : item.x;
+      const score =
+        (depth === windowDepth ? 0 : 1000) + Math.abs(along + 0.5 - doorMid);
+      if (score < questScore) {
+        questScore = score;
+        questBooth = item;
+      }
+    }
+    if (questBooth) questBooth.objectType = "booth3";
+  }
+
+  return {
+    furnitures,
+    walls: kitchen.wallTiles,
+    doors: [{ x: kitchen.entranceX, y: kitchen.entranceY }],
+  };
+}
+
+const GUN_SHOP_FIXTURE_TYPES = new Set([
+  "guncase1",
+  "guncase2",
+  "guncase3",
+  "gunrack1",
+  "gunrack2",
+  "gunrack3",
+  "gunrack4",
+  "ammoshelf1",
+  "gunbench1",
+]);
+
+export function isGunShopFixtureType(objectType: string): boolean {
+  return GUN_SHOP_FIXTURE_TYPES.has(objectType);
+}
+
+/** Pieces whose front tile must stay reachable from the street door. */
+const GUN_SHOP_MUST_REACH = new Set([
+  "guncase1",
+  "guncase2",
+  "guncase3",
+  "gunrack2",
+  "gunrack3",
+  "gunrack4",
+  "ammoshelf1",
+  "gunbench1",
+  "desk3",
+  "safe1",
+]);
+
+/**
+ * Gun shop back office in the corner at depth 0, along 0 (both back walls).
+ * Three tiles square inside. The door is in the side partition and opens onto
+ * the staff aisle behind the case counter.
+ */
+const GUN_SHOP_OFFICE_SPAN = 3;
+const GUN_SHOP_OFFICE_DOOR_DEPTH = 1;
+const GUN_SHOP_COUNTER_DEPTH = 2;
+/** Larger shops get a freestanding case island on the customer floor. */
+const GUN_SHOP_ISLAND_MIN_DEPTH = 10;
+const GUN_SHOP_ISLAND_MAX_CASES = 2;
+
+export type GunShopOfficeRoom = {
+  facing: "SE" | "SW";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  entranceX: number;
+  entranceY: number;
+  wallTiles: InteriorWallTile[];
+};
+
+export function layoutGunShopOffice(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+): GunShopOfficeRoom | null {
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const depthMax = doorOnEast ? iW : iH;
+  const wallAlong = GUN_SHOP_OFFICE_SPAN;
+  const wallDepth = GUN_SHOP_OFFICE_SPAN;
+  // A counter with a passage at each end, and a customer strip in front.
+  if (span < wallAlong + 5 || depthMax < wallDepth + 4) return null;
+
+  const wallTiles: InteriorWallTile[] = [];
+  for (let depth = 0; depth <= wallDepth; depth++) {
+    if (depth === GUN_SHOP_OFFICE_DOOR_DEPTH) continue;
+    wallTiles.push(messTile(doorOnEast, depth, wallAlong));
+  }
+  for (let along = 0; along < wallAlong; along++) {
+    wallTiles.push(messTile(doorOnEast, wallDepth, along));
+  }
+  const door = messTile(doorOnEast, GUN_SHOP_OFFICE_DOOR_DEPTH, wallAlong);
+  const a = messTile(doorOnEast, 0, 0);
+  const b = messTile(doorOnEast, wallDepth - 1, wallAlong - 1);
+  return {
+    // The door is in a partition along the depth axis, so it opens along +along.
+    facing: doorOnEast ? "SW" : "SE",
+    x0: Math.min(a.x, b.x),
+    y0: Math.min(a.y, b.y),
+    x1: Math.max(a.x, b.x),
+    y1: Math.max(a.y, b.y),
+    entranceX: door.x,
+    entranceY: door.y,
+    wallTiles,
+  };
+}
+
+export function gunShopOfficeForBuilding(
+  bx: number,
+  by: number,
+): GunShopOfficeRoom | null {
+  if (!isGunShopInterior(bx, by)) return null;
+  const { iW, iH } = interiorDimensions(bx, by);
+  return layoutGunShopOffice(iW, iH, interiorExitForBuildingAt(bx, by));
+}
+
+/** Office floor or its door tile, or null. */
+export function gunShopOfficeAtTile(
+  bx: number,
+  by: number,
+  tx: number,
+  ty: number,
+): GunShopOfficeRoom | null {
+  const room = gunShopOfficeForBuilding(bx, by);
+  if (!room) return null;
+  if (tx === room.entranceX && ty === room.entranceY) return room;
+  if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+    return room;
+  }
+  return null;
+}
+
+/** Mostly empty racks. A stocked one is rare, a full one the rarest. */
+function rollGunRack(rng: () => number): FurnitureType {
+  const r = rng();
+  if (r < 0.9) return "gunrack1";
+  if (r < 0.95) return "gunrack2";
+  if (r < 0.98) return "gunrack3";
+  return "gunrack4";
+}
+
+/** Stocked racks can be searched. Once emptied they show as GunRack1. */
+export function isLootableGunRackType(objectType: string): boolean {
+  return objectType === "gunrack2" || objectType === "gunrack3" || objectType === "gunrack4";
+}
+
+export const GUN_RACK_EMPTIED_TYPE = "gunrack1";
+
+function rollGunCase(rng: () => number): FurnitureType {
+  return rng() < 0.6 ? "guncase1" : "guncase3";
+}
+
+/**
+ * Gun shop, laid out in door-relative depth (0 = back wall) and along axes.
+ * The office takes the back corner. Racks and ammo shelves line the rest of
+ * the back wall, a staff aisle runs in front of them, then the case counter
+ * with a passage at each end. The register is the case nearest the street
+ * door. The gun bench and more racks stand on the side wall in front of the
+ * office, and deep shops get a case island. Every piece that can be used
+ * keeps a reachable front tile, or it is not placed.
+ */
+function placeGunShop(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  rng: () => number,
+  occupied: Set<string>,
+  startIndex: number,
+): {
+  furnitures: SearchableObject[];
+  walls: InteriorWallTile[];
+  doors: { x: number; y: number }[];
+} {
+  const furnitures: SearchableObject[] = [];
+  const office = layoutGunShopOffice(iW, iH, exit);
+  if (!office) return { furnitures, walls: [], doors: [] };
+
+  let furnitureIndex = startIndex;
+  const doorOnEast = exit.face === "SE";
+  const span = doorOnEast ? iH : iW;
+  const depthCount = doorOnEast ? iW : iH;
+  const front = depthCount - 1;
+  const officeAlong = GUN_SHOP_OFFICE_SPAN;
+  const officeDepth = GUN_SHOP_OFFICE_SPAN;
+  const keyAt = (depth: number, along: number): string => {
+    const t = messTile(doorOnEast, depth, along);
+    return `${t.x},${t.y}`;
+  };
+
+  // Floor that must stay open. Approach tiles may overlap it, furniture may not.
+  const walkway = new Set<string>();
+  const reserveWalk = (key: string) => {
+    occupied.add(key);
+    walkway.add(key);
+  };
+
+  for (const w of office.wallTiles) occupied.add(`${w.x},${w.y}`);
+  occupied.add(`${office.entranceX},${office.entranceY}`);
+  const doorFront = roomDoorFrontTiles(office);
+  reserveWalk(`${doorFront.inside.x},${doorFront.inside.y}`);
+  reserveWalk(`${doorFront.outside.x},${doorFront.outside.y}`);
+
+  const nearEntrance = (depth: number, along: number): boolean =>
+    depth >= front - 2 &&
+    along >= exit.alongMin - 1 &&
+    along <= exit.alongMax + 1;
+
+  const inOffice = (tx: number, ty: number): boolean =>
+    tx >= office.x0 && tx <= office.x1 && ty >= office.y0 && ty <= office.y1;
+
+  const inBounds = (tx: number, ty: number): boolean =>
+    tx >= 0 && ty >= 0 && tx < iW && ty < iH;
+
+  const frontReachable = (reach: Set<string>, item: SearchableObject): boolean =>
+    furnitureFrontApproachTiles(item).some((t) => reach.has(`${t.x},${t.y}`));
+
+  const layoutStillWorks = (): boolean => {
+    const reach = tilesReachableFromEntrance(iW, iH, exit, office.wallTiles, furnitures);
+    if (!reach.has(`${doorFront.outside.x},${doorFront.outside.y}`)) return false;
+    return furnitures.every(
+      (item) => !GUN_SHOP_MUST_REACH.has(item.objectType) || frontReachable(reach, item),
+    );
+  };
+
+  const place = (
+    objectType: FurnitureType,
+    depth: number,
+    along: number,
+    planFace: FurnitureFacing,
+    opts?: { office?: boolean; reserveApproach?: boolean },
+  ): boolean => {
+    const officeOnly = opts?.office === true;
+    const reserveApproach = opts?.reserveApproach !== false;
+    const facing = messFace(doorOnEast, planFace);
+    const origin = messTile(doorOnEast, depth, along);
+    const { w, h } = furnitureFootprint(objectType, facing);
+    const footprint: string[] = [];
+    for (let ty = origin.y; ty < origin.y + h; ty++) {
+      for (let tx = origin.x; tx < origin.x + w; tx++) {
+        if (!inBounds(tx, ty) || inOffice(tx, ty) !== officeOnly) return false;
+        const key = `${tx},${ty}`;
+        if (occupied.has(key)) return false;
+        const d = doorOnEast ? tx : ty;
+        const a = doorOnEast ? ty : tx;
+        if (nearEntrance(d, a)) return false;
+        footprint.push(key);
+      }
+    }
+    const item: SearchableObject = {
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex),
+      kind: "furniture",
+      objectType,
+      x: origin.x,
+      y: origin.y,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing,
+    };
+    const approaches: string[] = [];
+    if (reserveApproach) {
+      for (const t of furnitureFrontApproachTiles(item)) {
+        if (!inBounds(t.x, t.y) || inOffice(t.x, t.y) !== officeOnly) return false;
+        const key = `${t.x},${t.y}`;
+        if (occupied.has(key) && !walkway.has(key)) return false;
+        approaches.push(key);
+      }
+    }
+    furnitures.push(item);
+    if (!layoutStillWorks()) {
+      furnitures.pop();
+      return false;
+    }
+    furnitureIndex++;
+    for (const key of footprint) occupied.add(key);
+    for (const key of approaches) reserveWalk(key);
+    return true;
+  };
+
+  // Office: desk on the back wall with the chair pulled up to it, and the
+  // safe against the outer side wall. The desk keeps one open front tile.
+  if (place("desk3", 0, 0, "SE", { office: true, reserveApproach: false })) {
+    place("officechair", 1, 0, "NW", { office: true, reserveApproach: false });
+    reserveWalk(keyAt(1, 1));
+  }
+  const safeOrigin = messTile(doorOnEast, officeDepth - 1, 0);
+  const safeFacing = messFace(doorOnEast, "SW");
+  const safeApproach = keyAt(officeDepth - 1, 1);
+  if (
+    !occupied.has(`${safeOrigin.x},${safeOrigin.y}`) &&
+    !occupied.has(safeApproach)
+  ) {
+    placeFixedSafe(furnitures, occupied, bx, by, safeOrigin.x, safeOrigin.y, safeFacing);
+  }
+
+  // Passages through the counter at both ends. The far one is the leftover
+  // tile once the cases are laid in pairs.
+  const passageA = officeAlong + 1;
+  const counterA0 = passageA + 1;
+  const counterCount = Math.max(0, Math.floor((span - 1 - counterA0) / 2));
+  const passageB = counterA0 + counterCount * 2;
+  for (let depth = GUN_SHOP_COUNTER_DEPTH; depth <= GUN_SHOP_COUNTER_DEPTH + 1; depth++) {
+    reserveWalk(keyAt(depth, passageA));
+    if (passageB < span) reserveWalk(keyAt(depth, passageB));
+  }
+
+  // Gun bench on the side wall in front of the office, open to customers.
+  // It falls back to the back wall when the street door crowds that wall.
+  const sideStart = officeDepth + 1;
+  let benchPlaced = place("gunbench1", sideStart, 0, "SW");
+
+  // Back wall past the office. One ammo shelf, two on a long wall, racks in
+  // the rest. Racks are display only.
+  const backSlots: number[] = [];
+  for (let along = passageA; along + 1 < span; along += 2) backSlots.push(along);
+  const ammoCount = backSlots.length >= 4 ? 2 : 1;
+  const ammoSlots = new Set<number>();
+  while (ammoSlots.size < Math.min(ammoCount, backSlots.length)) {
+    ammoSlots.add(backSlots[Math.floor(rng() * backSlots.length)]!);
+  }
+  for (const along of backSlots) {
+    if (!benchPlaced && !ammoSlots.has(along) && place("gunbench1", 0, along, "SE")) {
+      benchPlaced = true;
+      continue;
+    }
+    place(ammoSlots.has(along) ? "ammoshelf1" : rollGunRack(rng), 0, along, "SE");
+  }
+
+  // Case counter. The register is the case nearest the street door, and a
+  // counter of two or more always has one pistol case.
+  const doorMid = (exit.alongMin + exit.alongMax) / 2;
+  let registerIdx = 0;
+  let registerDist = Infinity;
+  for (let i = 0; i < counterCount; i++) {
+    const dist = Math.abs(counterA0 + i * 2 + 0.5 - doorMid);
+    if (dist < registerDist) {
+      registerDist = dist;
+      registerIdx = i;
+    }
+  }
+  const others: number[] = [];
+  for (let i = 0; i < counterCount; i++) if (i !== registerIdx) others.push(i);
+  const pistolIdx = others.length > 0 ? others[Math.floor(rng() * others.length)]! : -1;
+  for (let i = 0; i < counterCount; i++) {
+    const type =
+      i === registerIdx ? "guncase2" : i === pistolIdx ? "guncase1" : rollGunCase(rng);
+    place(type, GUN_SHOP_COUNTER_DEPTH, counterA0 + i * 2, "SE");
+  }
+
+  // Racks down the rest of the side wall. A counter too short for a pistol
+  // case puts one here instead.
+  let hasPistolCase = furnitures.some((f) => f.objectType === "guncase1");
+  for (let depth = sideStart + 2; depth + 1 <= front; depth += 2) {
+    if (!hasPistolCase && place("guncase1", depth, 0, "SW")) {
+      hasPistolCase = true;
+      continue;
+    }
+    place(rollGunRack(rng), depth, 0, "SW");
+  }
+  // Street door crowding the side wall: a rack gives up its slot instead.
+  for (const item of furnitures) {
+    if (hasPistolCase) break;
+    if (!item.objectType.startsWith("gunrack")) continue;
+    const rack = item.objectType;
+    item.objectType = "guncase1";
+    if (layoutStillWorks()) hasPistolCase = true;
+    else item.objectType = rack;
+  }
+  // No rack either: a lone case stands on the customer floor.
+  for (const depth of [GUN_SHOP_COUNTER_DEPTH + 3, GUN_SHOP_COUNTER_DEPTH + 2]) {
+    for (let along = 3; !hasPistolCase && along + 1 <= span - 3; along++) {
+      if (place("guncase1", depth, along, "SE")) hasPistolCase = true;
+    }
+  }
+
+  // Deep shops: a short case island facing the door, with a lane on each side.
+  if (depthCount >= GUN_SHOP_ISLAND_MIN_DEPTH) {
+    const islandDepth = GUN_SHOP_COUNTER_DEPTH + 3;
+    let placedCases = 0;
+    for (
+      let along = 3;
+      along + 1 <= span - 3 && placedCases < GUN_SHOP_ISLAND_MAX_CASES;
+      along += 2
+    ) {
+      if (place(rollGunCase(rng), islandDepth, along, "SE")) placedCases++;
+    }
+  }
+
+  // Nothing spawns inside the locked office.
+  for (let y = office.y0; y <= office.y1; y++) {
+    for (let x = office.x0; x <= office.x1; x++) occupied.add(`${x},${y}`);
+  }
+
+  return {
+    furnitures,
+    walls: office.wallTiles,
+    doors: [{ x: office.entranceX, y: office.entranceY }],
+  };
 }
 
 type AshenMarketFrame = {
@@ -9278,6 +10506,59 @@ export function policeGunCabinetSearchableId(bx: number, by: number): string {
   return interiorSearchableId(bx, by, "furniture", POLICE_GUN_CABINET_INDEX);
 }
 
+/**
+ * Street tile in front of East Forestford PD (532.5, -117.5).
+ * The station footprint sits one tile west of that point.
+ */
+const EAST_FORESTFORD_PD_X = 532.5;
+const EAST_FORESTFORD_PD_Y = -117.5;
+const EAST_FORESTFORD_BODY_INDEX = 65002;
+
+let eastForestfordPoliceCache: BuildingInfo | null | undefined;
+
+/** Police station at East Forestford, identified from the street tile outside its door. */
+export function eastForestfordPoliceStation(): BuildingInfo | null {
+  if (eastForestfordPoliceCache !== undefined) return eastForestfordPoliceCache;
+  const tx = Math.floor(EAST_FORESTFORD_PD_X);
+  const ty = Math.floor(EAST_FORESTFORD_PD_Y);
+  const hits = [getBuildingAt(tx, ty), getBuildingAt(tx - 1, ty)];
+  eastForestfordPoliceCache =
+    hits.find((bld) => bld?.buildingType === "police_station") ?? null;
+  return eastForestfordPoliceCache;
+}
+
+export function isEastForestfordPoliceStation(bx: number, by: number): boolean {
+  const station = eastForestfordPoliceStation();
+  return !!station && station.ox === bx && station.oy === by;
+}
+
+/**
+ * East Forestford diner that holds the quest booth. Origin 540, -137.
+ * The street door is at 545, -134, beside the town center.
+ */
+const EAST_FORESTFORD_DINER_X = 540;
+const EAST_FORESTFORD_DINER_Y = -137;
+
+let eastForestfordDinerCache: BuildingInfo | null | undefined;
+
+/** The diner in East Forestford that spawns one Booth3. */
+export function eastForestfordQuestDiner(): BuildingInfo | null {
+  if (eastForestfordDinerCache !== undefined) return eastForestfordDinerCache;
+  const at = getBuildingAt(EAST_FORESTFORD_DINER_X, EAST_FORESTFORD_DINER_Y);
+  eastForestfordDinerCache = at?.buildingType === "diner" ? at : null;
+  return eastForestfordDinerCache;
+}
+
+export function isEastForestfordQuestDiner(bx: number, by: number): boolean {
+  const diner = eastForestfordQuestDiner();
+  return !!diner && diner.ox === bx && diner.oy === by;
+}
+
+/** Stable id for the quest body in East Forestford PD. Not loot. */
+export function eastForestfordDeadBodyId(bx: number, by: number): string {
+  return interiorSearchableId(bx, by, "furniture", EAST_FORESTFORD_BODY_INDEX);
+}
+
 /** Building origin for a sergeant gun-cabinet id, or null. */
 export function parsePoliceGunCabinetSearchableId(
   id: string,
@@ -9338,8 +10619,10 @@ function placeFixedSafe(
 
 /**
  * Walled meeting room and manager's office on the back wall, then a desk bullpen.
- * ConferenceTable1 already includes its chairs, so OfficeChair1 is only at desks
- * and behind the manager's desk. About one office in five has the table gone.
+ * ConferenceTable1 already includes its chairs, so OfficeChair1 is only at
+ * bullpen desks and in the manager's office. The manager sits behind the
+ * desk facing the door. Two chairs face the manager from the other side.
+ * About one office in five has the conference table gone.
  * A second storey is a stockroom: a quarter of the shelf slots, a tenth of the crates.
  */
 function placeOffice(
@@ -9522,10 +10805,10 @@ function placeOffice(
         : { x: manager!.x0 + side, y: manager!.y0 + back };
     const backFace: FurnitureFacing = manager.facing === "SE" ? "SE" : "SW";
     const lowFace: FurnitureFacing = manager.facing === "SE" ? "SW" : "SE";
-    // Guests and the desk face along the room, toward the boss. One empty
-    // tile sits between the armchairs and the desk. The boss faces back.
-    const deskFace: FurnitureFacing = backFace;
-    const bossFace: FurnitureFacing = deskFace === "SE" ? "NW" : "NE";
+    // Desk front points away from the door. The boss sits on that side and
+    // faces the door. Guests sit across the desk, one tile toward the door.
+    const deskFace: FurnitureFacing = manager.facing === "SE" ? "NW" : "NE";
+    const bossFace: FurnitureFacing = manager.facing === "SE" ? "SE" : "SW";
 
     const placeChair = (
       objectType: "armchair" | "officechair",
@@ -9571,8 +10854,7 @@ function placeOffice(
       return true;
     };
 
-    // Guests sit one tile off the desk, on its back side. Sides 1 and 2 are
-    // that pair. Side 0 stays open so the gap and the desk can be reached.
+    // Side 0 stays open so the bookshelf aisle and the desk can be reached.
     const commitAt = (
       type: FurnitureType,
       spots: { back: number; side: number; facing: FurnitureFacing }[],
@@ -9594,27 +10876,30 @@ function placeOffice(
       { back: 0, side: 4, facing: backFace },
       { back: 0, side: 5, facing: backFace },
     ]);
+    // Bookshelf aisle, one tile short of the door row, so the tiles behind
+    // the guest chairs stay clear.
     commitAt("watercooler", [
-      { back: 5, side: 0, facing: lowFace },
+      { back: 4, side: 0, facing: backFace },
       { back: 0, side: 5, facing: backFace },
     ]);
-    const armA = tileAt(1, 1);
-    const armB = tileAt(1, 2);
-    placeChair("armchair", armA.x, armA.y, deskFace, false);
-    placeChair("armchair", armB.x, armB.y, deskFace, false);
-    const desk = tileAt(3, 1);
+    // These seats face the boss. Armchair1 has no NE/NW art.
+    const guestA = tileAt(4, 1);
+    const guestB = tileAt(4, 2);
+    placeChair("officechair", guestA.x, guestA.y, deskFace, false);
+    placeChair("officechair", guestB.x, guestB.y, deskFace, false);
+    const desk = tileAt(2, 1);
     if (commit("desk3", desk.x, desk.y, deskFace)) {
-      const boss = tileAt(4, 2);
+      const boss = tileAt(1, 2);
       placeChair("officechair", boss.x, boss.y, bossFace, true);
       // Share an edge with the desk. The far end of the footprint, never a corner.
       commitAt("trashcan", [
-        { back: 3, side: 3, facing: lowFace },
-        { back: 3, side: 0, facing: backFace },
+        { back: 2, side: 3, facing: lowFace },
+        { back: 2, side: 0, facing: backFace },
       ]);
     }
-    // One tile in from the wall. Side 0 is the aisle to the bookshelf, and a
-    // safe there seals that shelf off from the door.
-    const safeAt = tileAt(2, 1);
+    // In the gap between the desk and the guests. Side 0 is the aisle to
+    // the bookshelf, and a safe there seals that shelf off from the door.
+    const safeAt = tileAt(3, 1);
     if (canPlace(SAFE_OBJECT_TYPE, safeAt.x, safeAt.y, lowFace)) {
       placeFixedSafe(
         furnitures,
@@ -10477,8 +11762,9 @@ function placeLargeRetail(
       tryPut("bookshelf", office.x0, office.y0, "SE");
       tryPut("cabinet", office.x0, office.y0 + 3, "SE");
       tryPut("watercooler", office.x0, office.y1, "SE");
-      if (tryPut("desk3", office.x0, office.y0 + 1, "SE")) {
-        placeBossChair(office.x0 + 1, office.y0 + 1, "NW");
+      // Pulled off the west wall so the boss sits behind it, facing the door.
+      if (tryPut("desk3", office.x0 + 2, office.y0 + 1, "NW")) {
+        placeBossChair(office.x0 + 1, office.y0 + 1, "SE");
       }
       tryPut("trashcan", office.x0 + 2, office.y1, "SE");
       if (canPlace(SAFE_OBJECT_TYPE, office.x1, office.y0, "SW")) {
@@ -10496,8 +11782,9 @@ function placeLargeRetail(
       tryPut("bookshelf", office.x0, office.y0, "SW");
       tryPut("cabinet", office.x0 + 3, office.y0, "SW");
       tryPut("watercooler", office.x1, office.y0, "SW");
-      if (tryPut("desk3", office.x0 + 1, office.y0, "SW")) {
-        placeBossChair(office.x0 + 1, office.y0 + 1, "NE");
+      // Pulled off the north wall so the boss sits behind it, facing the door.
+      if (tryPut("desk3", office.x0 + 1, office.y0 + 2, "NE")) {
+        placeBossChair(office.x0 + 1, office.y0 + 1, "SW");
       }
       tryPut("trashcan", office.x1, office.y0 + 2, "SW");
       if (canPlace(SAFE_OBJECT_TYPE, office.x0, office.y1, "SE")) {
@@ -10830,6 +12117,1049 @@ function placeLargeRetail(
   };
 }
 
+// ─── Apartments ─────────────────────────────────────────────────────────────
+
+/** Floor finish for one apartment zone. Clients map these to ground textures. */
+export type ApartmentFloorMaterial =
+  | "hallway"
+  | "concrete"
+  | "linoleum"
+  | "tiles"
+  | "wood"
+  | "laminate"
+  | "carpetBlue"
+  | "carpetBeige"
+  | "carpetRed";
+
+/** A flat, a bedroom inside it, or the ground-floor utility closet. */
+export type ApartmentRoom = RoomDoorRef & {
+  role: "apartment" | "bedroom" | "closet";
+  /** Partition tiles that fade while the player is inside. */
+  wallTiles: InteriorWallTile[];
+};
+
+/** Inclusive floor rectangle. Later zones paint over earlier ones. */
+export type ApartmentFloorZone = {
+  material: ApartmentFloorMaterial;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+};
+
+/** One storey of an apartment block. */
+export type ApartmentLevel = {
+  walls: InteriorWallTile[];
+  /** Room doors on this storey. The server makes each one a real door. */
+  doors: { x: number; y: number }[];
+  /** Inner rooms first, so a bedroom wins over the flat around it. */
+  rooms: ApartmentRoom[];
+  floors: ApartmentFloorZone[];
+  furnitures: SearchableObject[];
+};
+
+/**
+ * Stable ids for apartment stairs. Flight k joins level k and k + 1. The
+ * bottom of the flight is index base + 2k, the top is base + 2k + 1, so the
+ * id alone says which floor the stair leads to.
+ */
+const APARTMENT_STAIR_INDEX = 65100;
+const APARTMENT_STAIR_INDEX_END = APARTMENT_STAIR_INDEX + 64;
+
+/**
+ * Storey a stair takes the player to. Apartment flights encode it in the id.
+ * Office stairs (one flight) toggle between the ground and the first floor.
+ */
+export function interiorStairTargetLevel(stairId: string, level: number): number {
+  const mark = ":furniture:";
+  const at = stairId.lastIndexOf(mark);
+  if (at >= 0) {
+    const index = Number(stairId.slice(at + mark.length));
+    if (
+      Number.isInteger(index) &&
+      index >= APARTMENT_STAIR_INDEX &&
+      index < APARTMENT_STAIR_INDEX_END
+    ) {
+      const rel = index - APARTMENT_STAIR_INDEX;
+      const flight = Math.floor(rel / 2);
+      return rel % 2 === 0 ? flight + 1 : flight;
+    }
+  }
+  return level === 0 ? 1 : 0;
+}
+
+/** Apartment block interiors: corridor, utility closet, flats off the hall. */
+export function isApartmentInterior(bx: number, by: number): boolean {
+  return getBuildingAt(bx, by)?.buildingType === "apartment";
+}
+
+type AptFacing = "SE" | "SW";
+type AptTile = { a: number; d: number };
+type AptRect = { a0: number; d0: number; a1: number; d1: number };
+type AptPiece = {
+  type: FurnitureType;
+  a: number;
+  d: number;
+  facing: AptFacing;
+  fixedIndex?: number;
+};
+type AptRoom = AptRect & {
+  role: ApartmentRoom["role"];
+  /** Door wall axis in the canonical frame. "SW" is a wall along a. */
+  facing: AptFacing;
+  ea: number;
+  ed: number;
+  walls: AptTile[];
+};
+type AptZone = AptRect & { material: ApartmentFloorMaterial };
+type AptLevelPlan = {
+  walls: AptTile[];
+  doors: AptTile[];
+  rooms: AptRoom[];
+  zones: AptZone[];
+  pieces: AptPiece[];
+};
+
+/** Storey depth of the bedroom/kitchen strip at the back of a flat. */
+const APARTMENT_BACK_ROOM_MIN = 2;
+const APARTMENT_BACK_ROOM_MAX = 5;
+/** Corridor rows along the street wall, plus the wall that closes the flats. */
+const APARTMENT_CORRIDOR_ROWS = 3;
+/** Two flats per storey only when each still gets a full kitchen and bedroom. */
+const APARTMENT_TWO_FLAT_MIN_ALONG = 16;
+const APARTMENT_TWO_FLAT_MIN_DEPTH = 8;
+
+/**
+ * Placement grid for one storey, in the canonical frame: `a` runs along the
+ * street wall, `d` runs from the back wall (0) to the street wall (D - 1).
+ */
+class AptGrid {
+  readonly walls = new Set<string>();
+  readonly doors = new Set<string>();
+  readonly solid = new Set<string>();
+  /** Tiles furniture may not cover: door fronts, landings, loot approaches. */
+  readonly reserved = new Set<string>();
+  readonly pieces: AptPiece[] = [];
+
+  constructor(
+    readonly A: number,
+    readonly D: number,
+  ) {}
+
+  static key(a: number, d: number) {
+    return `${a},${d}`;
+  }
+
+  inBounds(a: number, d: number) {
+    return a >= 0 && d >= 0 && a < this.A && d < this.D;
+  }
+
+  open(a: number, d: number) {
+    const k = AptGrid.key(a, d);
+    return this.inBounds(a, d) && !this.walls.has(k) && !this.solid.has(k);
+  }
+
+  addWall(a: number, d: number) {
+    if (!this.inBounds(a, d)) return;
+    this.walls.add(AptGrid.key(a, d));
+  }
+
+  addDoor(a: number, d: number) {
+    const k = AptGrid.key(a, d);
+    this.walls.delete(k);
+    this.doors.add(k);
+    this.reserved.add(k);
+  }
+
+  reserve(a: number, d: number) {
+    if (this.inBounds(a, d)) this.reserved.add(AptGrid.key(a, d));
+  }
+
+  private partition(a: number, d: number) {
+    const k = AptGrid.key(a, d);
+    return this.walls.has(k) || this.doors.has(k);
+  }
+
+  /**
+   * Floor beside the outside of a wall bend. The wall only reaches the middle
+   * of the bend tile, so that side is half open and furniture there sits
+   * over the corner.
+   */
+  convexCorner(a: number, d: number): boolean {
+    for (const [da, dd] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const ca = a - da;
+      const cd = d - dd;
+      if (!this.partition(ca, cd)) continue;
+      const backArm = this.partition(ca - da, cd - dd);
+      const sideA = this.partition(ca + dd, cd + da);
+      const sideB = this.partition(ca - dd, cd - da);
+      if (backArm && sideA !== sideB) return true;
+    }
+    return false;
+  }
+
+  /** Every open tile reachable from every other. Doors count as open. */
+  connected(): boolean {
+    let total = 0;
+    let seed: AptTile | null = null;
+    for (let d = 0; d < this.D; d++) {
+      for (let a = 0; a < this.A; a++) {
+        if (!this.open(a, d)) continue;
+        total++;
+        seed ??= { a, d };
+      }
+    }
+    if (!seed) return true;
+    const seen = new Set<string>();
+    const stack: AptTile[] = [seed];
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      const k = AptGrid.key(p.a, p.d);
+      if (seen.has(k) || !this.open(p.a, p.d)) continue;
+      seen.add(k);
+      stack.push(
+        { a: p.a + 1, d: p.d },
+        { a: p.a - 1, d: p.d },
+        { a: p.a, d: p.d + 1 },
+        { a: p.a, d: p.d - 1 },
+      );
+    }
+    return seen.size === total;
+  }
+
+  /**
+   * Place a piece when its footprint sits in `region` on free floor, its loot
+   * side faces open floor, and no part of the storey gets cut off.
+   */
+  tryPlace(
+    type: FurnitureType,
+    a: number,
+    d: number,
+    facing: AptFacing,
+    region: AptRect,
+    fixedIndex?: number,
+  ): boolean {
+    const { w, h } = furnitureFootprint(type, facing);
+    const tiles: string[] = [];
+    for (let dd = d; dd < d + h; dd++) {
+      for (let aa = a; aa < a + w; aa++) {
+        if (aa < region.a0 || aa > region.a1 || dd < region.d0 || dd > region.d1) {
+          return false;
+        }
+        const k = AptGrid.key(aa, dd);
+        if (!this.open(aa, dd) || this.reserved.has(k) || this.doors.has(k)) {
+          return false;
+        }
+        if (this.convexCorner(aa, dd)) return false;
+        tiles.push(k);
+      }
+    }
+    const approach = furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType: type,
+      x: a,
+      y: d,
+      facing,
+    });
+    if (approach.length === 0) return false;
+    for (const t of approach) {
+      const k = AptGrid.key(t.x, t.y);
+      if (!this.open(t.x, t.y) || this.doors.has(k) || tiles.includes(k)) {
+        return false;
+      }
+    }
+    for (const k of tiles) this.solid.add(k);
+    if (!this.connected()) {
+      for (const k of tiles) this.solid.delete(k);
+      return false;
+    }
+    for (const t of approach) this.reserve(t.x, t.y);
+    this.pieces.push({ type, a, d, facing, fixedIndex });
+    return true;
+  }
+
+  snapshot() {
+    return { solid: [...this.solid], reserved: [...this.reserved], pieces: this.pieces.length };
+  }
+
+  restore(s: ReturnType<AptGrid["snapshot"]>) {
+    this.solid.clear();
+    for (const k of s.solid) this.solid.add(k);
+    this.reserved.clear();
+    for (const k of s.reserved) this.reserved.add(k);
+    this.pieces.length = s.pieces;
+  }
+
+  placeFirst(
+    type: FurnitureType,
+    cands: readonly [number, number, AptFacing][],
+    region: AptRect,
+  ): AptPiece | null {
+    for (const [a, d, facing] of cands) {
+      if (this.tryPlace(type, a, d, facing, region)) {
+        return this.pieces[this.pieces.length - 1] ?? null;
+      }
+    }
+    return null;
+  }
+}
+
+function aptPick<T>(rng: () => number, list: readonly T[]): T {
+  return list[Math.floor(rng() * list.length) % list.length]!;
+}
+
+/** Stair column offsets along the corridor. Flights alternate between them. */
+function apartmentStairSpots(A: number, doorMin: number, doorMax: number): [number, number] {
+  // Flight 0 shares the ground corridor with the street door and its landing.
+  const clearOfDoor = (p: number) => p + 2 < doorMin || p > doorMax;
+  let first = 0;
+  if (!clearOfDoor(first)) {
+    first = doorMax + 1;
+  }
+  const second = first + 3 + 2 < A ? first + 3 : Math.max(0, first - 3);
+  return [first, second];
+}
+
+type AptFlatSpec = { x0: number; x1: number };
+
+type AptCand = [number, number, AptFacing];
+type AptSpan = { a0: number; a1: number };
+
+/** Bedroom arrangements. Every one keeps the bed foot and loot sides open. */
+type AptBedroomStyle =
+  | "headWest"
+  | "headWestLow"
+  | "headNorth"
+  | "cornerNorth"
+  | "twinNorth"
+  | "twinWest"
+  | "study";
+type AptKitchenStyle = "galley" | "galleyReverse" | "lShape";
+type AptLivingStyle = "westSofa" | "northSofa" | "cornerSofa" | "reading";
+
+function aptShuffle<T>(rng: () => number, list: readonly T[]): T[] {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = out[i]!;
+    out[i] = out[j]!;
+    out[j] = tmp;
+  }
+  return out;
+}
+
+/** Arrangements a bedroom `w` wide and `r` deep can hold. */
+function aptBedroomStyles(w: number, r: number): AptBedroomStyle[] {
+  const out: AptBedroomStyle[] = ["headWest", "study"];
+  if (r >= 3) out.push("headWestLow", "headNorth");
+  if (r >= 3 && w >= 4) out.push("cornerNorth", "twinWest");
+  if (r >= 3 && w >= 5) out.push("twinNorth");
+  return out;
+}
+
+/** Bedroom door column for a style. Kept clear of where the bed goes. */
+function aptBedroomDoor(
+  style: AptBedroomStyle,
+  room: AptSpan,
+  rng: () => number,
+): number {
+  if (style === "cornerNorth") return room.a0;
+  if (style === "headNorth") return rng() < 0.5 ? room.a0 : room.a1;
+  return room.a1;
+}
+
+/**
+ * Furnish one flat: one or two bedrooms and a kitchen across the back in a
+ * rolled order, open living room toward the corridor. Each room picks its
+ * own arrangement so neighbouring flats rarely look alike.
+ */
+function planApartmentFlat(
+  grid: AptGrid,
+  plan: AptLevelPlan,
+  flat: AptFlatSpec,
+  entrance: number,
+  bandDepth: number,
+  rng: () => number,
+): void {
+  const { x0, x1 } = flat;
+  const W = x1 - x0 + 1;
+  const baseR = Math.max(
+    APARTMENT_BACK_ROOM_MIN,
+    Math.min(APARTMENT_BACK_ROOM_MAX, Math.floor((bandDepth - 1) / 2)),
+  );
+  const baseLiving = bandDepth - baseR - 1;
+  const rOpts = [baseR - 1, baseR, baseR, baseR + 1].filter(
+    (v) =>
+      v >= APARTMENT_BACK_ROOM_MIN &&
+      v <= APARTMENT_BACK_ROOM_MAX &&
+      bandDepth - v - 1 >= Math.min(3, baseLiving),
+  );
+  const r = rOpts.length > 0 ? aptPick(rng, rOpts) : baseR;
+  const livingTop = r + 1;
+  const livingBottom = bandDepth - 1;
+
+  // Room widths along the back strip, then their order.
+  const bedWidths: number[] = [];
+  if (W >= 14) {
+    let b1 = aptPick(rng, [4, 5]);
+    let b2 = aptPick(rng, [4, 5]);
+    while (W - b1 - b2 - 2 < 4 && (b1 > 4 || b2 > 4)) {
+      if (b1 >= b2) b1--;
+      else b2--;
+    }
+    bedWidths.push(b1, b2);
+  } else {
+    const opts = (W <= 7 ? [3] : W <= 9 ? [4] : W <= 11 ? [4, 5] : [4, 5, 6]).filter(
+      (b) => W - b - 1 >= 3,
+    );
+    bedWidths.push(opts.length > 0 ? aptPick(rng, opts) : 3);
+  }
+  const kitchenW = W - bedWidths.reduce((s, b) => s + b, 0) - bedWidths.length;
+  const order: ("bed" | "kitchen")[] =
+    bedWidths.length === 2
+      ? aptPick(rng, [
+          ["bed", "bed", "kitchen"],
+          ["kitchen", "bed", "bed"],
+          ["bed", "kitchen", "bed"],
+        ] as ("bed" | "kitchen")[][])
+      : aptPick(rng, [
+          ["bed", "kitchen"],
+          ["kitchen", "bed"],
+        ] as ("bed" | "kitchen")[][]);
+
+  const bedSpans: AptSpan[] = [];
+  let kitchenSpan: AptSpan = { a0: x0, a1: x1 };
+  let cursor = x0;
+  let bedIdx = 0;
+  for (const kind of order) {
+    const w = kind === "kitchen" ? kitchenW : bedWidths[bedIdx++]!;
+    const span = { a0: cursor, a1: cursor + w - 1 };
+    if (kind === "kitchen") kitchenSpan = span;
+    else bedSpans.push(span);
+    cursor = span.a1 + 2;
+  }
+  const ka0 = kitchenSpan.a0;
+  const ka1 = kitchenSpan.a1;
+
+  const livingMat = aptPick(rng, ["wood", "laminate", "carpetBeige"] as const);
+  const kitchenMat = aptPick(rng, ["linoleum", "linoleum", "tiles"] as const);
+  let bedroomMats: ApartmentFloorMaterial[] = (
+    ["carpetBlue", "carpetBeige", "carpetRed", "wood"] as const
+  ).filter((m) => m !== livingMat);
+  plan.zones.push({ material: livingMat, a0: x0, d0: 0, a1: x1, d1: bandDepth - 1 });
+  plan.zones.push({ material: kitchenMat, a0: ka0, d0: 0, a1: ka1, d1: r });
+
+  // Bedroom shells and doors. Every door exists before any furniture goes in
+  // so the reachability check sees the whole flat.
+  const bedroomRooms: AptRoom[] = [];
+  const bedroomStyles: AptBedroomStyle[] = [];
+  for (const span of bedSpans) {
+    const walls: AptTile[] = [];
+    const wall = (a: number, d: number) => {
+      if (a < x0 - 1 || a > x1 + 1) return;
+      grid.addWall(a, d);
+      walls.push({ a, d });
+    };
+    for (let d = 0; d < r; d++) {
+      if (span.a0 > x0) wall(span.a0 - 1, d);
+      if (span.a1 < x1) wall(span.a1 + 1, d);
+    }
+    for (let a = span.a0 - 1; a <= span.a1 + 1; a++) wall(a, r);
+
+    const w = span.a1 - span.a0 + 1;
+    const fresh = aptBedroomStyles(w, r).filter((s) => !bedroomStyles.includes(s));
+    const style = aptPick(rng, fresh.length > 0 ? fresh : aptBedroomStyles(w, r));
+    bedroomStyles.push(style);
+    const door = aptBedroomDoor(style, span, rng);
+    grid.addDoor(door, r);
+    grid.reserve(door, r - 1);
+    grid.reserve(door, r + 1);
+    bedroomRooms.push({
+      role: "bedroom",
+      facing: "SW",
+      a0: span.a0,
+      d0: 0,
+      a1: span.a1,
+      d1: r - 1,
+      ea: door,
+      ed: r,
+      walls: walls.filter((t) => !(t.a === door && t.d === r)),
+    });
+    const mat = aptPick(rng, bedroomMats);
+    if (bedroomMats.length > 1) bedroomMats = bedroomMats.filter((m) => m !== mat);
+    plan.zones.push({ material: mat, a0: span.a0, d0: 0, a1: span.a1, d1: r - 1 });
+  }
+
+  const northRow = (span: AptSpan, fromEast: boolean): AptCand[] => {
+    const out: AptCand[] = [];
+    for (let a = span.a0; a <= span.a1; a++) out.push([a, 0, "SW"]);
+    return fromEast ? out.reverse() : out;
+  };
+  const westCol = (a: number, from: number, to: number): AptCand[] => {
+    const out: AptCand[] = [];
+    const step = from <= to ? 1 : -1;
+    for (let d = from; d !== to + step; d += step) out.push([a, d, "SE"]);
+    return out;
+  };
+  const anywhere = (rect: AptRect): AptCand[] => {
+    const out: AptCand[] = [];
+    for (let d = rect.d0; d <= rect.d1; d++) {
+      for (let a = rect.a0; a <= rect.a1; a++) out.push([a, d, "SE"], [a, d, "SW"]);
+    }
+    return out;
+  };
+  const doubleBed = (): FurnitureType => (rng() < 0.5 ? "bed" : "motelbed");
+
+  bedroomRooms.forEach((room, i) => {
+    const style = bedroomStyles[i]!;
+    const region: AptRect = room;
+    const w = room.a1 - room.a0 + 1;
+    const midRows: number[] = [];
+    for (let d = 0; d < r; d++) midRows.push(d);
+    midRows.sort((p, q) => Math.abs(p - (r - 1) / 2) - Math.abs(q - (r - 1) / 2));
+    const lowRows = [...midRows].sort((p, q) => q - p);
+    const nightstandBeside = (bed: AptPiece | null, chance2: number) => {
+      if (!bed) return;
+      const cands: AptCand[] =
+        bed.facing === "SE"
+          ? [
+              [room.a0, bed.d - 1, "SE"],
+              [room.a0, bed.d + 1, "SE"],
+            ]
+          : [
+              [bed.a - 1, 0, "SW"],
+              [bed.a + 1, 0, "SW"],
+            ];
+      const sides = rng() < 0.5 ? cands : [...cands].reverse();
+      if (grid.placeFirst("nightstand", sides, region) && rng() < chance2) {
+        grid.placeFirst("nightstand", sides, region);
+      }
+    };
+
+    let bed: AptPiece | null = null;
+    switch (style) {
+      case "headWest": {
+        bed = grid.placeFirst(
+          doubleBed(),
+          midRows.map((d) => [room.a0, d, "SE"] as AptCand),
+          region,
+        );
+        nightstandBeside(bed, w >= 4 ? 0.5 : 0);
+        grid.placeFirst(rng() < 0.7 ? "dresser" : "drawers", northRow(room, true), region);
+        if (w >= 4 && rng() < 0.45) grid.placeFirst("bookshelf", northRow(room, true), region);
+        break;
+      }
+      case "headWestLow": {
+        bed = grid.placeFirst(
+          doubleBed(),
+          lowRows.map((d) => [room.a0, d, "SE"] as AptCand),
+          region,
+        );
+        nightstandBeside(bed, 0);
+        grid.placeFirst(rng() < 0.5 ? "bookshelf" : "cabinet", westCol(room.a0, 0, 1), region);
+        grid.placeFirst(rng() < 0.6 ? "dresser" : "drawers", northRow(room, true), region);
+        if (rng() < 0.4) grid.placeFirst("drawers", northRow(room, true), region);
+        break;
+      }
+      case "headNorth": {
+        const c = room.a0 + Math.floor((w - 1) / 2) + (w % 2 === 0 && rng() < 0.5 ? 1 : 0);
+        bed = grid.placeFirst(
+          "motelbed",
+          [
+            [c, 0, "SW"],
+            [c - 1, 0, "SW"],
+            [c + 1, 0, "SW"],
+          ],
+          region,
+        );
+        nightstandBeside(bed, 0.7);
+        grid.placeFirst(rng() < 0.5 ? "drawers" : "cabinet", westCol(room.a0, r - 1, 1), region);
+        if (rng() < 0.5) grid.placeFirst("bookshelf", westCol(room.a0, 1, r - 1), region);
+        break;
+      }
+      case "cornerNorth": {
+        bed = grid.placeFirst(
+          "motelbed",
+          [
+            [room.a1, 0, "SW"],
+            [room.a1 - 1, 0, "SW"],
+          ],
+          region,
+        );
+        if (bed) grid.placeFirst("nightstand", [[bed.a - 1, 0, "SW"]], region);
+        grid.placeFirst(rng() < 0.6 ? "dresser" : "drawers", northRow(room, false), region);
+        if (rng() < 0.6) {
+          grid.placeFirst(
+            rng() < 0.5 ? "bookshelf" : "cabinet",
+            westCol(room.a0, r - 1, 1),
+            region,
+          );
+        }
+        break;
+      }
+      case "twinNorth": {
+        bed = grid.placeFirst("motelbed", [[room.a0, 0, "SW"]], region);
+        grid.placeFirst("nightstand", [[room.a0 + 1, 0, "SW"]], region);
+        grid.placeFirst("motelbed", [[room.a0 + 2, 0, "SW"]], region);
+        grid.placeFirst(rng() < 0.5 ? "drawers" : "dresser", northRow(room, true), region);
+        if (rng() < 0.5) grid.placeFirst("suitcase", anywhere(region), region);
+        break;
+      }
+      case "twinWest": {
+        bed = grid.placeFirst("motelbed", [[room.a0, 0, "SE"]], region);
+        grid.placeFirst("nightstand", [[room.a0, 1, "SE"]], region);
+        grid.placeFirst("motelbed", [[room.a0, 2, "SE"]], region);
+        grid.placeFirst(rng() < 0.6 ? "dresser" : "drawers", northRow(room, true), region);
+        break;
+      }
+      case "study": {
+        bed = grid.placeFirst(
+          doubleBed(),
+          lowRows.map((d) => [room.a0, d, "SE"] as AptCand),
+          region,
+        );
+        nightstandBeside(bed, 0);
+        grid.placeFirst("desk", northRow(room, true), region);
+        if (rng() < 0.7) grid.placeFirst("bookshelf2", northRow(room, true), region);
+        if (rng() < 0.4) grid.placeFirst("drawers", northRow(room, false), region);
+        break;
+      }
+    }
+    if (!bed) {
+      grid.placeFirst(
+        "motelbed",
+        [
+          ...westCol(room.a0, 0, r - 1),
+          ...northRow(room, false),
+          ...anywhere(region),
+        ],
+        region,
+      );
+    }
+    if (rng() < 0.3) grid.placeFirst("suitcase", aptShuffle(rng, anywhere(region)), region);
+  });
+
+  // Kitchen: appliances against the back wall in a rolled order, or an L
+  // with the fridge on the side wall. Open to the living room.
+  const kitchen: AptRect = { a0: ka0, d0: 0, a1: ka1, d1: r };
+  const kitchenStyle = aptPick(rng, ["galley", "galleyReverse", "lShape"] as AptKitchenStyle[]);
+  const backRun = northRow(kitchenSpan, kitchenStyle === "galleyReverse");
+  const sideRun = westCol(ka0, 1, r);
+  const appliances = aptShuffle(rng, ["fridge", "kitchensink", "range"] as FurnitureType[]);
+  const placeAppliances = (order: FurnitureType[]) => {
+    let sink = false;
+    for (const type of order) {
+      const lFridge = kitchenStyle === "lShape" && type === "fridge";
+      const placed =
+        grid.placeFirst(type, lFridge ? [...sideRun, ...backRun] : [...backRun, ...sideRun], kitchen) ??
+        grid.placeFirst(type, anywhere(kitchen), kitchen);
+      if (type === "kitchensink" && placed) sink = true;
+    }
+    return sink;
+  };
+  const lead: FurnitureType[] = kitchenStyle === "lShape" ? ["fridge"] : [];
+  const beforeKitchen = grid.snapshot();
+  if (!placeAppliances([...lead, ...appliances.filter((t) => !lead.includes(t))])) {
+    // The two-tile sink did not fit around the others, so it claims space first.
+    grid.restore(beforeKitchen);
+    placeAppliances(["kitchensink", ...lead, ...appliances.filter((t) => t !== "kitchensink" && !lead.includes(t))]);
+  }
+  if (rng() < 0.6) grid.placeFirst("cabinet", backRun, kitchen);
+  if (rng() < 0.6) grid.placeFirst("trashcan", [...sideRun].reverse(), kitchen);
+  if (kitchenW >= 5 && rng() < 0.35) grid.placeFirst("drawers", backRun, kitchen);
+
+  // Living room. SW pieces only go under the bedroom walls, never under
+  // the open kitchen edge.
+  const living: AptRect = { a0: x0, d0: livingTop, a1: x1, d1: livingBottom };
+  const underSet = new Set<number>();
+  for (let a = x0; a <= x1; a++) {
+    if (grid.walls.has(AptGrid.key(a, r))) underSet.add(a);
+  }
+  const under = (span: number, fromEast: boolean): AptCand[] => {
+    const out: AptCand[] = [];
+    for (let a = x0; a + span - 1 <= x1; a++) {
+      let ok = true;
+      for (let k = 0; k < span; k++) if (!underSet.has(a + k)) ok = false;
+      if (ok) out.push([a, livingTop, "SW"]);
+    }
+    return fromEast ? out.reverse() : out;
+  };
+  const underMid = (span: number): AptCand[] => {
+    const list = under(span, false);
+    if (list.length === 0) return list;
+    const mid = (list[0]![0] + list[list.length - 1]![0]) / 2;
+    return list.sort((p, q) => Math.abs(p[0] - mid) - Math.abs(q[0] - mid));
+  };
+  const westMid = (): AptCand[] => {
+    const out = westCol(x0, livingTop, livingBottom - 1);
+    const mid = (livingTop + livingBottom - 1) / 2;
+    return out.sort((p, q) => Math.abs(p[1] - mid) - Math.abs(q[1] - mid));
+  };
+  const livingRows = livingBottom - livingTop + 1;
+  const styles: AptLivingStyle[] = ["westSofa", "northSofa", "reading"];
+  if (underSet.has(x0 + 1) && underSet.has(x0 + 2)) styles.push("cornerSofa");
+  const livingStyle = aptPick(rng, styles);
+
+  let sofa: AptPiece | null = null;
+  switch (livingStyle) {
+    case "westSofa": {
+      sofa = grid.placeFirst("sofa", westMid(), living);
+      const chair: AptCand[] = sofa
+        ? [
+            [x0, sofa.d + 2, "SE"],
+            [x0, sofa.d - 1, "SE"],
+          ]
+        : [];
+      grid.placeFirst("armchair", [...chair, ...under(1, false)], living);
+      if (W >= 10 && livingRows >= 4) {
+        grid.placeFirst("sofa", under(2, false).filter((c) => c[0] >= x0 + 2), living);
+      }
+      if (rng() < 0.7) grid.placeFirst("bookshelf", under(1, true), living);
+      break;
+    }
+    case "northSofa": {
+      sofa = grid.placeFirst("sofa", underMid(2), living);
+      grid.placeFirst("armchair", westMid(), living);
+      if (rng() < 0.6) grid.placeFirst("armchair", westMid(), living);
+      if (rng() < 0.6) {
+        grid.placeFirst("bookshelf", westCol(x0, livingBottom, livingTop), living);
+      }
+      if (rng() < 0.5) {
+        grid.placeFirst(rng() < 0.5 ? "cabinet" : "drawers", under(1, true), living);
+      }
+      break;
+    }
+    case "cornerSofa": {
+      sofa = grid.placeFirst("sofa", [[x0, livingTop + 1, "SE"]], living);
+      grid.placeFirst("sofa", [[x0 + 1, livingTop, "SW"]], living);
+      grid.placeFirst("armchair", under(1, false).filter((c) => c[0] >= x0 + 4), living);
+      if (rng() < 0.6) grid.placeFirst("bookshelf", under(1, true), living);
+      break;
+    }
+    case "reading": {
+      sofa = grid.placeFirst("sofa", [...underMid(2), ...westMid()], living);
+      grid.placeFirst("bookshelf", under(1, false), living);
+      grid.placeFirst("bookshelf2", under(1, false), living);
+      if (rng() < 0.5) grid.placeFirst("bookshelf", under(1, true), living);
+      grid.placeFirst("armchair", westMid(), living);
+      grid.placeFirst("armchair", westMid(), living);
+      break;
+    }
+  }
+  if (!sofa) {
+    grid.placeFirst("sofa", [...westMid(), ...under(2, false), ...anywhere(living)], living);
+  }
+
+  // Dinner table after the seating so it never squeezes out the sofa. In a
+  // roomy kitchen, else at the kitchen end of the living room. Long side rolled.
+  const kitchenMid = (ka0 + ka1 + 1) / 2;
+  const tableFacing: AptFacing = rng() < 0.5 ? "SW" : "SE";
+  const tableRows: { d: number; a0: number; a1: number }[] = [];
+  if (kitchenW >= 5 && r >= 3) {
+    for (let d = r - 1; d >= 2; d--) tableRows.push({ d, a0: ka0 + 1, a1: ka1 - 1 });
+  }
+  for (let d = livingTop + 1; d < livingBottom; d++) {
+    tableRows.push({ d, a0: x0 + 1, a1: x1 - 1 });
+  }
+  const tableCands: AptCand[] = [];
+  for (const facing of [tableFacing, tableFacing === "SW" ? "SE" : "SW"] as AptFacing[]) {
+    for (const { d, a0, a1 } of tableRows) {
+      const row: AptCand[] = [];
+      for (let a = a0; a <= a1; a++) row.push([a, d, facing]);
+      row.sort(
+        (p, q) => Math.abs(p[0] + 0.5 - kitchenMid) - Math.abs(q[0] + 0.5 - kitchenMid),
+      );
+      tableCands.push(...row);
+    }
+  }
+  const tableRegion: AptRect = { a0: x0, d0: 0, a1: x1, d1: livingBottom };
+  grid.placeFirst("dinnertable", tableCands, tableRegion);
+  if (W >= 10 && livingRows >= 5 && rng() < 0.4) {
+    grid.placeFirst("bookshelf", westCol(x0, livingBottom, livingTop), living);
+  }
+  if (rng() < 0.3) grid.placeFirst("desk", under(1, true), living);
+  if (rng() < 0.25) grid.placeFirst("suitcase", aptShuffle(rng, anywhere(living)), living);
+
+  const frontWalls: AptTile[] = [];
+  for (let a = Math.max(0, x0 - 1); a <= Math.min(grid.A - 1, x1 + 1); a++) {
+    if (a === entrance) continue;
+    frontWalls.push({ a, d: bandDepth });
+  }
+  if (x1 + 1 < grid.A) {
+    for (let d = 0; d < bandDepth; d++) frontWalls.push({ a: x1 + 1, d });
+  }
+  plan.rooms.push(...bedroomRooms);
+  plan.rooms.push({
+    role: "apartment",
+    facing: "SW",
+    a0: x0,
+    d0: 0,
+    a1: x1,
+    d1: bandDepth - 1,
+    ea: entrance,
+    ed: bandDepth,
+    walls: frontWalls,
+  });
+}
+
+/** Canonical plan for every storey. Null when the shell is too small. */
+function planApartmentBuilding(
+  A: number,
+  D: number,
+  levels: number,
+  doorMin: number,
+  doorMax: number,
+  rng: () => number,
+): AptLevelPlan[] | null {
+  const bandDepth = D - APARTMENT_CORRIDOR_ROWS - 1;
+  if (A < 8 || bandDepth < 5) return null;
+  const corridorTop = D - APARTMENT_CORRIDOR_ROWS;
+  const [spotA, spotB] = apartmentStairSpots(A, doorMin, doorMax);
+  const flights = Math.max(0, levels - 1);
+  const spotForFlight = (k: number) => (k % 2 === 0 ? spotA : spotB);
+
+  const twoFlats = A >= APARTMENT_TWO_FLAT_MIN_ALONG && bandDepth >= APARTMENT_TWO_FLAT_MIN_DEPTH;
+  const split = Math.floor(A / 2);
+  const flats: AptFlatSpec[] = twoFlats
+    ? [
+        { x0: 0, x1: split - 1 },
+        { x0: split + 1, x1: A - 1 },
+      ]
+    : [{ x0: 0, x1: A - 1 }];
+
+  // Closet in the east end of the ground corridor, clear of the street door.
+  const closetA0 = A - 3;
+  const closetWall = A - 4;
+  const hasCloset = doorMax < closetWall && spotA + 2 < closetWall - 1;
+
+  const out: AptLevelPlan[] = [];
+  for (let level = 0; level < levels; level++) {
+    const grid = new AptGrid(A, D);
+    const plan: AptLevelPlan = { walls: [], doors: [], rooms: [], zones: [], pieces: [] };
+    plan.zones.push({ material: "hallway", a0: 0, d0: 0, a1: A - 1, d1: D - 1 });
+
+    for (let a = 0; a < A; a++) grid.addWall(a, bandDepth);
+    if (twoFlats) {
+      for (let d = 0; d < bandDepth; d++) grid.addWall(split, d);
+    }
+
+    // Street door landing stays clear on the ground floor.
+    if (level === 0) {
+      for (let a = doorMin; a <= doorMax; a++) {
+        grid.reserve(a, D - 1);
+        grid.reserve(a, D - 2);
+      }
+    }
+
+    const stairs: { a: number; flight: number; top: boolean }[] = [];
+    if (level >= 1 && level - 1 < flights) {
+      stairs.push({ a: spotForFlight(level - 1), flight: level - 1, top: true });
+    }
+    if (level < flights) {
+      stairs.push({ a: spotForFlight(level), flight: level, top: false });
+    }
+    const stairCols = new Set<number>();
+    for (const s of stairs) {
+      for (let k = 0; k < STAIR_RUN; k++) stairCols.add(s.a + k);
+    }
+
+    const closet = level === 0 && hasCloset;
+    if (closet) {
+      grid.addWall(closetWall, corridorTop);
+      grid.addWall(closetWall, D - 1);
+      grid.addDoor(closetWall, D - 2);
+      grid.reserve(closetWall - 1, D - 2);
+      grid.reserve(closetWall + 1, D - 2);
+      plan.zones.push({ material: "concrete", a0: closetA0, d0: corridorTop, a1: A - 1, d1: D - 1 });
+      plan.rooms.push({
+        role: "closet",
+        facing: "SE",
+        a0: closetA0,
+        d0: corridorTop,
+        a1: A - 1,
+        d1: D - 1,
+        ea: closetWall,
+        ed: D - 2,
+        walls: [
+          { a: closetWall, d: corridorTop },
+          { a: closetWall, d: D - 1 },
+        ],
+      });
+    }
+
+    // Flat doors open onto corridor floor, never onto a stair or the closet.
+    const entrances: number[] = [];
+    for (const flat of flats) {
+      const W = flat.x1 - flat.x0 + 1;
+      const want = flat.x0 + Math.round(W * 0.62) + Math.floor(rng() * 3) - 1;
+      let best = -1;
+      for (let a = flat.x0; a <= flat.x1; a++) {
+        if (stairCols.has(a)) continue;
+        if (closet && a >= closetWall) continue;
+        if (best < 0 || Math.abs(a - want) < Math.abs(best - want)) best = a;
+      }
+      entrances.push(best);
+    }
+    flats.forEach((flat, i) => {
+      const e = entrances[i]!;
+      if (e < 0) return;
+      grid.addDoor(e, bandDepth);
+      grid.reserve(e, bandDepth - 1);
+      grid.reserve(e, bandDepth + 1);
+    });
+
+    // Placed once every door exists, so the reachability check sees the flats.
+    const corridor: AptRect = { a0: 0, d0: corridorTop, a1: A - 1, d1: D - 1 };
+    for (const s of stairs) {
+      const index = APARTMENT_STAIR_INDEX + s.flight * 2 + (s.top ? 1 : 0);
+      grid.tryPlace("stairs2", s.a, corridorTop, "SE", corridor, index);
+    }
+
+    flats.forEach((flat, i) => {
+      const e = entrances[i]!;
+      if (e < 0) return;
+      planApartmentFlat(grid, plan, flat, e, bandDepth, rng);
+    });
+
+    if (closet) {
+      const room: AptRect = { a0: closetA0, d0: corridorTop, a1: A - 1, d1: D - 1 };
+      grid.placeFirst("sink1", [[A - 2, corridorTop, "SW"]], room);
+      grid.placeFirst("cabinet", [[closetA0, corridorTop, "SW"]], room);
+      if (rng() < 0.6) grid.placeFirst("trashcan", [[closetA0, D - 1, "SE"]], room);
+    }
+
+    for (const k of grid.walls) {
+      const [a, d] = k.split(",").map(Number) as [number, number];
+      plan.walls.push({ a, d });
+    }
+    for (const k of grid.doors) {
+      const [a, d] = k.split(",").map(Number) as [number, number];
+      plan.doors.push({ a, d });
+    }
+    plan.pieces = grid.pieces;
+    // Inner rooms first so fade and door lookups find the bedroom, not the flat.
+    plan.rooms.sort((p, q) => roomOrder(p.role) - roomOrder(q.role));
+    out.push(plan);
+  }
+  return out;
+}
+
+function roomOrder(role: ApartmentRoom["role"]): number {
+  return role === "bedroom" ? 0 : role === "closet" ? 1 : 2;
+}
+
+const apartmentLevelsCache = new Map<string, ApartmentLevel[]>();
+
+/**
+ * Every storey of the apartment block at (bx, by), seeded per building.
+ * Empty when the building is not an apartment block.
+ */
+export function apartmentLevelsForBuilding(bx: number, by: number): ApartmentLevel[] {
+  const key = buildingKey(bx, by);
+  const cached = apartmentLevelsCache.get(key);
+  if (cached) return cached;
+  if (getCellarAt(bx, by) || !isApartmentInterior(bx, by)) return [];
+  const bld = getBuildingAt(bx, by);
+  if (!bld) return [];
+  const { iW, iH } = interiorDimensions(bx, by);
+  const exit = interiorExitForBuildingAt(bx, by);
+  const sw = exit.face === "SW";
+  const A = sw ? iW : iH;
+  const D = sw ? iH : iW;
+  const levelCount = Math.max(1, bld.exteriorLevels ?? 1);
+  const rng = mulberry32(xmur3(`apartment_${bx},${by}`)());
+  const plans = planApartmentBuilding(A, D, levelCount, exit.alongMin, exit.alongMax, rng) ?? [];
+
+  // SW-door blocks use the canonical frame as is. SE-door blocks swap axes,
+  // which also swaps SE and SW art. Bed1, Dresser1 and Desk1 have one
+  // facing, so the other facing uses MotelBed1, Drawers1 and Desk2.
+  const at = (a: number, d: number) => (sw ? { x: a, y: d } : { x: d, y: a });
+  const face = (f: AptFacing): AptFacing => (sw ? f : f === "SE" ? "SW" : "SE");
+  const rect = (r: AptRect) =>
+    sw
+      ? { x0: r.a0, y0: r.d0, x1: r.a1, y1: r.d1 }
+      : { x0: r.d0, y0: r.a0, x1: r.d1, y1: r.a1 };
+  const artType = (type: FurnitureType, facing: AptFacing): FurnitureType => {
+    if (type === "bed" && facing !== "SE") return "motelbed";
+    if (type === "dresser" && facing !== "SW") return "drawers";
+    if (type === "desk" && facing !== "SW") return "desk2";
+    return type;
+  };
+
+  let index = 0;
+  const levels: ApartmentLevel[] = plans.map((plan, level) => ({
+    walls: plan.walls.map((t) => at(t.a, t.d)),
+    doors: plan.doors.map((t) => at(t.a, t.d)),
+    rooms: plan.rooms.map((room) => {
+      const entrance = at(room.ea, room.ed);
+      return {
+        role: room.role,
+        facing: face(room.facing),
+        ...rect(room),
+        entranceX: entrance.x,
+        entranceY: entrance.y,
+        wallTiles: room.walls.map((t) => at(t.a, t.d)),
+      };
+    }),
+    floors: plan.zones.map((zone) => ({ material: zone.material, ...rect(zone) })),
+    furnitures: plan.pieces.map((piece) => {
+      const origin = at(piece.a, piece.d);
+      const obj: SearchableObject = {
+        id: interiorSearchableId(bx, by, "furniture", piece.fixedIndex ?? index++),
+        kind: "furniture",
+        objectType: artType(piece.type, face(piece.facing)),
+        x: origin.x,
+        y: origin.y,
+        searched: false,
+        buildingX: bx,
+        buildingY: by,
+        facing: face(piece.facing),
+      };
+      if (level > 0) obj.level = level;
+      return obj;
+    }),
+  }));
+  apartmentLevelsCache.set(key, levels);
+  return levels;
+}
+
+/** One storey of an apartment block, or null. */
+export function apartmentLevelForBuilding(
+  bx: number,
+  by: number,
+  level: number,
+): ApartmentLevel | null {
+  return apartmentLevelsForBuilding(bx, by)[Math.max(0, level)] ?? null;
+}
+
+/** Rooms on this storey of an apartment block (bedrooms, closet, flats). */
+export function apartmentRoomsForLevel(
+  bx: number,
+  by: number,
+  level: number,
+): ApartmentRoom[] {
+  return apartmentLevelForBuilding(bx, by, level)?.rooms ?? [];
+}
+
+/** Apartment room whose door is exactly (tx, ty) on this storey, or null. */
+export function apartmentRoomAtDoor(
+  bx: number,
+  by: number,
+  level: number,
+  tx: number,
+  ty: number,
+): ApartmentRoom | null {
+  for (const room of apartmentRoomsForLevel(bx, by, level)) {
+    if (room.entranceX === tx && room.entranceY === ty) return room;
+  }
+  return null;
+}
+
 export function generateInteriorContent(bx: number, by: number): {
   furnitures: SearchableObject[];
   zombieSpawns: { x: number; y: number }[];
@@ -10859,6 +13189,8 @@ export function generateInteriorContent(bx: number, by: number): {
   const messHall = isMessHallInterior(bx, by);
   const officeInterior = isOfficeInterior(bx, by);
   const largeRetail = isLargeRetailInterior(bx, by);
+  const diner = isDinerInterior(bx, by);
+  const gunShop = isGunShopInterior(bx, by);
   const multiRoomHouse = isMultiRoomHouseInterior(bx, by);
   let furnitures: SearchableObject[];
   let walls: InteriorWallTile[] = [];
@@ -10978,6 +13310,7 @@ export function generateInteriorContent(bx: number, by: number): {
     );
     const wallSet = new Set<string>();
     for (const room of roomList) reservePoliceRoomShell(room, occupied, wallSet);
+    const questBody = placeEastForestfordDeadBody(bx, by, occupied);
     const wall = placePoliceWallFurniture(
       bx,
       by,
@@ -11073,6 +13406,7 @@ export function generateInteriorContent(bx: number, by: number): {
       ...chairs,
       ...officer,
       ...cornerFurn,
+      ...questBody,
     ];
     walls = roomList.flatMap((room) => room.wallTiles);
     doors = roomList.map((room) => ({
@@ -11124,7 +13458,10 @@ export function generateInteriorContent(bx: number, by: number): {
   } else if (tent) {
     furnitures = placeTentBunks(bx, by, iW, iH, exit, occupied, 0);
   } else if (messHall) {
-    furnitures = placeMessHall(bx, by, iW, iH, exit, occupied, 0, rng);
+    const placed = placeMessHall(bx, by, iW, iH, exit, occupied, 0, rng);
+    furnitures = placed.furnitures;
+    walls = placed.walls;
+    doors = placed.doors;
   } else if (officeInterior) {
     const placed = placeOffice(bx, by, iW, iH, exit, rng, occupied, 0);
     furnitures = placed.furnitures;
@@ -11135,8 +13472,33 @@ export function generateInteriorContent(bx: number, by: number): {
     furnitures = placed.furnitures;
     walls = placed.walls;
     doors = placed.doors;
+  } else if (diner) {
+    const placed = placeDiner(bx, by, iW, iH, exit, rng, occupied, 0);
+    furnitures = placed.furnitures;
+    walls = placed.walls;
+    doors = placed.doors;
+  } else if (gunShop) {
+    const placed = placeGunShop(bx, by, iW, iH, exit, rng, occupied, 0);
+    furnitures = placed.furnitures;
+    walls = placed.walls;
+    doors = placed.doors;
+  } else if (isApartmentInterior(bx, by)) {
+    const levels = apartmentLevelsForBuilding(bx, by);
+    const ground = levels[0];
+    furnitures = levels.flatMap((level) => level.furnitures.map((f) => ({ ...f })));
+    walls = ground ? ground.walls.map((w) => ({ ...w })) : [];
+    doors = ground ? ground.doors.map((d) => ({ ...d })) : [];
+    // Zombies roam the ground floor only. Keep them off its walls and furniture.
+    for (const w of walls) occupied.add(`${w.x},${w.y}`);
+    for (const d of doors) occupied.add(`${d.x},${d.y}`);
+    for (const f of ground?.furnitures ?? []) {
+      const { w, h } = searchableFootprint(f);
+      for (let ty = f.y; ty < f.y + h; ty++) {
+        for (let tx = f.x; tx < f.x + w; tx++) occupied.add(`${tx},${ty}`);
+      }
+    }
   } else {
-    // Gun shop, diner, apartment, and untyped shells stay empty until a layout is assigned.
+    // Untyped shells stay empty until a layout is assigned.
     furnitures = [];
   }
 
@@ -11276,8 +13638,25 @@ export function interiorWallsForBuilding(
   by: number,
   level = 0,
 ): InteriorWallTile[] {
-  if (level > 0) return [];
+  if (level > 0) {
+    // Apartment storeys repeat the flats. Office lofts are an open shell.
+    const upper = apartmentLevelForBuilding(bx, by, level);
+    return upper ? upper.walls.map((w) => ({ ...w })) : [];
+  }
   return generateInteriorContent(bx, by).walls;
+}
+
+/**
+ * Generated room doors on an upper storey. The server turns them into real
+ * doors for that storey. Ground-floor doors come from generateInteriorContent.
+ */
+export function interiorDoorsForLevel(
+  bx: number,
+  by: number,
+  level: number,
+): { x: number; y: number }[] {
+  if (level <= 0) return [];
+  return (apartmentLevelForBuilding(bx, by, level)?.doors ?? []).map((d) => ({ ...d }));
 }
 
 /** Clamp a saved storey to the building's exterior floor count. */

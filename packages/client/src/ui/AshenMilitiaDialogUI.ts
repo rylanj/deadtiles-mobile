@@ -46,7 +46,12 @@ import {
   STORY_OBJECTIVE_ASK_DAVIS,
   QUEST_ID_AYE_CAPTAIN,
   QUEST_ID_FOUND_ON_THE_ROAD,
-  COLEMAN_NOTE_ITEM_ID,
+  QUEST_ID_KNEW_THE_NAME,
+  STORY_TURN_IN_ITEMS,
+  STORY_ITEM_LABELS,
+  COLEMAN_NAME,
+  isColemanStoryNpcId,
+  storySpeechLines,
   type QuestDefinition,
   type PlayerQuestsState,
   type QuestGiverId,
@@ -82,6 +87,19 @@ function progressQtyLabel(
   const have = Math.min(need, state.quests[def.id]?.progress[focus.id] ?? 0);
   return `${have}/${need}`;
 }
+
+type MilitiaDialogLine = {
+  id: string;
+  player: string;
+  npc: readonly string[];
+  npcInterior?: readonly string[];
+};
+
+const COLEMAN_SILENT_LINE: MilitiaDialogLine = {
+  id: "coleman_silent",
+  player: "Sergeant Coleman?",
+  npc: ["Go on. Davis is waiting."],
+};
 
 function militiaGuardAvatar(skin: number): string {
   const s = militiaGuardArtSkin(skin);
@@ -125,6 +143,7 @@ export class AshenMilitiaDialogUI {
   private inInterior = false;
   private isCaptain = false;
   private isDoctor = false;
+  private isColeman = false;
   private ashenReputation = ASHEN_REP_START;
   private inventoryJson = "[]";
   private extraPockets = 0;
@@ -277,13 +296,17 @@ export class AshenMilitiaDialogUI {
     this.npcId = opts.npcId;
     this.npcSkin = opts.npcSkin;
     this.inInterior = !!opts.inInterior;
-    this.isCaptain = isMilitiaCaptainSkin(opts.npcSkin);
-    this.isDoctor = isMilitiaDoctorSkin(opts.npcSkin);
-    const npcName = this.isDoctor
-      ? ASHEN_MILITIA_DOCTOR_NAME
-      : this.isCaptain
-        ? ASHEN_MILITIA_CAPTAIN_NAME
-        : ASHEN_MILITIA_FACTION;
+    this.isColeman = isColemanStoryNpcId(opts.npcId);
+    this.isCaptain = !this.isColeman && isMilitiaCaptainSkin(opts.npcSkin);
+    this.isDoctor = !this.isColeman && isMilitiaDoctorSkin(opts.npcSkin);
+    const npcName = this.isColeman
+      ? COLEMAN_NAME
+      : this.isDoctor
+        ? ASHEN_MILITIA_DOCTOR_NAME
+        : this.isCaptain
+          ? ASHEN_MILITIA_CAPTAIN_NAME
+          : ASHEN_MILITIA_FACTION;
+    this.standingPillEl.hidden = this.isColeman;
     this.npcAvatarEl.src = this.isDoctor
       ? DOCTOR_AVATAR
       : this.isCaptain
@@ -356,6 +379,7 @@ export class AshenMilitiaDialogUI {
     this.expandedTaskId = null;
     this.isCaptain = false;
     this.isDoctor = false;
+    this.isColeman = false;
     this.inInterior = false;
     this.playerInfected = false;
     this.taskCompletions = {};
@@ -379,7 +403,15 @@ export class AshenMilitiaDialogUI {
     }
   }
 
-  private dialogLines() {
+  private dialogLines(): readonly MilitiaDialogLine[] {
+    if (this.isColeman) {
+      const lines = storySpeechLines(
+        "coleman",
+        parseQuestsJson(this.questsJson),
+        (itemId) => this.itemCount(itemId),
+      ).map((line) => ({ id: line.id, player: line.player, npc: [line.reply ?? "…"] }));
+      return lines.length > 0 ? lines : [COLEMAN_SILENT_LINE];
+    }
     if (this.isDoctor) return ASHEN_MILITIA_DOCTOR_DIALOG_LINES;
     if (this.isCaptain) {
       const quests = parseQuestsJson(this.questsJson);
@@ -398,6 +430,14 @@ export class AshenMilitiaDialogUI {
     this.scriptedLineId = lineId;
     this.scriptedReply = text;
     if (this.activeLineId !== lineId) this.activeLineId = lineId;
+    if (this.visible) this.render();
+  }
+
+  /** Davis's words on a story hand-in, kept on screen while the next quest is offered. */
+  showReply(text: string) {
+    this.scriptedLineId = "story_turn_in";
+    this.scriptedReply = text;
+    this.activeLineId = "story_turn_in";
     if (this.visible) this.render();
   }
 
@@ -455,7 +495,11 @@ export class AshenMilitiaDialogUI {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
         const scripted = this.storyReplyText(line.id);
-        if (scripted && this.storyPromptPending(line.id)) {
+        if (this.isColeman && line.id !== COLEMAN_SILENT_LINE.id) {
+          this.scriptedLineId = line.id;
+          this.scriptedReply = line.npc[0] ?? "…";
+          this.handlers.onChooseLine?.(line.id);
+        } else if (scripted && this.storyPromptPending(line.id)) {
           this.scriptedLineId = line.id;
           this.scriptedReply = scripted;
           this.handlers.onChooseLine?.(line.id);
@@ -469,6 +513,17 @@ export class AshenMilitiaDialogUI {
     }
 
     let active = lines.find((l) => l.id === this.activeLineId);
+    if (!active && this.scriptedReply && this.scriptedLineId === this.activeLineId) {
+      // The line that was spoken can vanish once its step is done. Keep the reply.
+      this.responseEl.replaceChildren();
+      this.responseEl.classList.remove("red-dialog-response--empty");
+      const kept = document.createElement("div");
+      kept.className = "red-dialog-response-text";
+      kept.textContent = this.scriptedReply;
+      this.responseEl.appendChild(kept);
+      this.appendStoryQuests();
+      return;
+    }
     if (!active && lines[0]) {
       this.activeLineId = lines[0].id;
       this.scriptedLineId = null;
@@ -583,10 +638,11 @@ export class AshenMilitiaDialogUI {
     const quests = parseQuestsJson(this.questsJson);
     const offered = quests.quests[def.id]?.status === "available";
     const ready = !offered && canTurnInQuest(quests, def.id);
-    const needsNote =
-      !offered &&
-      def.iconItemId === COLEMAN_NOTE_ITEM_ID &&
-      this.itemCount(COLEMAN_NOTE_ITEM_ID) < 1;
+    const missingItem =
+      offered || def.id === QUEST_ID_KNEW_THE_NAME
+        ? undefined
+        : (STORY_TURN_IN_ITEMS[def.id] ?? []).find((id) => this.itemCount(id) < 1);
+    const needsNote = !!missingItem;
     const canHandIn =
       ready && def.id !== QUEST_ID_FOUND_ON_THE_ROAD && !needsNote;
     const expanded = offered
@@ -670,7 +726,8 @@ export class AshenMilitiaDialogUI {
     }
     const rep = questRewardReputation(def, "ashenMilitia");
     const itemRewards = def.rewards.filter((reward) => reward.itemId && reward.quantity);
-    if (rep > 0 || itemRewards.length > 0) {
+    const banknotes = def.rewards.reduce((sum, reward) => sum + (reward.banknotes ?? 0), 0);
+    if (rep > 0 || itemRewards.length > 0 || banknotes > 0) {
       const rewardTitle = document.createElement("div");
       rewardTitle.className = "red-dialog-task-heading";
       rewardTitle.textContent = "Rewards";
@@ -683,6 +740,15 @@ export class AshenMilitiaDialogUI {
             itemId: reward.itemId!,
             qtyLabel: `×${reward.quantity}`,
             ariaLabel: reward.itemId!,
+          }),
+        );
+      }
+      if (banknotes > 0) {
+        rewardRow.appendChild(
+          makeDisplayCell({
+            itemId: "banknote",
+            qtyLabel: `×${banknotes}`,
+            ariaLabel: `${banknotes} banknotes`,
           }),
         );
       }
@@ -710,7 +776,7 @@ export class AshenMilitiaDialogUI {
     } else if (needsNote && ready) {
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = "Bring the Note for Coleman.";
+      hint.textContent = `Bring ${STORY_ITEM_LABELS[missingItem ?? ""] ?? "the item"}.`;
       details.appendChild(hint);
     } else if (canHandIn) {
       const completeBtn = document.createElement("button");

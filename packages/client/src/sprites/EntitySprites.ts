@@ -50,6 +50,8 @@ import {
   RABBIT_RENDER_HEIGHT,
   RABBIT_WALK_FRAMES,
   RABBIT_DIE_FRAMES,
+  COLEMAN_ANIM_KNEEL,
+  COLEMAN_ANIM_STAND,
   type DirectionLabel,
   type IdleWeaponKey,
 } from "@zombie/shared";
@@ -746,6 +748,12 @@ export function loadSurvivorAssets(scene: Phaser.Scene) {
   scene.load.image("tile-motel", "GroundMotel.png");
   scene.load.image("tile-office", "GroundOffice.png");
   scene.load.image("tile-retail", "GroundRetail.png");
+  scene.load.image("tile-diner", "GroundDiner.png");
+  scene.load.image("tile-gunshop", "GroundGunShop.png");
+  scene.load.image("tile-hallway", "GroundHallway.png");
+  scene.load.image("tile-linoleum", "GroundLinoleum.png");
+  scene.load.image("tile-carpet-blue", "GroundCarpetBlue.png");
+  scene.load.image("tile-carpet-beige", "GroundCarpetBeige.png");
 
   // Standing sprite plus the resting frame of the fall, per variant.
   //
@@ -1078,6 +1086,40 @@ function applyGuardIdleAKFrame(
     return;
   }
   applyGuardWalkAKFrame(sprite, dir, 1, resolvedSkin);
+}
+
+/** MilitiaGuard3 standing with no weapon. Falls back to the AK idle until loaded. */
+function applyGuardUnarmedIdleFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  dir: DirectionLabel,
+  skin = 1,
+) {
+  const key = `militiaguard3-idle-${dir}`;
+  if (textureKeyExists(sprite.scene, key)) {
+    applyEntitySpriteFrame(sprite, key, HUMAN_FEET_ORIGIN_Y);
+    return;
+  }
+  applyGuardIdleAKFrame(sprite, dir, skin);
+}
+
+/** MilitiaGuard3 kneeling, hands bound. Art ships SE, SW and S only. */
+function applyGuardKneelFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  dir: DirectionLabel,
+  skin = 1,
+) {
+  const kneelDir =
+    dir === "E" || dir === "NE" || dir === "SE"
+      ? "SE"
+      : dir === "W" || dir === "NW" || dir === "SW"
+        ? "SW"
+        : "S";
+  const key = `militiaguard3-kneel-${kneelDir}`;
+  if (textureKeyExists(sprite.scene, key)) {
+    applyEntitySpriteFrame(sprite, key, HUMAN_FEET_ORIGIN_Y);
+    return;
+  }
+  applyGuardUnarmedIdleFrame(sprite, dir, skin);
 }
 
 /** Sit frame includes the chair. CampChair1 / CanteenChair1 ship NE + NW. */
@@ -1654,6 +1696,10 @@ export function updateEntityVisual(
       applyGuardDieFrame(sprite, dir, dieFrame + 1, visualSkin);
     } else if (isGuardSitAnim(state.anim)) {
       applyGuardSitFrame(sprite, dir, visualSkin, state.anim);
+    } else if (state.anim === COLEMAN_ANIM_KNEEL) {
+      applyGuardKneelFrame(sprite, dir, visualSkin);
+    } else if (state.anim === COLEMAN_ANIM_STAND) {
+      applyGuardUnarmedIdleFrame(sprite, dir, visualSkin);
     } else if (isAttacking && !isMilitiaNonCombatSkin(visualSkin)) {
       applyGuardFireAKFrame(sprite, dir, (state.attackFrame ?? 0) + 1, visualSkin);
     } else if (isWalking) {

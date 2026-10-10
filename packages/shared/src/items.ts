@@ -19,6 +19,7 @@ import {
   xmur3,
 } from "./worldgen.js";
 import { ZOMBIE_SKIN_MAN11 } from "./sprites.js";
+import { STORY_ITEM_LABELS, STORY_PAPER_ITEM_IDS } from "./storyQuests.js";
 
 /** Fixed slot count — each occupied slot holds one stack. */
 export const WEAPON_SLOT_COUNT = 2;
@@ -632,6 +633,13 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
     stackable: false,
     weight: 0.02,
   },
+  ...STORY_PAPER_ITEM_IDS.map((id) => ({
+    id,
+    name: STORY_ITEM_LABELS[id] ?? id,
+    category: "junk" as const,
+    stackable: false,
+    weight: 0.02,
+  })),
   { id: "silver_chain", name: "Silver Chain", category: "junk", stackable: true, weight: 0.1 },
   { id: "silver_ring", name: "Silver Ring", category: "junk", stackable: true, weight: 0.05 },
   { id: "old_teddy", name: "Old Teddy", category: "junk", stackable: true, weight: 0.2 },
@@ -904,7 +912,8 @@ export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
     itemId === CARAVAN_MANIFEST_ITEM_ID ||
     itemId === WAGON_NOTE_ITEM_ID ||
     itemId === SUPPLY_LIST_ITEM_ID ||
-    itemId === COLEMAN_NOTE_ITEM_ID
+    itemId === COLEMAN_NOTE_ITEM_ID ||
+    (!!itemId && (STORY_PAPER_ITEM_IDS as readonly string[]).includes(itemId))
   );
 }
 

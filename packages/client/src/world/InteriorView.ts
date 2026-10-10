@@ -19,6 +19,13 @@ import {
   policeSergeantRoomForBuilding,
   policeJailCellForBuilding,
   policeCornerRoomAtTile,
+  messHallBackRoomAtTile,
+  messHallBackRoomsForBuilding,
+  dinerKitchenForBuilding,
+  dinerKitchenAtTile,
+  gunShopOfficeForBuilding,
+  gunShopOfficeAtTile,
+  isGunShopFixtureType,
   pickableLockDifficulty,
   interiorDimensions,
   isCellarInterior,
@@ -27,6 +34,11 @@ import {
   retailShowroomBounds,
   interiorWallCornerDepthBias,
   interiorWallsForBuilding,
+  interiorDoorsForLevel,
+  interiorStairTargetLevel,
+  furnitureIsStairs,
+  apartmentLevelForBuilding,
+  apartmentRoomsForLevel,
   searchableFootprint,
   ENTITY_RENDER_HEIGHT,
   TILE_HEIGHT,
@@ -38,9 +50,15 @@ import {
   structureOccupiedTiles,
   isStructurePanelKind,
   isStorageBoxKind,
+  type ApartmentFloorMaterial,
+  type ApartmentLevel,
+  type ApartmentRoom,
+  type DinerKitchenRoom,
+  type GunShopOfficeRoom,
   type HospitalCubicle,
   type HouseRoom,
   type InteriorWallTile,
+  type MessHallBackRoom,
   type MotelRoom,
   type OfficeMeetingRoom,
   type PoliceCornerRoom,
@@ -53,6 +71,10 @@ import {
   BUILDING_WALL_PLYWOOD_KEY,
   buildingHospitalDoorKey,
   buildingInternalDoor1Key,
+  buildingInternalDoor3Key,
+  buildingInternalDoor4Key,
+  buildingInternalDoor5Key,
+  buildingJailDoorKey,
   type InternalDoorFace,
 } from "../sprites/BuildingAssets";
 import { drawTexturedWallFace } from "./BuildingCuboid";
@@ -98,7 +120,11 @@ import {
   strokeIsoTileOutline,
   tileIndicatorDepth,
 } from "./IsoTiles";
-import { createInteriorFloorImage, interiorFloorTextureKey } from "./TileTextures";
+import {
+  createInteriorFloorImage,
+  interiorFloorTextureKey,
+  type GroundFloorOverlay,
+} from "./TileTextures";
 import {
   nearestManhattanTile,
   pickTopOpaqueImageAtWorld,
@@ -111,14 +137,95 @@ import {
  */
 const INTERNAL_DOOR_RENDER_SCALE = IS_MOBILE ? 2 : 4;
 
-/** Client-side view of a persistent player-built door tile. */
+/** Ground texture for each apartment floor finish. */
+const APARTMENT_FLOOR_KEYS: Record<ApartmentFloorMaterial, string> = {
+  hallway: "tile-hallway",
+  concrete: "tile-concrete",
+  linoleum: "tile-linoleum",
+  tiles: "tile-ground-tiles",
+  wood: "tile-wood",
+  laminate: "tile-retail",
+  carpetBlue: "tile-carpet-blue",
+  carpetBeige: "tile-carpet-beige",
+  carpetRed: "tile-motel",
+};
+
+/**
+ * Apartment walls stand on the middle of their tile, so the camera sees the
+ * floor in front of the face. Repaint each wall and door tile with the floor
+ * of the neighbour it faces: +y for SW faces (runs along x), +x for SE faces
+ * (runs along y). Corners follow their row (+y) unless a wall arm covers it,
+ * then +x, then the diagonal in front.
+ */
+function apartmentWallFloorOverlays(
+  level: ApartmentLevel,
+  tileCoords: readonly { x: number; y: number }[],
+): GroundFloorOverlay[] {
+  const wallSet = new Set<string>();
+  for (const t of [...level.walls, ...level.doors]) wallSet.add(`${t.x},${t.y}`);
+  if (wallSet.size === 0) return [];
+
+  const materialAt = (x: number, y: number): ApartmentFloorMaterial | null => {
+    for (let i = level.floors.length - 1; i >= 0; i--) {
+      const zone = level.floors[i]!;
+      if (x >= zone.x0 && x <= zone.x1 && y >= zone.y0 && y <= zone.y1) {
+        return zone.material;
+      }
+    }
+    return level.floors[0]?.material ?? null;
+  };
+
+  const byMaterial = new Map<ApartmentFloorMaterial, { x: number; y: number }[]>();
+  for (const t of tileCoords) {
+    if (!wallSet.has(`${t.x},${t.y}`)) continue;
+    const hasN = wallSet.has(`${t.x},${t.y - 1}`);
+    const hasS = wallSet.has(`${t.x},${t.y + 1}`);
+    const hasW = wallSet.has(`${t.x - 1},${t.y}`);
+    const hasE = wallSet.has(`${t.x + 1},${t.y}`);
+    const runNS = hasN || hasS;
+    const runEW = hasW || hasE || !runNS;
+    const candidates =
+      runNS && runEW
+        ? [
+            { x: t.x, y: t.y + 1 },
+            { x: t.x + 1, y: t.y },
+            { x: t.x + 1, y: t.y + 1 },
+          ]
+        : runNS
+          ? [{ x: t.x + 1, y: t.y }]
+          : [{ x: t.x, y: t.y + 1 }];
+    const pick = candidates.find((c) => !wallSet.has(`${c.x},${c.y}`));
+    if (!pick) continue;
+    const material = materialAt(pick.x, pick.y);
+    if (!material || material === materialAt(t.x, t.y)) continue;
+    let list = byMaterial.get(material);
+    if (!list) byMaterial.set(material, (list = []));
+    list.push(t);
+  }
+  return [...byMaterial].map(([material, tiles]) => ({
+    baseKey: APARTMENT_FLOOR_KEYS[material],
+    tiles,
+  }));
+}
+
+/** Client-side view of a server door tile (player-built or generated). */
 export type InteriorDoorTile = {
   x: number;
   y: number;
   isOpen: boolean;
   isLocked: boolean;
   ownerWallet: string;
+  /** Interior storey. Omitted means the ground floor. */
+  level?: number;
 };
+
+/** Same door slot: tile plus storey. */
+export function sameInteriorDoor(
+  a: { x: number; y: number; level?: number },
+  b: { x: number; y: number; level?: number },
+): boolean {
+  return a.x === b.x && a.y === b.y && (a.level ?? 0) === (b.level ?? 0);
+}
 
 /** Client-side view of a persistent player-built Fireplace1 tile. */
 export type InteriorFireplaceTile = {
@@ -178,6 +285,10 @@ const PARTITION_WALL_TOP = "#ebe6dc";
 const HOSPITAL_WALL_FRONT = "#ffffff";
 const HOSPITAL_WALL_SIDE = "#e6e6e6";
 const HOSPITAL_WALL_TOP = "#f2f2f2";
+/** Mess hall partitions: khaki panel, lighter than the prefab shell. */
+const MESS_HALL_PART_FRONT = "#9a865c";
+const MESS_HALL_PART_SIDE = "#7d6b49";
+const MESS_HALL_PART_TOP = "#b09a70";
 
 type PartitionWallColors = {
   front: string;
@@ -204,6 +315,10 @@ const DOOR_TOP = "#7a4a20";
 const HOSPITAL_DOOR_FRONT = "#d0a95b";
 const HOSPITAL_DOOR_SIDE = "#b2904d";
 const HOSPITAL_DOOR_TOP = "#c09c54";
+/** Jail cell door leaf — dark grey steel matching DoorJail art. */
+const JAIL_DOOR_FRONT = "#727479";
+const JAIL_DOOR_SIDE = "#525458";
+const JAIL_DOOR_TOP = "#64666a";
 /** Open-door leaf thickness (a bit slimmer than the closed footprint). */
 const DOOR_OPEN_THICKNESS = PARTITION_THICKNESS * 0.7;
 
@@ -241,11 +356,13 @@ const BED_BOTTOM_PAD = Math.round(BED_RENDER_HEIGHT * 0.125);
 /** MilitaryBed1 — bed scale, then lower by 2.5%. */
 const MILITARYBED_BOTTOM_PAD =
   BED_BOTTOM_PAD + Math.round(BED_RENDER_HEIGHT * 0.025);
-/** JailToilet1: tall 1×1 fixture. Feet sit near the bottom of the canvas. */
-const JAILTOILET_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.95);
-const JAILTOILET_BOTTOM_PAD = Math.round(JAILTOILET_RENDER_HEIGHT * 0.06);
-/** Cabinet1 — raise by 5% of display height. */
-const CABINET_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.05);
+/** JailToilet1: tall 1×1 fixture, then 20% smaller. Feet sit near the bottom of the canvas. */
+const JAILTOILET_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.75);
+const JAILTOILET_BOTTOM_PAD = -Math.round(JAILTOILET_RENDER_HEIGHT * 0.15);
+/** Cabinet1 — 10% smaller than generic furniture. */
+const CABINET_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.8);
+/** Cabinet1 — raise by 5% of its display height. */
+const CABINET_BOTTOM_PAD = -Math.round(CABINET_RENDER_HEIGHT * 0.075);
 /** Bookshelf1 — raise by 5% of display height. */
 const BOOKSHELF_BOTTOM_PAD = -Math.round(FURNITURE_RENDER_HEIGHT * 0.05);
 /** Bookshelf2 — raise by 5% of display height. */
@@ -275,6 +392,9 @@ const NIGHTSTAND_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.55);
 const NIGHTSTAND_BOTTOM_PAD = -Math.round(NIGHTSTAND_RENDER_HEIGHT * 0.1);
 /** DeadOfficer — 10% smaller than generic furniture. */
 const DEADOFFICER_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.9);
+/** DeadBody1 — same scale. The sheet sits above the canvas bottom. */
+const DEADBODY_RENDER_HEIGHT = DEADOFFICER_RENDER_HEIGHT;
+const DEADBODY_BOTTOM_PAD = Math.round(DEADBODY_RENDER_HEIGHT * (47 / 256));
 /** Suitcase1 — floor luggage, ~60% of generic furniture height. */
 const SUITCASE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.6);
 /** Suitcase1 — raise by 20% of display height. */
@@ -468,16 +588,55 @@ const WHITEBOARD_BOTTOM_PAD =
   Math.round(WHITEBOARD_RENDER_HEIGHT * 0.1) +
   Math.round(WHITEBOARD_RENDER_HEIGHT * 0.05);
 
+/**
+ * Booth1-3 on a 2x2 diamond (screen width 128). Opaque art is 203/256 wide,
+ * shown at ~85% of the diamond. 44 empty rows sit under the bench bases, so
+ * the pad drops them onto the south corner.
+ */
+const BOOTH_RENDER_HEIGHT = 140;
+const BOOTH_BOTTOM_PAD = 38;
+/** DinerCounter1-4 on a 1x2 diamond (width 96). Opaque art is 198/256 wide. */
+const DINERCOUNTER_RENDER_HEIGHT = 110;
+const DINERCOUNTER_BOTTOM_PAD = 14;
+/** Juke1 on one tile, 10% under the fridge-height start. */
+const JUKE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 0.9);
+const JUKE_BOTTOM_PAD = -Math.round(JUKE_RENDER_HEIGHT * 0.05);
+/** Sink1/2 on a 1x2 diamond. Opaque art is 216/256 wide. Raise by 5% of display height. */
+const SINK2_RENDER_HEIGHT = 96;
+const SINK2_BOTTOM_PAD = 8 - Math.round(SINK2_RENDER_HEIGHT * 0.05);
+
+function isBoothType(objectType: string): boolean {
+  return (
+    objectType === "booth1" ||
+    objectType === "booth2" ||
+    objectType === "booth3"
+  );
+}
+
+function isDinerCounterType(objectType: string): boolean {
+  return (
+    objectType === "dinercounter1" ||
+    objectType === "dinercounter2" ||
+    objectType === "dinercounter3" ||
+    objectType === "dinercounter4"
+  );
+}
+
 function furnitureRenderHeight(objectType: string): number {
+  if (isBoothType(objectType)) return BOOTH_RENDER_HEIGHT;
+  if (isDinerCounterType(objectType)) return DINERCOUNTER_RENDER_HEIGHT;
+  if (objectType === "juke1") return JUKE_RENDER_HEIGHT;
+  if (objectType === "sink2" || objectType === "sink1") return SINK2_RENDER_HEIGHT;
   if (objectType === "desk") return DESK_RENDER_HEIGHT;
   if (objectType === "desk3") return DESK3_RENDER_HEIGHT;
-  if (objectType === "stairs") return STAIRS_RENDER_HEIGHT;
+  if (furnitureIsStairs(objectType)) return STAIRS_RENDER_HEIGHT;
   if (objectType === "desk2") return DESK2_RENDER_HEIGHT;
   if (objectType === "bigshelf") return BIGSHELF_RENDER_HEIGHT;
   if (objectType === "bed") return BED_RENDER_HEIGHT;
   if (objectType === "lockers") return LOCKERS_RENDER_HEIGHT;
   if (objectType === "nightstand") return NIGHTSTAND_RENDER_HEIGHT;
   if (objectType === "deadofficer") return DEADOFFICER_RENDER_HEIGHT;
+  if (objectType === "deadbody") return DEADBODY_RENDER_HEIGHT;
   if (objectType === "suitcase") return SUITCASE_RENDER_HEIGHT;
   if (objectType === "watercooler") return WATERCOOLER_RENDER_HEIGHT;
   if (objectType === "trashcan") return TRASHCAN_RENDER_HEIGHT;
@@ -506,7 +665,11 @@ function furnitureRenderHeight(objectType: string): number {
   }
   if (objectType === "mannequin3") return MANNEQUIN_CHILD_RENDER_HEIGHT;
   if (objectType === "cart1" || objectType === "cart2") return CART_RENDER_HEIGHT;
-  if (objectType === "retailcase1" || objectType === "retailcase2") {
+  if (
+    objectType === "retailcase1" ||
+    objectType === "retailcase2" ||
+    isGunShopFixtureType(objectType)
+  ) {
     return RETAIL_CASE_RENDER_HEIGHT;
   }
   if (objectType === "superfridge1") return SUPERFRIDGE_RENDER_HEIGHT;
@@ -560,6 +723,7 @@ function furnitureRenderHeight(objectType: string): number {
   if (objectType === "officechair") return OFFICECHAIR_RENDER_HEIGHT;
   if (objectType === "whiteboard") return WHITEBOARD_RENDER_HEIGHT;
   if (objectType === "safe1") return SAFE_RENDER_HEIGHT;
+  if (objectType === "cabinet") return CABINET_RENDER_HEIGHT;
   return FURNITURE_RENDER_HEIGHT;
 }
 
@@ -570,9 +734,13 @@ function furnitureShowsSearched(item: SearchableVisual, isSearching: boolean): b
 }
 
 function furnitureBottomPad(objectType: string): number {
+  if (isBoothType(objectType)) return BOOTH_BOTTOM_PAD;
+  if (isDinerCounterType(objectType)) return DINERCOUNTER_BOTTOM_PAD;
+  if (objectType === "juke1") return JUKE_BOTTOM_PAD;
+  if (objectType === "sink2" || objectType === "sink1") return SINK2_BOTTOM_PAD;
   if (objectType === "desk") return DESK_BOTTOM_PAD;
   if (objectType === "desk3") return DESK3_BOTTOM_PAD;
-  if (objectType === "stairs") return STAIRS_BOTTOM_PAD;
+  if (furnitureIsStairs(objectType)) return STAIRS_BOTTOM_PAD;
   if (objectType === "desk2") return DESK2_BOTTOM_PAD;
   if (objectType === "bigshelf") return BIGSHELF_BOTTOM_PAD;
   if (objectType === "bigbox") return BIGBOX_BOTTOM_PAD;
@@ -590,6 +758,7 @@ function furnitureBottomPad(objectType: string): number {
   if (objectType === "kitchensink") return KITCHENSINK_BOTTOM_PAD;
   if (objectType === "workbench") return WORKBENCH_BOTTOM_PAD;
   if (objectType === "nightstand") return NIGHTSTAND_BOTTOM_PAD;
+  if (objectType === "deadbody") return DEADBODY_BOTTOM_PAD;
   if (objectType === "suitcase") return SUITCASE_BOTTOM_PAD;
   if (objectType === "watercooler") return WATERCOOLER_BOTTOM_PAD;
   if (objectType === "trashcan") return TRASHCAN_BOTTOM_PAD;
@@ -618,7 +787,11 @@ function furnitureBottomPad(objectType: string): number {
   }
   if (objectType === "mannequin3") return MANNEQUIN_CHILD_BOTTOM_PAD;
   if (objectType === "cart1" || objectType === "cart2") return CART_BOTTOM_PAD;
-  if (objectType === "retailcase1" || objectType === "retailcase2") {
+  if (
+    objectType === "retailcase1" ||
+    objectType === "retailcase2" ||
+    isGunShopFixtureType(objectType)
+  ) {
     return RETAIL_CASE_BOTTOM_PAD;
   }
   if (objectType === "superfridge1") return SUPERFRIDGE_BOTTOM_PAD;
@@ -710,10 +883,16 @@ export class InteriorView {
     | OfficeMeetingRoom
     | RetailManagerRoom
     | PoliceCornerRoom
+    | MessHallBackRoom
+    | DinerKitchenRoom
+    | GunShopOfficeRoom
+    | ApartmentRoom
   > = [];
   /** Last cubicle fade key — skip redundant rebuild when tile unchanged. */
   private lastCubicleFadeKey = "";
   private objectSprites = new Map<string, ObjectSprite>();
+  /** objectType each furniture sprite was drawn with. */
+  private spriteObjectType = new Map<string, string>();
   private lanternIds = new Set<string>();
   /** Campchair tiles currently occupied by a sitting guard (Sit frame includes the chair). */
   private occupiedCampchairTiles: ReadonlySet<string> = new Set();
@@ -933,14 +1112,14 @@ export class InteriorView {
     if (item.objectType === "groundbackpack") {
       return this.groundBagDepthAt(item.x, item.y);
     }
-    // Upper-floor stairs sit under the carpet so the flight reads as a hole.
-    if (item.objectType === "stairs" && this.floorLevel > 0) {
+    // A flight down sits under the floor so it reads as a hole.
+    if (this.stairDescends(item)) {
       return interiorFloorDepth(0, 0) - 2;
     }
     const { w, h } = searchableFootprint(item);
     return (
       interiorFurnitureDepth(item.x + w - 1, item.y + h - 1) +
-      interiorFurnitureDepthBias(item.objectType)
+      interiorFurnitureDepthBias(item.objectType, item.facing)
     );
   }
 
@@ -973,7 +1152,10 @@ export class InteriorView {
     this.clearInternalDoorSprites();
     this.clearFadeComposite();
     this.lastCubicleFadeKey = "";
-    this.fadeCubicles = next > 0 ? [] : this.groundFadeCubicles();
+    this.fadeCubicles =
+      next > 0
+        ? apartmentRoomsForLevel(this.buildingX, this.buildingY, next)
+        : this.groundFadeCubicles();
     this.drawFloor();
     this.drawWalls();
     this.stairHoleKey = this.stairHoleSignature();
@@ -987,12 +1169,19 @@ export class InteriorView {
     | OfficeMeetingRoom
     | RetailManagerRoom
     | PoliceCornerRoom
+    | MessHallBackRoom
+    | DinerKitchenRoom
+    | GunShopOfficeRoom
+    | ApartmentRoom
   > {
     const officeRoom = officeMeetingRoomForBuilding(this.buildingX, this.buildingY);
     const managerRoom = officeManagerRoomForBuilding(this.buildingX, this.buildingY);
     const retailOffice = retailManagerRoomForBuilding(this.buildingX, this.buildingY);
     const policeOffice = policeSergeantRoomForBuilding(this.buildingX, this.buildingY);
     const policeCell = policeJailCellForBuilding(this.buildingX, this.buildingY);
+    const messRooms = messHallBackRoomsForBuilding(this.buildingX, this.buildingY);
+    const dinerKitchen = dinerKitchenForBuilding(this.buildingX, this.buildingY);
+    const gunShopOffice = gunShopOfficeForBuilding(this.buildingX, this.buildingY);
     return [
       ...hospitalCubiclesForBuilding(this.buildingX, this.buildingY),
       ...motelRoomsForBuilding(this.buildingX, this.buildingY),
@@ -1002,7 +1191,36 @@ export class InteriorView {
       ...(retailOffice ? [retailOffice] : []),
       ...(policeOffice ? [policeOffice] : []),
       ...(policeCell ? [policeCell] : []),
+      ...(messRooms ? [messRooms.kitchen, messRooms.office] : []),
+      ...(dinerKitchen ? [dinerKitchen] : []),
+      ...(gunShopOffice ? [gunShopOffice] : []),
+      ...apartmentRoomsForLevel(this.buildingX, this.buildingY, 0),
     ];
+  }
+
+  /**
+   * Live server doors on the storey being shown. Until an upper storey's
+   * doors arrive from the server, its generated doors draw open so the
+   * doorways never show as gaps.
+   */
+  private activeDoors(): InteriorDoorTile[] {
+    const level = this.floorLevel;
+    const onLevel = this.extraDoors.filter((d) => (d.level ?? 0) === level);
+    if (level <= 0 || onLevel.length > 0) return onLevel;
+    return interiorDoorsForLevel(this.buildingX, this.buildingY, level).map((d) => ({
+      x: d.x,
+      y: d.y,
+      isOpen: true,
+      isLocked: false,
+      ownerWallet: "",
+      level,
+    }));
+  }
+
+  /** True when this stair leads down from the storey being shown. */
+  private stairDescends(item: { id: string; objectType: string }): boolean {
+    if (!furnitureIsStairs(item.objectType) || this.floorLevel <= 0) return false;
+    return interiorStairTargetLevel(item.id, this.floorLevel) < this.floorLevel;
   }
 
   /**
@@ -1070,7 +1288,7 @@ export class InteriorView {
 
   /** Insert or update one door's state and redraw. */
   upsertExtraDoor(door: InteriorDoorTile) {
-    const idx = this.extraDoors.findIndex((d) => d.x === door.x && d.y === door.y);
+    const idx = this.extraDoors.findIndex((d) => sameInteriorDoor(d, door));
     if (idx >= 0) this.extraDoors[idx] = { ...door };
     else this.extraDoors.push({ ...door });
     if (!this.visible) return;
@@ -1080,9 +1298,9 @@ export class InteriorView {
   }
 
   /** Remove one persistent door and redraw. */
-  removeExtraDoor(x: number, y: number) {
+  removeExtraDoor(x: number, y: number, level = 0) {
     const before = this.extraDoors.length;
-    this.extraDoors = this.extraDoors.filter((d) => d.x !== x || d.y !== y);
+    this.extraDoors = this.extraDoors.filter((d) => !sameInteriorDoor(d, { x, y, level }));
     if (this.extraDoors.length === before || !this.visible) return;
     this.clearWallSprites();
     this.drawWalls();
@@ -1226,7 +1444,11 @@ export class InteriorView {
 
   /** Merged procedural + admin + persistent-structure walls (doors count as wall presence too, for run adjacency). */
   getMergedWalls(): InteriorWallTile[] {
-    if (this.floorLevel > 0) return [];
+    if (this.floorLevel > 0) {
+      // Upper storeys: their own partitions plus that storey's door tiles.
+      const upper = interiorWallsForBuilding(this.buildingX, this.buildingY, this.floorLevel);
+      return [...upper, ...this.activeDoors().map((d) => ({ x: d.x, y: d.y }))];
+    }
     const base = interiorWallsForBuilding(this.buildingX, this.buildingY);
     const seen = new Set(base.map((w) => `${w.x},${w.y}`));
     const out = [...base];
@@ -1238,7 +1460,7 @@ export class InteriorView {
     };
     for (const w of this.extraWalls) addIfNew(w);
     for (const w of this.structureWalls) addIfNew(w);
-    for (const d of this.extraDoors) addIfNew(d);
+    for (const d of this.activeDoors()) addIfNew(d);
     return out;
   }
 
@@ -1364,8 +1586,9 @@ export class InteriorView {
     // Paint low→high depth so corner bias still wins within the composite.
     faded.sort((a, b) => a.depth - b.depth);
     const g = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    const doorsShown = this.activeDoors();
     for (const entry of faded) {
-      const found = this.extraDoors.find((d) => d.x === entry.x && d.y === entry.y);
+      const found = doorsShown.find((d) => d.x === entry.x && d.y === entry.y);
       const door =
         found && found.isLocked && !this.doorShowsCodeLock(found)
           ? { ...found, isLocked: false }
@@ -1422,7 +1645,7 @@ export class InteriorView {
   playerWallOccludersNear(tileX: number, tileY: number): PlayerWallOccluder[] {
     const reach = PLAYER_WALL_OCCLUSION_REACH;
     const out: PlayerWallOccluder[] = [];
-    const doors = new Map(this.extraDoors.map((d) => [`${d.x},${d.y}`, d]));
+    const doors = new Map(this.activeDoors().map((d) => [`${d.x},${d.y}`, d]));
     for (const entry of this.wallEntries) {
       if (Math.abs(entry.x - tileX) > reach || Math.abs(entry.y - tileY) > reach) {
         continue;
@@ -2007,6 +2230,7 @@ export class InteriorView {
       if (!ids.has(id) || rebuild) {
         sprite.destroy();
         this.objectSprites.delete(id);
+        this.spriteObjectType.delete(id);
         this.searchedState.delete(id);
         this.searchingState.delete(id);
         this.searchVisualOpen.delete(id);
@@ -2022,12 +2246,12 @@ export class InteriorView {
     this.refreshUpperStairHoles();
   }
 
-  /** Tiles a stair occupies. Upper floors leave these out of the carpet. */
+  /** Tiles a flight down occupies. Upper floors leave these out of the carpet. */
   private upperStairHoleKeys(): Set<string> {
     const holes = new Set<string>();
     if (this.floorLevel <= 0) return holes;
     for (const item of this.syncedSearchables) {
-      if (item.objectType !== "stairs") continue;
+      if (!this.stairDescends(item)) continue;
       const { w, h } = searchableFootprint(item);
       for (let ty = item.y; ty < item.y + h; ty++) {
         for (let tx = item.x; tx < item.x + w; tx++) {
@@ -2042,7 +2266,7 @@ export class InteriorView {
     if (this.floorLevel <= 0) return "";
     const parts: string[] = [];
     for (const item of this.syncedSearchables) {
-      if (item.objectType !== "stairs") continue;
+      if (!this.stairDescends(item)) continue;
       parts.push(`${item.x},${item.y},${item.facing ?? ""}`);
     }
     parts.sort();
@@ -2065,13 +2289,13 @@ export class InteriorView {
       const sprite = this.objectSprites.get(item.id);
       if (!sprite) continue;
       sprite.setDepth(this.searchableDepth(item));
-      if (item.objectType === "stairs") this.placeStairSprite(sprite, item);
+      if (furnitureIsStairs(item.objectType)) this.placeStairSprite(sprite, item);
     }
   }
 
   /** Ascending stairs use the normal pad. Descending stairs drop into the floor hole. */
   private furniturePad(item: SearchableVisual): number {
-    if (item.objectType === "stairs" && this.floorLevel > 0) {
+    if (this.stairDescends(item)) {
       return STAIRS_DESCEND_BOTTOM_PAD;
     }
     return furnitureBottomPad(item.objectType);
@@ -2103,30 +2327,47 @@ export class InteriorView {
     // Houses get wood; large retail → laminate, with GroundMotel carpet on
     // the home-furniture showroom; police → GroundTiles;
     // hospital → GroundHospital; motel → GroundMotel carpet;
-    // office → GroundOffice carpet; tent → barracks gravel; else concrete.
+    // office → GroundOffice carpet; tent → barracks gravel;
+    // diner → GroundDiner checkerboard, GroundTiles in the kitchen;
+    // gun shop → GroundGunShop planks, GroundOffice carpet in the back office;
+    // else concrete.
     const bType = getBuildingAt(this.buildingX, this.buildingY)?.buildingType;
     const showroom =
       this.floorLevel === 0 && bType === "large_retail"
         ? retailShowroomBounds(this.iW, this.iH, exit)
         : null;
-    const carpetTiles = showroom
+    const dinerKitchen =
+      this.floorLevel === 0 && bType === "diner"
+        ? dinerKitchenForBuilding(this.buildingX, this.buildingY)
+        : null;
+    const gunShopOffice =
+      this.floorLevel === 0 && bType === "gun_shop"
+        ? gunShopOfficeForBuilding(this.buildingX, this.buildingY)
+        : null;
+    const overlayBounds = showroom ?? dinerKitchen ?? gunShopOffice;
+    const overlayKey = showroom
+      ? "tile-motel"
+      : gunShopOffice
+        ? "tile-office"
+        : "tile-ground-tiles";
+    const carpetTiles = overlayBounds
       ? tileCoords.filter(
           (t) =>
-            t.x >= showroom.x0 &&
-            t.x <= showroom.x1 &&
-            t.y >= showroom.y0 &&
-            t.y <= showroom.y1,
+            t.x >= overlayBounds.x0 &&
+            t.x <= overlayBounds.x1 &&
+            t.y >= overlayBounds.y0 &&
+            t.y <= overlayBounds.y1,
         )
       : [];
     const salesTiles =
       carpetTiles.length > 0
         ? tileCoords.filter(
             (t) =>
-              !showroom ||
-              t.x < showroom.x0 ||
-              t.x > showroom.x1 ||
-              t.y < showroom.y0 ||
-              t.y > showroom.y1,
+              !overlayBounds ||
+              t.x < overlayBounds.x0 ||
+              t.x > overlayBounds.x1 ||
+              t.y < overlayBounds.y0 ||
+              t.y > overlayBounds.y1,
           )
         : tileCoords;
     const floorKey =
@@ -2146,17 +2387,44 @@ export class InteriorView {
                   ? "tile-retail"
                   : bType === "tent" || bType === "mess_hall"
                     ? "tile-barracks"
-                    : "tile-concrete";
-    const floor = createInteriorFloorImage(
-      this.scene,
+                    : bType === "diner"
+                      ? "tile-diner"
+                      : bType === "gun_shop"
+                        ? "tile-gunshop"
+                        : "tile-concrete";
+    const apartment = apartmentLevelForBuilding(
       this.buildingX,
       this.buildingY,
-      salesTiles,
-      floorKey,
-      carpetTiles.length > 0
-        ? { baseKey: "tile-motel", tiles: carpetTiles }
-        : undefined,
+      this.floorLevel,
     );
+    const apartmentBase = apartment?.floors[0];
+    const floor = apartmentBase
+      ? createInteriorFloorImage(
+          this.scene,
+          this.buildingX,
+          this.buildingY,
+          tileCoords,
+          APARTMENT_FLOOR_KEYS[apartmentBase.material],
+          [
+            ...apartment.floors.slice(1).map((zone) => ({
+              baseKey: APARTMENT_FLOOR_KEYS[zone.material],
+              tiles: tileCoords.filter(
+                (t) => t.x >= zone.x0 && t.x <= zone.x1 && t.y >= zone.y0 && t.y <= zone.y1,
+              ),
+            })),
+            ...apartmentWallFloorOverlays(apartment, tileCoords),
+          ],
+        )
+      : createInteriorFloorImage(
+          this.scene,
+          this.buildingX,
+          this.buildingY,
+          salesTiles,
+          floorKey,
+          carpetTiles.length > 0
+            ? { baseKey: overlayKey, tiles: carpetTiles }
+            : undefined,
+        );
     if (floor) {
       floor.setDepth(interiorFloorDepth(0, 0));
       this.floorSprites.push(floor);
@@ -2237,16 +2505,19 @@ export class InteriorView {
     const wallSet = new Set(walls.map((w) => `${w.x},${w.y}`));
     for (const key of this.prefabPartitionKeys) wallSet.add(key);
     this.partitionWallSet = wallSet;
-    const doorMap = new Map(this.extraDoors.map((d) => [`${d.x},${d.y}`, d]));
+    const doorMap = new Map(this.activeDoors().map((d) => [`${d.x},${d.y}`, d]));
     const proceduralKeys = new Set(
       interiorWallsForBuilding(this.buildingX, this.buildingY).map(
         (w) => `${w.x},${w.y}`,
       ),
     );
+    // Player walls are ground-floor structures. Upper storeys never show them.
     const plywoodTiles = new Set(
-      this.structureWalls
-        .map((w) => `${w.x},${w.y}`)
-        .filter((key) => !proceduralKeys.has(key)),
+      this.floorLevel > 0
+        ? []
+        : this.structureWalls
+            .map((w) => `${w.x},${w.y}`)
+            .filter((key) => !proceduralKeys.has(key)),
     );
     for (const wall of walls) {
       const door = doorMap.get(`${wall.x},${wall.y}`);
@@ -2363,6 +2634,10 @@ export class InteriorView {
    * is not a procedural room entrance.
    */
   private houseDoorFacingAt(tx: number, ty: number): InternalDoorFace | null {
+    for (const room of apartmentRoomsForLevel(this.buildingX, this.buildingY, this.floorLevel)) {
+      if (room.entranceX === tx && room.entranceY === ty) return room.facing;
+    }
+    if (this.floorLevel > 0) return null;
     const house = houseRoomAtTile(this.buildingX, this.buildingY, tx, ty);
     if (house) return house.facing;
     const motel = motelRoomAtTile(this.buildingX, this.buildingY, tx, ty);
@@ -2377,6 +2652,12 @@ export class InteriorView {
     if (retailOffice) return retailOffice.facing;
     const policeRoom = policeCornerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
     if (policeRoom) return policeRoom.facing;
+    const mess = messHallBackRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (mess) return mess.facing;
+    const diner = dinerKitchenAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (diner) return diner.facing;
+    const gunShop = gunShopOfficeAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (gunShop) return gunShop.facing;
     return null;
   }
 
@@ -2384,13 +2665,45 @@ export class InteriorView {
     return hospitalCubicleAtTile(this.buildingX, this.buildingY, tx, ty) != null;
   }
 
+  private isJailCellDoor(tx: number, ty: number): boolean {
+    const cell = policeJailCellForBuilding(this.buildingX, this.buildingY);
+    return cell != null && cell.entranceX === tx && cell.entranceY === ty;
+  }
+
+  private isSergeantOfficeDoor(tx: number, ty: number): boolean {
+    const office = policeSergeantRoomForBuilding(this.buildingX, this.buildingY);
+    return office != null && office.entranceX === tx && office.entranceY === ty;
+  }
+
+  private isDavisOfficeDoor(tx: number, ty: number): boolean {
+    const office = messHallBackRoomsForBuilding(this.buildingX, this.buildingY)?.office;
+    return office != null && office.entranceX === tx && office.entranceY === ty;
+  }
+
+  private isManagerOfficeDoor(tx: number, ty: number): boolean {
+    const office = officeManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (office && office.entranceX === tx && office.entranceY === ty) return true;
+    const retail = retailManagerRoomAtTile(this.buildingX, this.buildingY, tx, ty);
+    if (retail && retail.entranceX === tx && retail.entranceY === ty) return true;
+    const gunShop = gunShopOfficeAtTile(this.buildingX, this.buildingY, tx, ty);
+    return gunShop != null && gunShop.entranceX === tx && gunShop.entranceY === ty;
+  }
+
   /** Partition face colors for the current interior building type. */
   private partitionWallColors(): PartitionWallColors {
-    if (getBuildingAt(this.buildingX, this.buildingY)?.buildingType === "hospital") {
+    const bType = getBuildingAt(this.buildingX, this.buildingY)?.buildingType;
+    if (bType === "hospital") {
       return {
         front: HOSPITAL_WALL_FRONT,
         side: HOSPITAL_WALL_SIDE,
         top: HOSPITAL_WALL_TOP,
+      };
+    }
+    if (bType === "mess_hall") {
+      return {
+        front: MESS_HALL_PART_FRONT,
+        side: MESS_HALL_PART_SIDE,
+        top: MESS_HALL_PART_TOP,
       };
     }
     return {
@@ -2403,8 +2716,10 @@ export class InteriorView {
   /**
    * Closed doors show art matching the room facing (SW = left hinge, SE = right
    * hinge). Open doors flip to the opposite face so the "inside" of the leaf
-   * faces the new direction after the swing. Hospital cubicles use DoorHospital;
-   * house/motel rooms use InternalDoor1.
+   * faces the new direction after the swing. Hospital cubicles use DoorHospital,
+   * the jail cell uses DoorJail, the sergeant's office uses InternalDoor3,
+   * Davis's office uses InternalDoor5, manager's offices use InternalDoor4,
+   * and other rooms use InternalDoor1.
    */
   private internalDoorTextureKey(
     tx: number,
@@ -2417,15 +2732,18 @@ export class InteriorView {
         ? "SE"
         : "SW"
       : closedFacing;
-    return this.isHospitalCubicleDoor(tx, ty)
-      ? buildingHospitalDoorKey(face)
-      : buildingInternalDoor1Key(face);
+    if (this.isHospitalCubicleDoor(tx, ty)) return buildingHospitalDoorKey(face);
+    if (this.isJailCellDoor(tx, ty)) return buildingJailDoorKey(face);
+    if (this.isSergeantOfficeDoor(tx, ty)) return buildingInternalDoor3Key(face);
+    if (this.isDavisOfficeDoor(tx, ty)) return buildingInternalDoor5Key(face);
+    if (this.isManagerOfficeDoor(tx, ty)) return buildingInternalDoor4Key(face);
+    return buildingInternalDoor1Key(face);
   }
 
   private syncInternalDoorSprites() {
     if (!this.visible) return;
     const live = new Set<string>();
-    for (const door of this.extraDoors) {
+    for (const door of this.activeDoors()) {
       const facing = this.houseDoorFacingAt(door.x, door.y);
       if (!facing) continue;
       const key = `${door.x},${door.y}`;
@@ -2481,6 +2799,23 @@ export class InteriorView {
     // pose still starts from that closed axis (hinge side is unchanged).
     const axis: "ns" | "ew" = closedFacing === "SE" ? "ns" : "ew";
     const hospital = this.isHospitalCubicleDoor(door.x, door.y);
+    const jail = this.isJailCellDoor(door.x, door.y);
+    const sergeant = this.isSergeantOfficeDoor(door.x, door.y);
+    const davis = this.isDavisOfficeDoor(door.x, door.y);
+    const manager = this.isManagerOfficeDoor(door.x, door.y);
+    const leafColors = hospital
+      ? {
+          front: HOSPITAL_DOOR_FRONT,
+          side: HOSPITAL_DOOR_SIDE,
+          top: HOSPITAL_DOOR_TOP,
+        }
+      : jail
+        ? {
+            front: JAIL_DOOR_FRONT,
+            side: JAIL_DOOR_SIDE,
+            top: JAIL_DOOR_TOP,
+          }
+        : { front: DOOR_FRONT, side: DOOR_SIDE, top: DOOR_TOP };
     const baked = bakeTexturedInteriorDoor(
       this.scene,
       door.x,
@@ -2489,13 +2824,8 @@ export class InteriorView {
       door.isOpen,
       this.doorShowsCodeLock(door),
       artKey,
-      hospital
-        ? {
-            front: HOSPITAL_DOOR_FRONT,
-            side: HOSPITAL_DOOR_SIDE,
-            top: HOSPITAL_DOOR_TOP,
-          }
-        : { front: DOOR_FRONT, side: DOOR_SIDE, top: DOOR_TOP },
+      leafColors,
+      hospital || jail || sergeant || davis || manager,
     );
     if (!baked) return;
 
@@ -2573,9 +2903,17 @@ export class InteriorView {
       return;
     }
 
+    let sprite = this.objectSprites.get(item.id);
+    // An emptied gun rack swaps art in place, so redraw on a type change.
+    if (sprite && this.spriteObjectType.get(item.id) !== item.objectType) {
+      sprite.destroy();
+      this.objectSprites.delete(item.id);
+      this.searchVisualOpen.delete(item.id);
+      sprite = undefined;
+    }
+    this.spriteObjectType.set(item.id, item.objectType);
     const visuallyOpen = furnitureShowsSearched(item, isSearching);
     const wasVisuallyOpen = this.searchVisualOpen.get(item.id) === true;
-    let sprite = this.objectSprites.get(item.id);
     const animDef = animatedFurnitureDef(item.objectType, item.facing);
 
     if (sprite) {
@@ -2596,7 +2934,7 @@ export class InteriorView {
       // Keep depth in sync (footprint / sort rules can change without recreate).
       const depth = this.searchableDepth(item);
       if ("setDepth" in sprite) sprite.setDepth(depth);
-      if (item.objectType === "stairs") this.placeStairSprite(sprite, item);
+      if (furnitureIsStairs(item.objectType)) this.placeStairSprite(sprite, item);
       this.trackGroundBagTile(item);
       this.searchedState.set(item.id, item.searched);
       this.searchingState.set(item.id, isSearching);
@@ -3854,6 +4192,50 @@ function paintImageOnDoorFace(
   ctx.restore();
 }
 
+/**
+ * Paint door art so its own alpha is the face alpha. The geometric fill under
+ * that face is cleared first, otherwise glass panes composite onto an opaque
+ * panel and lose the transparency in the texture.
+ */
+function paintDoorFacePreservingAlpha(
+  ctx: CanvasRenderingContext2D,
+  strip: CanvasImageSource,
+  stripW: number,
+  stripH: number,
+  bottomLeft: { x: number; y: number },
+  bottomRight: { x: number; y: number },
+  depth: number,
+) {
+  const layer = document.createElement("canvas");
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const lctx = layer.getContext("2d");
+  if (!lctx) {
+    paintImageOnDoorFace(ctx, strip, stripW, stripH, bottomLeft, bottomRight, depth);
+    return;
+  }
+  lctx.setTransform(ctx.getTransform());
+  lctx.imageSmoothingEnabled = true;
+  lctx.imageSmoothingQuality = "high";
+  paintImageOnDoorFace(lctx, strip, stripW, stripH, bottomLeft, bottomRight, depth);
+
+  const bl = bottomLeft;
+  const br = bottomRight;
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  fillDoorPolyCanvas(
+    ctx,
+    [bl, br, { x: br.x, y: br.y - depth }, { x: bl.x, y: bl.y - depth }],
+    "#fff",
+  );
+  ctx.restore();
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+}
+
 function fillDoorPolyCanvas(
   ctx: CanvasRenderingContext2D,
   pts: { x: number; y: number }[],
@@ -3885,6 +4267,7 @@ function bakeTexturedInteriorDoor(
     side: DOOR_SIDE,
     top: DOOR_TOP,
   },
+  preserveArtAlpha = false,
 ): {
   canvas: HTMLCanvasElement;
   originX: number;
@@ -3958,15 +4341,28 @@ function bakeTexturedInteriorDoor(
     leafColors.side,
   );
   // Stretch art across the full main face (width + height) — no wood lip.
-  paintImageOnDoorFace(
-    ctx,
-    art.src,
-    art.srcW,
-    art.srcH,
-    face.bl,
-    face.br,
-    d,
-  );
+  // Hospital, jail, sergeant, Davis, and manager glass keep the texture alpha. Other doors paint over the solid leaf.
+  if (preserveArtAlpha) {
+    paintDoorFacePreservingAlpha(
+      ctx,
+      art.src,
+      art.srcW,
+      art.srcH,
+      face.bl,
+      face.br,
+      d,
+    );
+  } else {
+    paintImageOnDoorFace(
+      ctx,
+      art.src,
+      art.srcW,
+      art.srcH,
+      face.bl,
+      face.br,
+      d,
+    );
+  }
 
   // Top cap only — side/front under the art is already covered.
   fillDoorPolyCanvas(

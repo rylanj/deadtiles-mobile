@@ -91,7 +91,10 @@ export function interiorFurnitureDepth(worldX: number, worldY: number) {
  */
 const LONG_BED_DEPTH_BIAS = -2;
 
-export function interiorFurnitureDepthBias(objectType: string): number {
+export function interiorFurnitureDepthBias(
+  objectType: string,
+  facing?: string,
+): number {
   if (
     objectType === "hospitalbed" ||
     objectType === "hospitalbed2" ||
@@ -113,6 +116,14 @@ export function interiorFurnitureDepthBias(objectType: string): number {
     objectType === "canteentable4" ||
     objectType === "sofa"
   ) {
+    return LONG_BED_DEPTH_BIAS;
+  }
+  // Desk3 SE/NW is 1×2. Depth uses the south footprint tile, which shares
+  // an x+y diagonal with the manager-office safe one tile east
+  // (desk (x, y+1) vs safe (x+1, y)). The +y tie-break then paints the
+  // whole desk over the safe. SW/NE desks are 2×1 and already sort behind
+  // that safe.
+  if (objectType === "desk3" && (facing === "SE" || facing === "NW")) {
     return LONG_BED_DEPTH_BIAS;
   }
   return 0;

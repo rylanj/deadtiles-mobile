@@ -35,9 +35,34 @@ export function buildingInternalDoor1Key(face: InternalDoorFace): string {
   return `building-internal-door-1-${face.toLowerCase()}`;
 }
 
+/** Glass office door with no nameplate (InternalDoor2). */
+export function buildingInternalDoor2Key(face: InternalDoorFace): string {
+  return `building-internal-door-2-${face.toLowerCase()}`;
+}
+
+/** Sergeant's office door (InternalDoor3). */
+export function buildingInternalDoor3Key(face: InternalDoorFace): string {
+  return `building-internal-door-3-${face.toLowerCase()}`;
+}
+
+/** Manager's office door (InternalDoor4). */
+export function buildingInternalDoor4Key(face: InternalDoorFace): string {
+  return `building-internal-door-4-${face.toLowerCase()}`;
+}
+
+/** Captain Davis's office door (InternalDoor5). */
+export function buildingInternalDoor5Key(face: InternalDoorFace): string {
+  return `building-internal-door-5-${face.toLowerCase()}`;
+}
+
 /** Hospital cubicle interior doors (DoorHospital). */
 export function buildingHospitalDoorKey(face: InternalDoorFace): string {
   return `building-hospital-door-${face.toLowerCase()}`;
+}
+
+/** Police jail cell doors (DoorJail). */
+export function buildingJailDoorKey(face: InternalDoorFace): string {
+  return `building-jail-door-${face.toLowerCase()}`;
 }
 
 /** SuperWindow1–6 facing variants (non–faction-owned supermarket façades). */
@@ -48,9 +73,6 @@ export type SuperWindowFace = "SE" | "SW";
 /** Faction-owned supermarket boarded window (directionless). */
 export const BUILDING_SUPER_WINDOW_BOARDED_KEY =
   "building-super-window-boarded-1" as const;
-
-/** Pre-isometric motel roof sign (SE entrance façades only). */
-export const BUILDING_MOTEL_SIGN_SE_KEY = "building-motel-sign-se" as const;
 
 export function buildingSuperWindowKey(
   variant: SuperWindowVariant,
@@ -77,6 +99,11 @@ export function buildingDoor6Key(face: SuperWindowFace): string {
 
 export function buildingDoor7Key(face: SuperWindowFace): string {
   return `building-door-7-${face.toLowerCase()}`;
+}
+
+/** Retail shop double doors. Was Door9 before the rename. */
+export function buildingDoor8Key(face: SuperWindowFace): string {
+  return `building-door-8-${face.toLowerCase()}`;
 }
 
 export function buildingWindow1Key(face: SuperWindowFace): string {
@@ -118,8 +145,28 @@ function internalDoor1File(face: InternalDoorFace): string {
   return `Buildings/InternalDoor1_${face}.png`;
 }
 
+function internalDoor2File(face: InternalDoorFace): string {
+  return `Buildings/InternalDoor2_${face}.png`;
+}
+
+function internalDoor3File(face: InternalDoorFace): string {
+  return `Buildings/InternalDoor3_${face}.png`;
+}
+
+function internalDoor4File(face: InternalDoorFace): string {
+  return `Buildings/InternalDoor4_${face}.png`;
+}
+
+function internalDoor5File(face: InternalDoorFace): string {
+  return `Buildings/InternalDoor5_${face}.png`;
+}
+
 function hospitalDoorFile(face: InternalDoorFace): string {
   return `Buildings/DoorHospital_${face}.png`;
+}
+
+function jailDoorFile(face: InternalDoorFace): string {
+  return `Buildings/DoorJail_${face}.png`;
 }
 
 function door2File(face: SuperWindowFace): string {
@@ -142,6 +189,10 @@ function door7File(face: SuperWindowFace): string {
   return `Buildings/Door7_${face}.png`;
 }
 
+function door8File(face: SuperWindowFace): string {
+  return `Buildings/Door8_${face}.png`;
+}
+
 function window1File(face: SuperWindowFace): string {
   return `Buildings/Window1_${face}.png`;
 }
@@ -158,8 +209,6 @@ function superWindowFile(
 }
 
 const SUPER_WINDOW_BOARDED_FILE = "Buildings/SuperWindowBoarded1.png";
-const MOTEL_SIGN_SE_FILE = "Buildings/MotelSign_SE.png";
-
 /** 1:2 white canvas used as a temp wall for unconfigured building types. */
 const BLANK_WALL_W = 64;
 const BLANK_WALL_H = 128;
@@ -176,12 +225,18 @@ export function loadBuildingAssets(scene: Phaser.Scene) {
   scene.load.image(BUILDING_DOOR_3_KEY, DOOR_3_FILE);
   for (const face of ["SE", "SW"] as const) {
     scene.load.image(buildingInternalDoor1Key(face), internalDoor1File(face));
+    scene.load.image(buildingInternalDoor2Key(face), internalDoor2File(face));
+    scene.load.image(buildingInternalDoor3Key(face), internalDoor3File(face));
+    scene.load.image(buildingInternalDoor4Key(face), internalDoor4File(face));
+    scene.load.image(buildingInternalDoor5Key(face), internalDoor5File(face));
     scene.load.image(buildingHospitalDoorKey(face), hospitalDoorFile(face));
+    scene.load.image(buildingJailDoorKey(face), jailDoorFile(face));
     scene.load.image(buildingDoor2Key(face), door2File(face));
     scene.load.image(buildingDoor4Key(face), door4File(face));
     scene.load.image(buildingDoor5Key(face), door5File(face));
     scene.load.image(buildingDoor6Key(face), door6File(face));
     scene.load.image(buildingDoor7Key(face), door7File(face));
+    scene.load.image(buildingDoor8Key(face), door8File(face));
     scene.load.image(buildingWindow1Key(face), window1File(face));
     scene.load.image(buildingBigWindow1Key(face), bigWindow1File(face));
   }
@@ -194,7 +249,6 @@ export function loadBuildingAssets(scene: Phaser.Scene) {
     }
   }
   scene.load.image(BUILDING_SUPER_WINDOW_BOARDED_KEY, SUPER_WINDOW_BOARDED_FILE);
-  scene.load.image(BUILDING_MOTEL_SIGN_SE_KEY, MOTEL_SIGN_SE_FILE);
 }
 
 /** Call once after the wall textures have finished loading. */
@@ -213,8 +267,18 @@ export function configureBuildingTextures(scene: Phaser.Scene) {
     BUILDING_DOOR_3_KEY,
     buildingInternalDoor1Key("SE"),
     buildingInternalDoor1Key("SW"),
+    buildingInternalDoor2Key("SE"),
+    buildingInternalDoor2Key("SW"),
+    buildingInternalDoor3Key("SE"),
+    buildingInternalDoor3Key("SW"),
+    buildingInternalDoor4Key("SE"),
+    buildingInternalDoor4Key("SW"),
+    buildingInternalDoor5Key("SE"),
+    buildingInternalDoor5Key("SW"),
     buildingHospitalDoorKey("SE"),
     buildingHospitalDoorKey("SW"),
+    buildingJailDoorKey("SE"),
+    buildingJailDoorKey("SW"),
     buildingDoor2Key("SE"),
     buildingDoor2Key("SW"),
     buildingDoor4Key("SE"),
@@ -225,6 +289,8 @@ export function configureBuildingTextures(scene: Phaser.Scene) {
     buildingDoor6Key("SW"),
     buildingDoor7Key("SE"),
     buildingDoor7Key("SW"),
+    buildingDoor8Key("SE"),
+    buildingDoor8Key("SW"),
     buildingWindow1Key("SE"),
     buildingWindow1Key("SW"),
     buildingBigWindow1Key("SE"),
@@ -233,7 +299,6 @@ export function configureBuildingTextures(scene: Phaser.Scene) {
       (["SE", "SW"] as const).map((face) => buildingSuperWindowKey(variant, face)),
     ),
     BUILDING_SUPER_WINDOW_BOARDED_KEY,
-    BUILDING_MOTEL_SIGN_SE_KEY,
   ]) {
     if (!scene.textures.exists(key)) continue;
     scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -385,7 +450,7 @@ export function isRuralStyleBuilding(
   return isHouseStyleBuilding(bld);
 }
 
-/** Door texture for the building type (supermarket Door4 / hospital Door5 / retail Door6 / office Door7 / tent flap). */
+/** Door texture for the building type (supermarket Door4 / hospital Door5 / retail Door8 / office, diner, and apartment Door7 / tent flap). */
 export function doorTextureKeyForBuilding(
   bld: Pick<BuildingInfo, "buildingType"> | { buildingType?: BuildingType },
   face?: SuperWindowFace,
@@ -400,8 +465,11 @@ export function doorTextureKeyForBuilding(
     case "hospital":
       return buildingDoor5Key(face ?? "SE");
     case "large_retail":
-      return buildingDoor6Key(face ?? "SE");
+      return buildingDoor8Key(face ?? "SE");
     case "office":
+    case "diner":
+    case "apartment":
+    case "gun_shop":
       return buildingDoor7Key(face ?? "SE");
     case "tent":
       return BUILDING_TENT_FLAP_KEY;
@@ -442,7 +510,9 @@ export function wallTextureKeyForBuilding(
 ): BuildingWallKey {
   if (bld.buildingType === "warehouse") return BUILDING_WALL_WAREHOUSE_KEY;
   if (bld.buildingType === "police_station") return BUILDING_WALL_HOUSE_KEYS[0]!; // Wall1
-  if (isHouseStyleBuilding(bld)) return houseWallTextureKeyForBuilding(bld);
+  if (isHouseStyleBuilding(bld) || bld.buildingType === "apartment") {
+    return houseWallTextureKeyForBuilding(bld);
+  }
   // Office, retail, and supermarket paint their own walls and ignore this key.
   return BUILDING_WALL_BLANK_KEY;
 }

@@ -14,6 +14,7 @@ import {
   WAREHOUSE_ROOF_PEAK_HEIGHT,
   MOTEL_ROOF_PEAK_HEIGHT,
   MOTEL_PARAPET_HEIGHT,
+  DINER_PARAPET_HEIGHT,
   TENT_ROOF_PEAK_HEIGHT,
   HOUSE_CHIMNEY_HEIGHT,
   HOUSE_CHIMNEY_CHANCE_RURAL,
@@ -195,7 +196,7 @@ export type CityBuildingSpec = {
   weight: number;
   /** Temp flat roof fill (client render). Warehouse keeps its deck+lip look. */
   roofColor: string;
-  /** Door must be ≥1 tile from the façade corners (houses). */
+  /** Door must be ≥1 tile from the façade corners (houses, gun shops). */
   doorInsetFromCorners?: boolean;
   /** Door sits on the middle tile of the street-facing wall. */
   doorCentered?: boolean;
@@ -221,7 +222,7 @@ export const CITY_BUILDING_SPECS: Record<CityBuildingType, CityBuildingSpec> = {
   },
   large_retail: {
     zone: "downtown", minW: 10, maxW: 12, minH: 10, maxH: 12,
-    minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 2, roofColor: "#c8cc91",
+    minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 2, roofColor: "#8e9399",
     doorCentered: true, doorSpan: 2,
   },
   hospital: {
@@ -248,16 +249,18 @@ export const CITY_BUILDING_SPECS: Record<CityBuildingType, CityBuildingSpec> = {
   },
   gun_shop: {
     zone: "outskirts", minW: 4, maxW: 6, minH: 4, maxH: 6,
-    minLevels: 1, maxLevels: 1, maxPerCity: 1, weight: 1, roofColor: "#282929",
+    minLevels: 1, maxLevels: 1, maxPerCity: 1, weight: 1, roofColor: "#7a7266",
+    doorInsetFromCorners: true,
   },
   diner: {
     zone: "outskirts", minW: 4, maxW: 12, minH: 4, maxH: 12,
     longSide: { short: 4, minLong: 8, maxLong: 12 },
-    minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 1, roofColor: "#733e02",
+    minLevels: 1, maxLevels: 1, maxPerCity: 2, weight: 1, roofColor: "#8a847c",
   },
   apartment: {
     zone: "outskirts", minW: 5, maxW: 8, minH: 5, maxH: 8,
-    minLevels: 2, maxLevels: 4, maxPerCity: 3, weight: 2, roofColor: "#a87293",
+    minLevels: 2, maxLevels: 4, maxPerCity: 3, weight: 2, roofColor: "#575a5e",
+    doorCentered: true,
   },
   tent: {
     zone: "outskirts", minW: 6, maxW: 6, minH: 4, maxH: 4,
@@ -303,11 +306,15 @@ export function buildingCuboidScreenDepth(
       ? WAREHOUSE_ROOF_PEAK_HEIGHT
       : bld?.buildingType === "motel"
         ? MOTEL_PARAPET_HEIGHT
+        : bld?.buildingType === "diner"
+          ? DINER_PARAPET_HEIGHT
         : bld?.buildingType === "tent"
           ? TENT_ROOF_PEAK_HEIGHT
         : bld?.buildingType === "mess_hall"
           ? MOTEL_ROOF_PEAK_HEIGHT
-          : bld?.buildingType === "police_station"
+          : bld?.buildingType === "police_station" ||
+              bld?.buildingType === "apartment" ||
+              bld?.buildingType === "gun_shop"
           ? POLICE_ROOF_LIP_HEIGHT + POLICE_ROOF_PROP_HEIGHT
           : bld?.buildingType === "supermarket"
             ? POLICE_ROOF_LIP_HEIGHT + SUPERMARKET_ROOF_PROP_HEIGHT

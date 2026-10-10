@@ -26,6 +26,7 @@ export type AnimatedFurnitureType =
   | "dinnertable"
   | "nightstand"
   | "deadofficer"
+  | "deadbody"
   | "bagchair"
   | "armchair"
   | "sofa"
@@ -87,7 +88,27 @@ export type AnimatedFurnitureType =
   | "retailcase1"
   | "retailcase2"
   | "retailcheckout1"
-  | "safe1";
+  | "safe1"
+  | "booth1"
+  | "booth2"
+  | "booth3"
+  | "dinercounter1"
+  | "dinercounter2"
+  | "dinercounter3"
+  | "dinercounter4"
+  | "juke1"
+  | "guncase1"
+  | "guncase2"
+  | "guncase3"
+  | "gunrack1"
+  | "gunrack2"
+  | "gunrack3"
+  | "gunrack4"
+  | "ammoshelf1"
+  | "gunbench1"
+  | "sink2"
+  | "stairs2"
+  | "sink1";
 
 /** SE/SW pair. `frameCount` 0 is idle-only; otherwise Searched_0001–N plays on search. */
 function idlePair(
@@ -164,6 +185,25 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     facing: "SE",
     frameCount: 6,
   },
+  // Manager offices. Idle only: the searched sheets are still SE/SW.
+  {
+    objectType: "desk3",
+    idleKey: "furniture-desk3-ne",
+    animKey: "furniture-desk3-ne-searched",
+    folder: "Furniture/Desk3",
+    filePrefix: "Desk3",
+    facing: "NE",
+    frameCount: 0,
+  },
+  {
+    objectType: "desk3",
+    idleKey: "furniture-desk3-nw",
+    animKey: "furniture-desk3-nw-searched",
+    folder: "Furniture/Desk3",
+    filePrefix: "Desk3",
+    facing: "NW",
+    frameCount: 0,
+  },
   {
     objectType: "bigshelf",
     idleKey: "furniture-bigshelf",
@@ -198,7 +238,7 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     folder: "Furniture/Cabinet1",
     filePrefix: "Cabinet1",
     facing: "SE",
-    frameCount: 8,
+    frameCount: 9,
   },
   {
     objectType: "cabinet",
@@ -207,7 +247,7 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
     folder: "Furniture/Cabinet1",
     filePrefix: "Cabinet1",
     facing: "SW",
-    frameCount: 8,
+    frameCount: 9,
   },
   {
     objectType: "workbench",
@@ -1197,5 +1237,26 @@ export const ANIMATED_FURNITURE: AnimatedFurnitureDef[] = [
   ...idlePair("retailcheckout1", "Furniture/RetailCheckout1", "RetailCheckout1"),
   ...idlePair("safe1", "Furniture/Safe1", "Safe1", 9),
   ...idlePair("jailbed", "Furniture/JailBed1", "JailBed1"),
+  ...idlePair("deadbody", "Furniture/DeadBody1", "DeadBody1"),
   ...idlePair("jailtoilet", "Furniture/JailToilet1", "JailToilet1"),
+  ...idlePair("booth1", "Furniture/Booth1", "Booth1"),
+  ...idlePair("booth2", "Furniture/Booth2", "Booth2"),
+  ...idlePair("booth3", "Furniture/Booth3", "Booth3"),
+  ...idlePair("dinercounter1", "Furniture/DinerCounter1", "DinerCounter1"),
+  ...idlePair("dinercounter2", "Furniture/DinerCounter2", "DinerCounter2"),
+  ...idlePair("dinercounter3", "Furniture/DinerCounter3", "DinerCounter3"),
+  ...idlePair("dinercounter4", "Furniture/DinerCounter4", "DinerCounter4"),
+  ...idlePair("juke1", "Furniture/Juke1", "Juke1"),
+  ...idlePair("sink2", "Furniture/Sink2", "Sink2"),
+  ...idlePair("stairs2", "Furniture/Stairs2", "Stairs2"),
+  ...idlePair("sink1", "Furniture/Sink1", "Sink1"),
+  ...idlePair("guncase1", "Furniture/GunCase1", "GunCase1", 9),
+  ...idlePair("guncase2", "Furniture/GunCase2", "GunCase2", 9),
+  ...idlePair("guncase3", "Furniture/GunCase3", "GunCase3", 9),
+  ...idlePair("gunrack1", "Furniture/GunRack1", "GunRack1"),
+  ...idlePair("gunrack2", "Furniture/GunRack2", "GunRack2"),
+  ...idlePair("gunrack3", "Furniture/GunRack3", "GunRack3"),
+  ...idlePair("gunrack4", "Furniture/GunRack4", "GunRack4"),
+  ...idlePair("ammoshelf1", "Furniture/AmmoShelf1", "AmmoShelf1", 9),
+  ...idlePair("gunbench1", "Furniture/GunBench1", "GunBench1"),
 ];

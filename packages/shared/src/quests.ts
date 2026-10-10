@@ -154,6 +154,8 @@ export type PlayerQuestState = {
   stashId?: string;
   /** Shelf ids already counted for a search objective. */
   marks?: string[];
+  /** Wall-clock ms when a timed story step is ready (Kevin's count). */
+  readyAt?: number;
 };
 
 export type QuestAcceptAssignment = {
@@ -1304,6 +1306,10 @@ export function parseQuestsJson(
         flags: Object.keys(flags).length > 0 ? flags : undefined,
         stashId,
         marks: marks && marks.length > 0 ? marks : undefined,
+        readyAt:
+          typeof obj.readyAt === "number" && Number.isFinite(obj.readyAt)
+            ? obj.readyAt
+            : undefined,
       };
       const def = getQuestDefinition(questId);
       const turnedInEarlier =
@@ -1321,6 +1327,7 @@ export function parseQuestsJson(
         entry.flags = undefined;
         entry.stashId = undefined;
         entry.marks = undefined;
+        entry.readyAt = undefined;
       }
       quests[questId] = entry;
     }
@@ -1884,6 +1891,19 @@ export function setQuestFlag(
         flags: { ...prev.flags, [flag]: value },
       },
     },
+  };
+}
+
+export function setQuestReadyAt(
+  state: PlayerQuestsState,
+  questId: string,
+  readyAt: number,
+): PlayerQuestsState | null {
+  const prev = state.quests[questId];
+  if (!prev || prev.status !== "active") return null;
+  return {
+    ...state,
+    quests: { ...state.quests, [questId]: { ...prev, readyAt } },
   };
 }
 

@@ -38,8 +38,10 @@ export const WAREHOUSE_ROOF_PEAK_HEIGHT = 16;
  * Motels use {@link MOTEL_PARAPET_HEIGHT} instead of a gable.
  */
 export const MOTEL_ROOF_PEAK_HEIGHT = 16;
-/** Street false-front above a motel's flat roof. The sign sits on this lip. */
-export const MOTEL_PARAPET_HEIGHT = 22;
+/** Street false-front above a motel's flat roof. Tall enough to carry the painted MOTEL sign. */
+export const MOTEL_PARAPET_HEIGHT = 34;
+/** Street false-front above a diner's flat roof. The DINER lettering is painted on it. */
+export const DINER_PARAPET_HEIGHT = 22;
 /** Extra screen-Y for a barracks tent canvas ridge above the wall plate. */
 export const TENT_ROOF_PEAK_HEIGHT = 18;
 /** Extra screen-Y for police-station roof parapet above the deck. */
@@ -233,9 +235,10 @@ export const HOSPITAL_WEAPON_WARN_DELAY_MS = 10_000;
 export const HOSPITAL_WEAPON_WARN_LINE = "Put your weapon away now!";
 /**
  * Birchport hospital and military barracks: searching furniture in a
- * militia guard's LOS aims and warns. Cancelling the search stands them
- * down. Completing it uses one free pass per server restart; a second
- * completed theft turns the garrison hostile.
+ * militia guard's LOS aims and warns. Captain Davis warns the same way
+ * when he can see the search, but he does not shoot. Cancelling the
+ * search stands them down. Completing it uses one free pass per server
+ * restart; a second completed theft turns the garrison hostile.
  */
 export const HOSPITAL_SEARCH_WARN_LINE = "Stop stealing now!";
 /**
@@ -308,7 +311,7 @@ export const MARKET_SHELF_PAUSE_MS_MIN = 1_200;
 export const MARKET_SHELF_PAUSE_MS_MAX = 2_800;
 
 /**
- * Captain Davis mess hall wander: Idle pause in the barracks mess hall
+ * Captain Davis office wander: Idle pause in his mess hall office
  * before the next short walk. Rolled per stop between min and max (inclusive).
  */
 export const CAPTAIN_ADMIN_DWELL_MS_MIN = 12_000;

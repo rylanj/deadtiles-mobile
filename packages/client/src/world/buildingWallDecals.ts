@@ -63,6 +63,7 @@ function typeScale(type: BuildingType | undefined) {
   if (type === "hospital" || type === "police_station" || type === "office") {
     return 0.62;
   }
+  if (type === "diner") return 0.7;
   if (type === "tent") return 0.6;
   if (type === "house") return 0.95;
   if (type === "warehouse" || type === "supermarket") return 0.9;
@@ -74,7 +75,8 @@ function usesDust(type: BuildingType | undefined) {
     type === "hospital" ||
     type === "police_station" ||
     type === "office" ||
-    type === "motel"
+    type === "motel" ||
+    type === "diner"
   );
 }
 

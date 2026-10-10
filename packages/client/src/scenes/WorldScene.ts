@@ -21,6 +21,17 @@ import {
   isCellarInterior,
   graveInspectTargetId,
   graveInscriptionAt,
+  isHollandBuried,
+  isRedOrderOwnedSupermarket,
+  QUEST_ID_THE_CELL,
+  QUEST_ID_KNEW_THE_NAME,
+  QUEST_ID_FULL_COUNT,
+  QUEST_ID_THE_KIT,
+  STORY_OBJECTIVE_GET_KIT,
+  isColemanStoryNpcId,
+  eastForestfordDeadBodyId,
+  isEastForestfordPoliceStation,
+  policeJailCellForBuilding,
   GRAVE_INSPECT_MS,
   INSPECT_GRAVE_ID_PREFIX,
   syncFelledTrees,
@@ -170,6 +181,8 @@ import {
   furnitureNeedsCrack,
   SAFE_CRACK_DURATION_MS,
   furnitureIsStairs,
+  interiorStairTargetLevel,
+  interiorDoorsForLevel,
   furnitureIsCraftStation,
   furnitureIsFurnace,
   searchableOccupiesTile,
@@ -307,6 +320,7 @@ import {
   drawInteriorDoorTile,
   drawWallTile,
   PLAYER_WALL_OCCLUSION_REACH,
+  sameInteriorDoor,
   type InteriorDoorTile,
   type PlayerWallOccluder,
   type InteriorFenceCornerTile,
@@ -445,6 +459,15 @@ import {
   EXTERIOR_PURGE_BUILDINGS_PER_FRAME,
 } from "../gameConfig";
 import { isMobileDevice } from "../device";
+
+type StoryInspectCandidate = {
+  id: string;
+  objectType: string;
+  x: number;
+  y: number;
+  buildingX: number;
+  buildingY: number;
+};
 
 type EntitySprite = Phaser.GameObjects.Sprite & {
   entityId: string;
@@ -1058,6 +1081,8 @@ export class WorldScene extends Phaser.Scene {
    * only copies the client has.
    */
   private cachedQuestsJson = "";
+  /** Holland's cross shows his name once Every Morning is handed in. */
+  private hollandBuried = false;
   private localSkillsJson = "";
   /** Craft recipe ids unlocked by weapon blueprints. Owner-only. */
   private learnedRecipeIds = new Set<string>();
@@ -2026,6 +2051,7 @@ export class WorldScene extends Phaser.Scene {
       onCancel: (listingId) => this.sendMarketListing("marketCancel", listingId),
       onCollect: () => this.sendMarketCollect(),
       onCollectPayout: (listingId) => this.sendMarketListing("marketCollectPayout", listingId),
+      onCollectExpired: (listingId) => this.sendMarketListing("marketCollectExpired", listingId),
       onBrowse: (browse) => this.sendMarketBrowse(browse),
     });
     this.redOrderDialogUI = new RedOrderDialogUI({
@@ -2033,6 +2059,8 @@ export class WorldScene extends Phaser.Scene {
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.redOrderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendRedOrderCompleteTask(taskId),
+      onChooseLine: (lineId) =>
+        this.sendDialogChoose(this.redOrderDialogUI?.getNpcId(), lineId),
     });
     this.ashenTraderDialogUI = new AshenTraderDialogUI({
       onClose: () => this.closeAshenTraderDialog(),
@@ -2043,6 +2071,8 @@ export class WorldScene extends Phaser.Scene {
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.ashenTraderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenTraderCompleteTask(taskId),
+      onChooseLine: (lineId) =>
+        this.sendDialogChoose(this.ashenTraderDialogUI?.getNpcId(), lineId),
     });
     this.ashenMilitiaDialogUI = new AshenMilitiaDialogUI({
       onClose: () => this.closeAshenMilitiaDialog(),
@@ -2410,7 +2440,10 @@ export class WorldScene extends Phaser.Scene {
       room.onMessage("event", (msg: ServerEvent) => {
         if (msg.type === "lootFound") {
           this.clearLocalSearchProgress();
-          this.lootPopup?.show(msg.payload.items);
+          this.lootPopup?.show(
+            msg.payload.items,
+            msg.payload.header ? { header: msg.payload.header } : undefined,
+          );
         } else if (msg.type === "containerOpen") {
           this.clearLocalSearchProgress();
           this.openContainerLootUI(
@@ -2550,12 +2583,33 @@ export class WorldScene extends Phaser.Scene {
             this.closeAshenMilitiaDialog();
             this.closeAshenTraderDialog();
           }
-          const header = msg.payload.header ?? "You received:";
-          if (msg.payload.rewards.length > 0 || msg.payload.header) {
-            this.lootPopup?.show(msg.payload.rewards, { header });
+          if (
+            msg.payload.keepOpen &&
+            msg.payload.header &&
+            this.ashenMilitiaDialogUI?.isOpen()
+          ) {
+            this.ashenMilitiaDialogUI.showReply(msg.payload.header);
+            if (msg.payload.rewards.length > 0) {
+              this.lootPopup?.show(msg.payload.rewards, { header: "You received:" });
+            }
+          } else {
+            const header = msg.payload.header ?? "You received:";
+            if (msg.payload.rewards.length > 0 || msg.payload.header) {
+              this.lootPopup?.show(msg.payload.rewards, { header });
+            }
           }
         } else if (msg.type === "dialogSpoken") {
-          this.ashenMilitiaDialogUI?.speak(msg.payload.lineId, msg.payload.text);
+          const { npcId, lineId, text } = msg.payload;
+          if (this.redOrderDialogUI?.isOpen() && this.redOrderDialogUI.getNpcId() === npcId) {
+            this.redOrderDialogUI.speak(lineId, text);
+          } else if (
+            this.ashenTraderDialogUI?.isOpen() &&
+            this.ashenTraderDialogUI.getNpcId() === npcId
+          ) {
+            this.ashenTraderDialogUI.speak(lineId, text);
+          } else {
+            this.ashenMilitiaDialogUI?.speak(lineId, text);
+          }
         } else if (msg.type === "dialogHealComplete") {
           this.closeAshenMilitiaDialog();
           this.lootPopup?.show([], {
@@ -5112,6 +5166,19 @@ export class WorldScene extends Phaser.Scene {
       AudioManager.get().play("journal");
     }
     this.onboardingUI?.setQuestState(next);
+    this.hollandBuried = isHollandBuried(next);
+    this.notifyStoryFactionTips(next);
+  }
+
+  /** First faction introductions come from the story chain. */
+  private notifyStoryFactionTips(state: ReturnType<typeof parseQuestsJson>) {
+    const active = (id: string) => state.quests[id]?.status === "active";
+    if (active(QUEST_ID_KNEW_THE_NAME)) this.notifyTip("red_order_intro");
+    if (active(QUEST_ID_FULL_COUNT)) this.notifyTip("ashen_traders_intro");
+    const kit = state.quests[QUEST_ID_THE_KIT];
+    if (kit?.status === "active" && (kit.progress[STORY_OBJECTIVE_GET_KIT] ?? 0) >= 1) {
+      this.notifyTip("lockpick_kit");
+    }
   }
 
   private localExtraPockets(): number {
@@ -5528,12 +5595,14 @@ export class WorldScene extends Phaser.Scene {
     const bx = buildingX ?? me?.buildingX;
     const by = buildingY ?? me?.buildingY;
     if (bx === undefined || by === undefined) return [];
+    const level = this.interiorLevelIn(bx, by);
     const out: FurnitureDepthFootprint[] = [];
     for (const s of this.searchablesCache) {
       if (s.buildingX !== bx || s.buildingY !== by) continue;
+      if ((s.level ?? 0) !== level) continue;
       if (s.objectType === "groundbackpack") continue;
       const { w, h } = searchableFootprint(s);
-      const depthBias = interiorFurnitureDepthBias(s.objectType);
+      const depthBias = interiorFurnitureDepthBias(s.objectType, s.facing);
       out.push(
         depthBias !== 0
           ? { ox: s.x, oy: s.y, w, h, depthBias }
@@ -5547,9 +5616,7 @@ export class WorldScene extends Phaser.Scene {
     // movement), but the leaf graphic still draws at the tile's wall depth —
     // without a footprint here, entities walking through the doorway get no
     // front-lift and render underneath the leaf.
-    const openDoors = (
-      this.structureDoorsByBuilding.get(buildingKey(bx, by)) ?? []
-    ).filter((d) => d.isOpen);
+    const openDoors = this.interiorDoorsOnLevel(bx, by, level).filter((d) => d.isOpen);
     for (const d of openDoors) {
       out.push({ ox: d.x, oy: d.y, w: 1, h: 1, partition: true });
     }
@@ -5574,24 +5641,67 @@ export class WorldScene extends Phaser.Scene {
    * and storage boxes always block. Fireplaces are walkable. Used for collision
    * and placement.
    */
+  /** Local player's storey when they are inside this building, else 0. */
+  private interiorLevelIn(buildingX: number, buildingY: number): number {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me?.inInterior || me.buildingX !== buildingX || me.buildingY !== buildingY) {
+      return 0;
+    }
+    return me.interiorLevel ?? 0;
+  }
+
+  /**
+   * Server doors on one storey of a building. Until an upper storey's doors
+   * arrive, its generated doors count as open so movement is not blocked by
+   * art that has not loaded.
+   */
+  private interiorDoorsOnLevel(
+    buildingX: number,
+    buildingY: number,
+    level = this.interiorLevelIn(buildingX, buildingY),
+  ): InteriorDoorTile[] {
+    const all = this.structureDoorsByBuilding.get(buildingKey(buildingX, buildingY)) ?? [];
+    const onLevel = all.filter((d) => (d.level ?? 0) === level);
+    if (level <= 0 || onLevel.length > 0) return onLevel;
+    return interiorDoorsForLevel(buildingX, buildingY, level).map((d) => ({
+      x: d.x,
+      y: d.y,
+      isOpen: true,
+      isLocked: false,
+      ownerWallet: "",
+      level,
+    }));
+  }
+
+  /** Upper storey collision: its own partitions plus its closed doors. */
+  private upperLevelWalls(
+    buildingX: number,
+    buildingY: number,
+    level: number,
+  ): InteriorWallTile[] {
+    const walls = interiorWallsForBuilding(buildingX, buildingY, level);
+    const seen = new Set(walls.map((w) => `${w.x},${w.y}`));
+    for (const d of this.interiorDoorsOnLevel(buildingX, buildingY, level)) {
+      if (d.isOpen || seen.has(`${d.x},${d.y}`)) continue;
+      seen.add(`${d.x},${d.y}`);
+      walls.push({ x: d.x, y: d.y });
+    }
+    return walls;
+  }
+
   private mergedInteriorWalls(
     buildingX: number,
     buildingY: number,
   ): InteriorWallTile[] {
-    const me = this.room?.state?.players?.get(this.sessionId);
-    if (
-      me?.inInterior &&
-      me.buildingX === buildingX &&
-      me.buildingY === buildingY &&
-      (me.interiorLevel ?? 0) > 0
-    ) {
-      return [];
-    }
+    // Player builds are ground-floor only. Upper storeys have their own
+    // partitions and doors.
+    const level = this.interiorLevelIn(buildingX, buildingY);
+    if (level > 0) return this.upperLevelWalls(buildingX, buildingY, level);
     const base = interiorWallsForBuilding(buildingX, buildingY);
     const key = buildingKey(buildingX, buildingY);
     const extras = this.tempInteriorWallsByBuilding.get(key) ?? [];
     const structWalls = this.structureWallsByBuilding.get(key) ?? [];
-    const closedDoors = (this.structureDoorsByBuilding.get(key) ?? []).filter(
+    const closedDoors = this.interiorDoorsOnLevel(buildingX, buildingY, 0).filter(
       (d) => !d.isOpen,
     );
     const fences = this.structureFencesByBuilding.get(key) ?? [];
@@ -5641,11 +5751,13 @@ export class WorldScene extends Phaser.Scene {
     buildingX: number,
     buildingY: number,
   ): InteriorWallTile[] {
+    const level = this.interiorLevelIn(buildingX, buildingY);
+    if (level > 0) return this.upperLevelWalls(buildingX, buildingY, level);
     const base = interiorWallsForBuilding(buildingX, buildingY);
     const key = buildingKey(buildingX, buildingY);
     const extras = this.tempInteriorWallsByBuilding.get(key) ?? [];
     const structWalls = this.structureWallsByBuilding.get(key) ?? [];
-    const closedDoors = (this.structureDoorsByBuilding.get(key) ?? []).filter(
+    const closedDoors = this.interiorDoorsOnLevel(buildingX, buildingY, 0).filter(
       (d) => !d.isOpen,
     );
     if (
@@ -5777,8 +5889,9 @@ export class WorldScene extends Phaser.Scene {
           this.structureWallsByBuilding.set(key, list);
         }
       } else if (msg.kind === "door") {
+        // Player builds are ground-floor only.
         const list = this.structureDoorsByBuilding.get(key) ?? [];
-        if (!list.some((d) => d.x === msg.x && d.y === msg.y)) {
+        if (!list.some((d) => sameInteriorDoor(d, { x: msg.x, y: msg.y }))) {
           list.push({
             x: msg.x,
             y: msg.y,
@@ -6110,7 +6223,7 @@ export class WorldScene extends Phaser.Scene {
       } else if (msg.kind === "door") {
         const list = this.structureDoorsByBuilding.get(key);
         if (list) {
-          const next = list.filter((d) => d.x !== msg.x || d.y !== msg.y);
+          const next = list.filter((d) => !sameInteriorDoor(d, { x: msg.x, y: msg.y }));
           if (next.length === 0) this.structureDoorsByBuilding.delete(key);
           else this.structureDoorsByBuilding.set(key, next);
         }
@@ -6272,6 +6385,7 @@ export class WorldScene extends Phaser.Scene {
       fuelWood?: number;
       status?: "prefab" | "solid";
       facing?: StructureFenceFacing | StructureFenceCorner;
+      level?: number;
     }[],
   ) {
     if (inInterior) {
@@ -6299,12 +6413,14 @@ export class WorldScene extends Phaser.Scene {
         if (s.kind === "wall") {
           walls.push({ x: s.x, y: s.y, ownerWallet: s.ownerWallet });
         } else if (s.kind === "door") {
+          const level = Math.max(0, Math.floor(Number(s.level ?? 0) || 0));
           doors.push({
             x: s.x,
             y: s.y,
             isOpen: s.isOpen,
             isLocked: s.isLocked,
             ownerWallet: s.ownerWallet,
+            ...(level > 0 ? { level } : {}),
           });
         } else if (s.kind === "fireplace") {
           fireplaces.push({
@@ -6857,6 +6973,7 @@ export class WorldScene extends Phaser.Scene {
     buildingY: number,
     isOpen: boolean,
     isLocked: boolean,
+    level = 0,
   ) {
     const playDoorSfx = (wasOpen: boolean) => {
       if (wasOpen === isOpen) return;
@@ -6877,7 +6994,9 @@ export class WorldScene extends Phaser.Scene {
 
     if (inInterior) {
       const key = buildingKey(buildingX, buildingY);
-      const door = this.structureDoorsByBuilding.get(key)?.find((d) => d.x === x && d.y === y);
+      const door = this.structureDoorsByBuilding
+        .get(key)
+        ?.find((d) => sameInteriorDoor(d, { x, y, level }));
       if (!door) return;
       playDoorSfx(door.isOpen);
       door.isOpen = isOpen;
@@ -7343,11 +7462,11 @@ export class WorldScene extends Phaser.Scene {
     ty: number,
   ): InteriorDoorTile | undefined {
     if (me.inInterior) {
-      // Upper floors are empty. Ground-floor room doors must not highlight or open.
-      if ((me.interiorLevel ?? 0) > 0) return undefined;
-      return this.structureDoorsByBuilding
-        .get(buildingKey(me.buildingX, me.buildingY))
-        ?.find((d) => d.x === tx && d.y === ty);
+      return this.interiorDoorsOnLevel(
+        me.buildingX,
+        me.buildingY,
+        me.interiorLevel ?? 0,
+      ).find((d) => d.x === tx && d.y === ty);
     }
     return this.structureDoorsOverworld.get(`${tx},${ty}`);
   }
@@ -8241,7 +8360,7 @@ export class WorldScene extends Phaser.Scene {
     this.clearTreeChopTarget();
 
     const sprint = isDoubleClick && (me.stamina ?? 0) > 0;
-    if (!graveInscriptionAt(grave.ox, grave.oy)) {
+    if (!graveInscriptionAt(grave.ox, grave.oy, this.hollandBuried)) {
       this.clearGraveInspectTarget();
       this.walkBesideBlockedTile(me, grave.ox, grave.oy, sprint, now);
       return true;
@@ -8278,7 +8397,7 @@ export class WorldScene extends Phaser.Scene {
     tx: number,
     ty: number,
   ): boolean {
-    if (!this.room || !graveInscriptionAt(tx, ty)) return false;
+    if (!this.room || !graveInscriptionAt(tx, ty, this.hollandBuried)) return false;
     const id = graveInspectTargetId(tx, ty);
     if (me.searchTargetId === id) {
       this.clearGraveInspectTarget();
@@ -8304,7 +8423,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.graveInspectTargetTile) return;
     const { x: tx, y: ty } = this.graveInspectTargetTile;
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (!me?.alive || me.inInterior || !graveInscriptionAt(tx, ty)) {
+    if (!me?.alive || me.inInterior || !graveInscriptionAt(tx, ty, this.hollandBuried)) {
       this.clearGraveInspectTarget();
       return;
     }
@@ -8352,7 +8471,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     const grave = this.graveUnderPointer(pointer.x, pointer.y);
-    if (!grave || !graveInscriptionAt(grave.ox, grave.oy)) return;
+    if (!grave || !graveInscriptionAt(grave.ox, grave.oy, this.hollandBuried)) return;
     this.game.canvas.style.cursor = "pointer";
     this.tileManager?.highlightInteractionTile(grave.ox, grave.oy);
   }
@@ -8527,7 +8646,7 @@ export class WorldScene extends Phaser.Scene {
       const walls = this.mergedInteriorWalls(bx, by);
       if (interiorWallOccupiesTile(walls, tx, ty)) return false;
       const bKey = buildingKey(bx, by);
-      const doors = this.structureDoorsByBuilding.get(bKey) ?? [];
+      const doors = this.interiorDoorsOnLevel(bx, by, 0);
       if (doors.some((d) => d.x === tx && d.y === ty)) return false;
       const fireplaces = this.structureFireplacesByBuilding.get(bKey) ?? [];
       if (fireplaces.some((f) => f.x === tx && f.y === ty)) return false;
@@ -8582,7 +8701,7 @@ export class WorldScene extends Phaser.Scene {
       const key = buildingKey(me.buildingX, me.buildingY);
       const walls = this.structureWallsByBuilding.get(key) ?? [];
       if (walls.some((w) => w.x === tx && w.y === ty)) return true;
-      const doors = this.structureDoorsByBuilding.get(key) ?? [];
+      const doors = this.interiorDoorsOnLevel(me.buildingX, me.buildingY, 0);
       if (doors.some((d) => d.x === tx && d.y === ty)) return true;
       const fireplaces = this.structureFireplacesByBuilding.get(key) ?? [];
       if (fireplaces.some((f) => f.x === tx && f.y === ty)) return true;
@@ -8617,7 +8736,7 @@ export class WorldScene extends Phaser.Scene {
       if (walls.some((w) => w.x === tx && w.y === ty && w.ownerWallet === wallet)) {
         return true;
       }
-      const doors = this.structureDoorsByBuilding.get(key) ?? [];
+      const doors = this.interiorDoorsOnLevel(me.buildingX, me.buildingY, 0);
       if (doors.some((d) => d.x === tx && d.y === ty && d.ownerWallet === wallet)) {
         return true;
       }
@@ -8671,7 +8790,7 @@ export class WorldScene extends Phaser.Scene {
   ): boolean {
     if (me.inInterior) {
       const key = buildingKey(me.buildingX, me.buildingY);
-      const doors = this.structureDoorsByBuilding.get(key) ?? [];
+      const doors = this.interiorDoorsOnLevel(me.buildingX, me.buildingY, 0);
       if (doors.some((d) => d.x === tx && d.y === ty)) return false;
       const structWalls = this.structureWallsByBuilding.get(key) ?? [];
       if (structWalls.some((w) => w.x === tx && w.y === ty)) return true;
@@ -10212,8 +10331,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /** Remember the new floor and do not keep walking out the street door. */
-  private noteStairsUsed(currentLevel: number) {
-    this.interiorLevelLatch = currentLevel === 0 ? 1 : 0;
+  private noteStairsUsed(currentLevel: number, stairId: string) {
+    this.interiorLevelLatch = interiorStairTargetLevel(stairId, currentLevel);
     this.pauseMoveAfterStairs = true;
   }
 
@@ -10387,7 +10506,7 @@ export class WorldScene extends Phaser.Scene {
         return true;
       }
       if (stairs) {
-        this.noteStairsUsed(me.interiorLevel ?? 0);
+        this.noteStairsUsed(me.interiorLevel ?? 0, target.id);
         const message: ClientMessage = {
           type: "useStairs",
           payload: { searchableId: target.id },
@@ -10411,6 +10530,7 @@ export class WorldScene extends Phaser.Scene {
         "furniture",
         target.objectType,
         target.cracked || target.searched,
+        this.isStoryInspectTarget(target),
       );
       this.room.send("action", message);
       return true;
@@ -10721,6 +10841,9 @@ export class WorldScene extends Phaser.Scene {
   private handleCombatClick() {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me || !this.hoveredEntityId || !this.hoveredEntityKind || !this.room) return;
+    if (this.hoveredEntityKind === "guard" && isColemanStoryNpcId(this.hoveredEntityId)) {
+      return;
+    }
 
     const targetData = this.getEntityData(this.hoveredEntityId, this.hoveredEntityKind);
     if (!targetData || targetData.isDead || targetData.alive === false) return;
@@ -11162,20 +11285,57 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /** Blood stain or a named grave. Both use the quiet 5s inspect channel. */
-  private isInspectAction(objectType?: string, id?: string): boolean {
+  private isInspectAction(
+    objectType?: string,
+    id?: string,
+    target?: StoryInspectCandidate,
+  ): boolean {
     return (
       this.isBloodInspectTarget(objectType, id) ||
-      (id ?? "").startsWith(INSPECT_GRAVE_ID_PREFIX)
+      (id ?? "").startsWith(INSPECT_GRAVE_ID_PREFIX) ||
+      (!!target && this.isStoryInspectTarget(target))
     );
   }
 
-  /** Blood decals, and Coleman's bed even after someone else emptied it. */
+  /** The body and the bunk in the East Forestford holding cell, while the story needs them. */
+  private isStoryInspectTarget(item: StoryInspectCandidate): boolean {
+    if (item.objectType !== "deadbody" && item.objectType !== "jailbed") return false;
+    if (!isEastForestfordPoliceStation(item.buildingX, item.buildingY)) return false;
+    const quests = parseQuestsJson(this.cachedQuestsJson).quests;
+    const cell = quests[QUEST_ID_THE_CELL]?.status === "active";
+    const kit = quests[QUEST_ID_THE_KIT]?.status === "active";
+    if (item.objectType === "deadbody") {
+      return (cell || kit) && item.id === eastForestfordDeadBodyId(item.buildingX, item.buildingY);
+    }
+    if (!kit) return false;
+    const jail = policeJailCellForBuilding(item.buildingX, item.buildingY);
+    return (
+      !!jail &&
+      item.x >= jail.x0 &&
+      item.x <= jail.x1 &&
+      item.y >= jail.y0 &&
+      item.y <= jail.y1
+    );
+  }
+
+  /** Blood decals, story furniture, and quest containers even after someone else emptied them. */
   private searchableCanBeClicked(item: {
+    id: string;
     objectType: string;
+    x: number;
+    y: number;
     depleted?: boolean;
     buildingX: number;
     buildingY: number;
   }): boolean {
+    if (this.isStoryInspectTarget(item)) return true;
+    if (item.depleted) {
+      const quests = parseQuestsJson(this.cachedQuestsJson).quests;
+      const pinned = Object.values(quests).some(
+        (q) => q?.status === "active" && q.stashId === item.id,
+      );
+      if (pinned) return true;
+    }
     if (item.objectType === "bloodstain") {
       const quest = parseQuestsJson(this.cachedQuestsJson).quests[
         QUEST_ID_DEAL_WITH_DEVIL
@@ -11203,10 +11363,14 @@ export class WorldScene extends Phaser.Scene {
     kind: "furniture" | "loot" = "loot",
     objectType?: string,
     searched = false,
+    storyInspect = false,
   ) {
+    const inspecting = storyInspect || this.isBloodInspectTarget(objectType);
     const cracking =
-      kind === "furniture" && furnitureNeedsCrack(objectType ?? "") && !searched;
-    const inspecting = this.isBloodInspectTarget(objectType);
+      !inspecting &&
+      kind === "furniture" &&
+      furnitureNeedsCrack(objectType ?? "") &&
+      !searched;
     this.beginLocalTimedAction(
       "search",
       inspecting
@@ -12375,7 +12539,7 @@ export class WorldScene extends Phaser.Scene {
           this.room.send("action", message);
         } else if (furnitureIsStairs(target.objectType)) {
           this.stopPlayerMovement();
-          this.noteStairsUsed(me.interiorLevel ?? 0);
+          this.noteStairsUsed(me.interiorLevel ?? 0, target.id);
           const message: ClientMessage = {
             type: "useStairs",
             payload: { searchableId: target.id },
@@ -12396,6 +12560,7 @@ export class WorldScene extends Phaser.Scene {
             "furniture",
             target.objectType,
             target.cracked || target.searched,
+            this.isStoryInspectTarget(target),
           );
           this.room.send("action", message);
         }
@@ -12856,6 +13021,13 @@ export class WorldScene extends Phaser.Scene {
     if (this.isOutsideTown(me) && this.survivorWithinTiles(me, 16)) {
       ui.notifyTip("other_survivor");
     }
+    if (
+      me.inInterior &&
+      isRedOrderOwnedSupermarket(me.buildingX, me.buildingY)
+    ) {
+      ui.notifyTip("red_order_intro");
+      ui.notifyTip("red_order_inside");
+    }
     if (this.room) {
       const precip = parsePrecip(this.room.state.weather);
       if (precip === "rain" && this.tutorialPrecip !== "rain") {
@@ -13133,6 +13305,7 @@ export class WorldScene extends Phaser.Scene {
       const inspecting = this.isInspectAction(
         target?.objectType,
         me.searchTargetId,
+        target,
       );
       if (target || !this.localTimedAction || this.localTimedAction.kind !== "search") {
         this.beginLocalTimedAction(
@@ -13745,6 +13918,7 @@ export class WorldScene extends Phaser.Scene {
           fuelWood?: number;
           status?: "prefab" | "solid";
           facing?: StructureFenceFacing | StructureFenceCorner;
+          level?: number;
         }[];
       }) => {
         if (!msg.structures) return;
@@ -13765,6 +13939,7 @@ export class WorldScene extends Phaser.Scene {
         inInterior?: boolean;
         buildingX?: number;
         buildingY?: number;
+        level?: number;
         isOpen?: boolean;
         isLocked?: boolean;
       }) => {
@@ -13777,6 +13952,7 @@ export class WorldScene extends Phaser.Scene {
           msg.buildingY ?? 0,
           msg.isOpen === true,
           msg.isLocked === true,
+          Math.max(0, Math.floor(Number(msg.level ?? 0) || 0)),
         );
       },
     );
@@ -17123,7 +17299,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private sendMarketListing(
-    type: "marketBuy" | "marketCancel" | "marketCollectPayout",
+    type: "marketBuy" | "marketCancel" | "marketCollectPayout" | "marketCollectExpired",
     listingId: number,
   ) {
     if (!this.room || !this.playerMarketUI?.isOpen()) return;
@@ -17203,7 +17379,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
-    this.notifyTutorial("visit_traders");
+    this.notifyTip("ashen_traders_intro");
     this.playerMarketUI?.open(payload);
     this.applyMarketInventory(payload);
   }
@@ -17248,7 +17424,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
-    this.notifyTutorial("visit_traders");
+    this.notifyTip("ashen_traders_intro");
     const me = this.room?.state?.players?.get(this.sessionId);
     this.traderUI?.open({
       ...payload,
@@ -17391,7 +17567,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
-    this.notifyTutorial("talk_red_order");
+    this.notifyTip("red_order_intro");
+    this.notifyTip("red_order_inside");
     const me = this.room?.state?.players?.get(this.sessionId);
     this.redOrderDialogUI?.open({
       npcId: payload.npcId,
@@ -17465,7 +17642,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenMilitiaDialogUI?.isOpen()) this.closeAshenMilitiaDialog();
-    this.notifyTutorial("visit_traders");
+    this.notifyTip("ashen_traders_intro");
     const me = this.room?.state?.players?.get(this.sessionId);
     const inventoryJson =
       this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
@@ -17550,6 +17727,15 @@ export class WorldScene extends Phaser.Scene {
     const message: ClientMessage = {
       type: "dialogCompleteTask",
       payload: { npcId, taskId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendDialogChoose(npcId: string | undefined, lineId: string) {
+    if (!this.room || !npcId) return;
+    const message: ClientMessage = {
+      type: "dialogChoose",
+      payload: { npcId, lineId },
     };
     this.room.send("action", message);
   }

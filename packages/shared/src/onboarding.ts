@@ -7,8 +7,7 @@ export const TUTORIAL_CHAPTERS = [
   { id: "wake", title: "Chapter 1: Wake Up" },
   { id: "birchport", title: "Chapter 2: Birchport" },
   { id: "patrol", title: "Chapter 3: The Patrol" },
-  { id: "factions", title: "Chapter 4: Making a Name" },
-  { id: "own", title: "Chapter 5: On Your Own" },
+  { id: "own", title: "Chapter 4: On Your Own" },
 ] as const;
 
 export type TutorialChapterId = (typeof TUTORIAL_CHAPTERS)[number]["id"];
@@ -27,8 +26,6 @@ export const ONBOARDING_STEP_IDS = [
   "turn_in_aye",
   "accept_two_behind",
   "search_coleman",
-  "visit_traders",
-  "talk_red_order",
   "finish",
 ] as const;
 
@@ -147,22 +144,6 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     mobileBody:
       "Sergeant Coleman's house is marked on your map in Birchport. Tap furniture to search it. You will not be told which piece matters. Bring what you find back to Davis.",
   },
-  visit_traders: {
-    id: "visit_traders",
-    chapter: "factions",
-    title: "Visit the Ashen Traders",
-    body:
-      "The Ashen Traders run the market in Birchport (marked on your map). They buy and sell gear, and the market has a board where players trade with each other. " +
-      "Talk to a trader to see their stock.",
-  },
-  talk_red_order: {
-    id: "talk_red_order",
-    chapter: "factions",
-    title: "Meet the Red Order",
-    body:
-      "The Red Order hold city blocks and want the Ashen out. They run Birchport's supermarket, so look for the building with the boarded up windows. " +
-      "For now you can earn standing with both sides, but that won't last forever. Talk to one of them to hear what they want.",
-  },
   finish: {
     id: "finish",
     chapter: "own",
@@ -210,6 +191,10 @@ export const TUTORIAL_TIP_IDS = [
   "rain",
   "search_noise",
   "combat_log",
+  "red_order_intro",
+  "red_order_inside",
+  "ashen_traders_intro",
+  "lockpick_kit",
 ] as const;
 
 export type TutorialTipId = (typeof TUTORIAL_TIP_IDS)[number];
@@ -350,6 +335,26 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
     id: "combat_log",
     title: "In combat",
     body: "Your survivor stays vulnerable in the world until this timer ends, even if you close the game.",
+  },
+  red_order_intro: {
+    id: "red_order_intro",
+    title: "The Red Order",
+    body: "The Red Order. They hold city blocks and want the Ashen out. Their people wear red armbands. In Birchport they run the supermarket, the building with the boarded up windows.",
+  },
+  red_order_inside: {
+    id: "red_order_inside",
+    title: "Inside their walls",
+    body: "Weapons stay holstered here, the same as any faction building. Don't steal from them. You can earn standing with the Red Order and the Ashen for now. That will not last forever.",
+  },
+  ashen_traders_intro: {
+    id: "ashen_traders_intro",
+    title: "The Ashen Traders",
+    body: "The Ashen Traders run the caravans and keep Birchport's stores at the market (marked on your map). Kevin buys and sells gear there, and the market board lets players trade with each other. Better standing gets you better prices.",
+  },
+  lockpick_kit: {
+    id: "lockpick_kit",
+    title: "Lockpick",
+    body: "A lockpick kit opens a lock like the one on that holding cell. Use it on the door and stay beside it until the pick finishes. The first one takes about a minute, and the noise can draw walkers. The kit wears down with use.",
   },
 };
 

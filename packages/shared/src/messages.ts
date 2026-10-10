@@ -192,7 +192,7 @@ export type MarketStatePayload = {
   boardQuery?: string;
   /** Close the market dialog after this snapshot. */
   close?: boolean;
-  /** This snapshot settles a payout collect for this listing id. */
+  /** This snapshot settles a payout or expired-item collect for this listing id. */
   settledListingId?: number;
 };
 
@@ -443,6 +443,7 @@ export type ClientMessage =
   | { type: "marketCancel"; payload: MarketListingIdMessage }
   | { type: "marketCollect"; payload: MarketCollectMessage }
   | { type: "marketCollectPayout"; payload: MarketListingIdMessage }
+  | { type: "marketCollectExpired"; payload: MarketListingIdMessage }
   | { type: "marketBrowse"; payload: MarketBrowseMessage }
   | { type: "marketClose" }
   | { type: "safeDepositOpen"; payload: MarketOpenMessage }
@@ -727,7 +728,8 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
     }
     case "marketBuy":
     case "marketCancel":
-    case "marketCollectPayout": {
+    case "marketCollectPayout":
+    case "marketCollectExpired": {
       if (!isIdString(p.traderId)) return null;
       if (!isIntInRange(p.listingId, 1, 2_000_000_000)) return null;
       return {
@@ -974,7 +976,14 @@ export type LootPilePayload = {
 };
 
 export type ServerMessage =
-  | { type: "lootFound"; payload: { items: { id: string; quantity: number; name: string }[] } }
+  | {
+      type: "lootFound";
+      payload: {
+        items: { id: string; quantity: number; name: string }[];
+        /** Replaces the default "You found:" / "Nothing useful found" line. */
+        header?: string;
+      };
+    }
   | { type: "searchDenied"; payload: { reason: string } }
   | {
       type: "containerOpen";
@@ -1258,6 +1267,8 @@ export type ServerMessage =
         inInterior: boolean;
         buildingX?: number;
         buildingY?: number;
+        /** Interior storey. Omitted for the ground floor. */
+        level?: number;
         isOpen: boolean;
         isLocked: boolean;
       };
@@ -1447,6 +1458,8 @@ export type StructureSyncEntry = {
   maxHealth: number;
   /** Fence panel facing, or auto-corner orientation (SWSE / SESW). */
   facing?: StructureFenceFacing | StructureFenceCorner;
+  /** Interior storey. Omitted for the ground floor and the overworld. */
+  level?: number;
 };
 
 export type ChatBroadcast = {

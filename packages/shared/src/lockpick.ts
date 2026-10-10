@@ -9,6 +9,7 @@ import {
   type Inventory,
 } from "./items.js";
 import {
+  gunShopOfficeForBuilding,
   officeManagerRoomForBuilding,
   policeJailCellForBuilding,
   policeSergeantRoomForBuilding,
@@ -77,9 +78,9 @@ export function findUsableLockpickSlot(inventory: Inventory): number {
 }
 
 /**
- * Every manager office in an office building or department store starts
- * locked. Coordinates stay on the signature so callers and a later interior
- * rebuild share one check.
+ * Every manager office in an office building, department store, or gun shop
+ * starts locked. Coordinates stay on the signature so callers and a later
+ * interior rebuild share one check.
  */
 export function managerOfficeStartsLocked(_bx: number, _by: number): boolean {
   return true;
@@ -95,6 +96,8 @@ export function managerOfficeLockTile(
   if (office) return { x: office.entranceX, y: office.entranceY };
   const retail = retailManagerRoomForBuilding(bx, by);
   if (retail) return { x: retail.entranceX, y: retail.entranceY };
+  const gunShop = gunShopOfficeForBuilding(bx, by);
+  if (gunShop) return { x: gunShop.entranceX, y: gunShop.entranceY };
   return null;
 }
 

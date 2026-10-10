@@ -25,6 +25,7 @@ export type PlayerMarketUIHandlers = {
   onCancel: (listingId: number) => void;
   onCollect: () => void;
   onCollectPayout: (listingId: number) => void;
+  onCollectExpired: (listingId: number) => void;
   onBrowse: (browse: { page: number; sort: "new" | "cheap"; query: string }) => void;
 };
 
@@ -100,9 +101,15 @@ function bindPositiveInteger(input: HTMLInputElement, onChange: () => void) {
   });
 }
 
+function listingIsExpired(listing: MarketListingWire, now: number): boolean {
+  if (listing.awaitingPayout) return false;
+  if (listing.expired) return true;
+  return listing.expiresAt <= now;
+}
+
 function timeLeft(expiresAt: number, now: number): string {
   const ms = expiresAt - now;
-  if (ms <= 0) return "Expired, waiting for desk space";
+  if (ms <= 0) return "Expired";
   const mins = Math.max(1, Math.ceil(ms / 60000));
   if (mins < 60) return `${mins}m left`;
   const hours = Math.floor(mins / 60);
@@ -124,6 +131,7 @@ export class PlayerMarketUI {
   private listings: MarketListingWire[] = [];
   private lastPayload: MarketStatePayload | null = null;
   private busyTimer = 0;
+  private expiryTimer = 0;
   private desk: MarketDeskWire = {
     banknotes: 0,
     returns: [],
@@ -256,7 +264,7 @@ export class PlayerMarketUI {
     yoursTitle.textContent = "Your ads";
     const yoursHint = document.createElement("span");
     yoursHint.className = "inventory-hint";
-    yoursHint.textContent = "Your items for sale and payouts";
+    yoursHint.textContent = "Your listings, payouts, and expired ads";
     yoursHeader.append(yoursTitle, yoursHint);
     this.deskEl = document.createElement("div");
     this.deskEl.className = "market-desk";
@@ -343,6 +351,7 @@ export class PlayerMarketUI {
     this.mineKey = "";
     window.clearTimeout(this.browseTimer);
     window.clearTimeout(this.busyTimer);
+    window.clearTimeout(this.expiryTimer);
     this.overlay.hidden = true;
     document.body.classList.remove("market-open");
     this.traderId = "";
@@ -375,7 +384,7 @@ export class PlayerMarketUI {
     }, 2000);
   }
 
-  /** Drop a sold ad from Your ads as soon as Collect is pressed. */
+  /** Drop a sold or expired ad from Your ads as soon as Collect is pressed. */
   private beginPayoutCollect(listingId: number) {
     const listing = this.listings.find((row) => row.id === listingId && row.yours);
     this.pendingPayoutId = listingId;
@@ -393,13 +402,34 @@ export class PlayerMarketUI {
   }
 
   private yoursMineKey(): string {
+    const now = Date.now();
     return this.listings
       .filter((listing) => listing.yours)
-      .map(
-        (listing) =>
-          `${listing.id}:${listing.awaitingPayout ? 1 : 0}:${listing.price}:${listing.expiresAt}`,
-      )
+      .map((listing) => {
+        const expired = listingIsExpired(listing, now) ? 1 : 0;
+        return `${listing.id}:${listing.awaitingPayout ? 1 : 0}:${expired}:${listing.price}:${listing.expiresAt}`;
+      })
       .join("|");
+  }
+
+  /** Flip an ad to Expired as soon as its clock runs out, without waiting for a sync. */
+  private armExpiryRefresh() {
+    window.clearTimeout(this.expiryTimer);
+    if (!this.visible) return;
+    const now = Date.now();
+    let next = Infinity;
+    for (const listing of this.listings) {
+      if (listing.awaitingPayout || listing.expired) continue;
+      if (listing.expiresAt > now && listing.expiresAt < next) next = listing.expiresAt;
+    }
+    if (!Number.isFinite(next)) return;
+    const delay = Math.min(Math.max(250, next - now + 50), 2_147_000_000);
+    this.expiryTimer = window.setTimeout(() => {
+      if (!this.visible) return;
+      this.renderMine();
+      this.renderBoard();
+      this.armExpiryRefresh();
+    }, delay);
   }
 
   private paintListingCap() {
@@ -460,6 +490,7 @@ export class PlayerMarketUI {
     }
     this.renderBoard();
     this.updateBoardChrome();
+    this.armExpiryRefresh();
   }
 
   private setBoardSort(sort: "new" | "cheap") {
@@ -782,7 +813,7 @@ export class PlayerMarketUI {
     const selected = this.selectedSlot();
     if (!selected) {
       this.hintEl.textContent = this.desk.activeCount >= this.desk.listingCap
-        ? "Cancel or wait for a listing to expire before posting another."
+        ? "Collect a sold or expired ad, or cancel one, before posting another."
         : "Banknotes, worn clothes, and the weapon in your hands stay off the board.";
       return;
     }
@@ -828,12 +859,13 @@ export class PlayerMarketUI {
     const scrollTop = this.mineEl.scrollTop;
     this.mineEl.replaceChildren();
     const mine = this.listings.filter(
-      (listing) =>
-        listing.id !== this.pendingPayoutId &&
-        listing.yours &&
-        (listing.awaitingPayout || listing.expiresAt > now),
+      (listing) => listing.id !== this.pendingPayoutId && listing.yours,
     );
-    mine.sort((a, b) => Number(b.awaitingPayout) - Number(a.awaitingPayout));
+    mine.sort((a, b) => {
+      const rank = (row: MarketListingWire) =>
+        row.awaitingPayout ? 0 : listingIsExpired(row, now) ? 1 : 2;
+      return rank(a) - rank(b) || a.id - b.id;
+    });
     if (mine.length === 0) {
       const empty = document.createElement("p");
       empty.className = "market-empty";
@@ -873,7 +905,8 @@ export class PlayerMarketUI {
     this.boardEl.replaceChildren();
     const now = Date.now();
     const visible = this.listings.filter(
-      (listing) => listing.onBoard && !listing.awaitingPayout && listing.expiresAt > now,
+      (listing) =>
+        listing.onBoard && !listing.awaitingPayout && !listing.expired && listing.expiresAt > now,
     );
     if (visible.length === 0) {
       const empty = document.createElement("p");
@@ -900,6 +933,7 @@ export class PlayerMarketUI {
     const expanded = expandedId === listing.id;
     const onBoard = which === "board";
     const dimmed = onBoard && listing.yours;
+    const expiredNow = !onBoard && listingIsExpired(listing, now);
     const name = listingTitle(listing.itemId, listing.condition, listing.durability);
 
     const row = document.createElement("div");
@@ -910,9 +944,10 @@ export class PlayerMarketUI {
     summary.type = "button";
     summary.className = "market-row-summary";
     summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const stateLabel = listing.awaitingPayout ? ", sold" : expiredNow ? ", expired" : "";
     summary.setAttribute(
       "aria-label",
-      `${expanded ? "Collapse" : "Expand"} ${name}, ×${listing.quantity}, $${listing.price}`,
+      `${expanded ? "Collapse" : "Expand"} ${name}, ×${listing.quantity}${stateLabel}, $${listing.price}`,
     );
 
     const icon = document.createElement("div");
@@ -935,12 +970,17 @@ export class PlayerMarketUI {
     sold.className = "market-row-sold";
     sold.textContent = "Sold";
 
+    const expired = document.createElement("span");
+    expired.className = "market-row-expired";
+    expired.textContent = "Expired";
+
     const chevron = document.createElement("span");
     chevron.className = "market-row-chevron";
     chevron.setAttribute("aria-hidden", "true");
     chevron.textContent = expanded ? "▾" : "▸";
 
     if (!onBoard && listing.awaitingPayout) summary.append(icon, title, qty, sold, price, chevron);
+    else if (expiredNow) summary.append(icon, title, qty, expired, price, chevron);
     else summary.append(icon, title, qty, price, chevron);
     summary.addEventListener("click", () => {
       if (which === "board") {
@@ -988,6 +1028,22 @@ export class PlayerMarketUI {
         this.markBusy();
         this.beginPayoutCollect(listing.id);
         this.handlers.onCollectPayout(listing.id);
+      });
+      details.append(line, button);
+    } else if (expiredNow) {
+      const line = document.createElement("div");
+      line.className = "market-fee";
+      line.textContent = "This listing has expired.";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "market-action";
+      button.textContent = "Collect";
+      button.disabled = this.busy;
+      button.addEventListener("click", () => {
+        if (this.busy) return;
+        this.markBusy();
+        this.beginPayoutCollect(listing.id);
+        this.handlers.onCollectExpired(listing.id);
       });
       details.append(line, button);
     } else {

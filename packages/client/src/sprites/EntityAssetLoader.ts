@@ -4,6 +4,7 @@ import {
   GUARD_NPC_RED_MAN,
   GUARD_NPC_TRADER_GUARD,
   GUARD_NPC_TRADER_MAN,
+  GUARD_SKIN_3,
   PLAYER_SKIN_DEFAULT,
   normalizeGuardSkin,
   normalizeRedManSkin,
@@ -176,7 +177,8 @@ function packLoadsLooseExtras(id: EntityPackId): boolean {
     id === "bear" ||
     id === "crow" ||
     id === "rabbit" ||
-    id === "traderguard"
+    id === "traderguard" ||
+    id === `guard-${GUARD_SKIN_3}`
   );
 }
 

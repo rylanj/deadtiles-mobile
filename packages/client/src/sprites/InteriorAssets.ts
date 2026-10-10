@@ -31,6 +31,7 @@ export const INTERIOR_TEXTURE_KEYS = {
     dinnertable: "furniture-dinnertable-se",
     nightstand: "furniture-nightstand-se",
     deadofficer: "furniture-deadofficer-sw",
+    deadbody: "furniture-deadbody-se",
     bagchair: "furniture-bagchair-sw",
     armchair: "furniture-armchair-se",
     sofa: "furniture-sofa-se",

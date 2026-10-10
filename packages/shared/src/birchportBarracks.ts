@@ -421,7 +421,7 @@ export const INSPECT_GRAVE_ID_PREFIX = "inspect:grave:";
  * Three Grave1 crosses west of the west fence, behind the compound.
  * Tile centres form a north-south row around world (-201.5, 103.5),
  * three tiles apart so the sprites do not overlap. Facing is SE.
- * The middle cross has no inscription yet, so it cannot be inspected.
+ * The middle cross stays blank until the player buries Holland in the story.
  */
 export type BirchportGrave = {
   ox: number;
@@ -429,11 +429,13 @@ export type BirchportGrave = {
   facing: "SE";
   /** Name shown when an inspect finishes. Absent graves cannot be inspected. */
   inscription?: string;
+  /** Name shown only to players who finished the Holland story. */
+  hollandInscription?: string;
 };
 
 export const BIRCHPORT_BARRACKS_GRAVES: readonly BirchportGrave[] = [
   { ox: -202, oy: 100, facing: "SE", inscription: "Pvt. Miller" },
-  { ox: -202, oy: 103, facing: "SE" },
+  { ox: -202, oy: 103, facing: "SE", hollandInscription: "Cpl. Holland" },
   { ox: -202, oy: 106, facing: "SE", inscription: "Cpl. Johnson" },
 ];
 
@@ -450,8 +452,15 @@ export function getBirchportGraveAt(
 }
 
 /** Plaque text, or null when this cross cannot be inspected. */
-export function graveInscriptionAt(tx: number, ty: number): string | null {
-  const name = getBirchportGraveAt(tx, ty)?.inscription?.trim();
+export function graveInscriptionAt(
+  tx: number,
+  ty: number,
+  hollandBuried = false,
+): string | null {
+  const grave = getBirchportGraveAt(tx, ty);
+  const name = (
+    grave?.inscription ?? (hollandBuried ? grave?.hollandInscription : undefined)
+  )?.trim();
   return name ? name : null;
 }
 
@@ -459,9 +468,10 @@ export function graveInspectTargetId(ox: number, oy: number): string {
   return `${INSPECT_GRAVE_ID_PREFIX}${ox}:${oy}`;
 }
 
-/** Parsed only when that cross currently has an inscription. */
+/** Parsed only when that cross has an inscription for this player. */
 export function parseGraveInspectTarget(
   id: string,
+  hollandBuried = false,
 ): { ox: number; oy: number } | null {
   if (!id.startsWith(INSPECT_GRAVE_ID_PREFIX)) return null;
   const body = id.slice(INSPECT_GRAVE_ID_PREFIX.length);
@@ -470,7 +480,7 @@ export function parseGraveInspectTarget(
   const ox = Number(body.slice(0, sep));
   const oy = Number(body.slice(sep + 1));
   if (!Number.isInteger(ox) || !Number.isInteger(oy)) return null;
-  if (!graveInscriptionAt(ox, oy)) return null;
+  if (!graveInscriptionAt(ox, oy, hollandBuried)) return null;
   return { ox, oy };
 }
 

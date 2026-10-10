@@ -639,7 +639,10 @@ export type WorldRoomState = {
 
 export type LootEvent = {
   type: "lootFound";
-  payload: { items: { id: string; quantity: number; name: string }[] };
+  payload: {
+    items: { id: string; quantity: number; name: string }[];
+    header?: string;
+  };
 };
 
 export type ContainerOpenEvent = {

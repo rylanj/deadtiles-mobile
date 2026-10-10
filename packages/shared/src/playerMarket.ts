@@ -39,7 +39,7 @@ export type MarketBoardSort = "new" | "cheap";
 export const MARKET_PRICE_MAX = 1_000_000;
 /** Unpaid notes held at the market desk. */
 export const MARKET_BALANCE_MAX = 1_000_000_000;
-/** Expired and cancelled goods waiting at the desk. */
+/** Leftover goods still waiting at the desk. New expirations stay on the seller's ads. */
 export const MARKET_RETURNS_MAX = 48;
 
 export type MarketListingWire = {
@@ -52,6 +52,8 @@ export type MarketListingWire = {
   yours: boolean;
   /** Sold, and the payout is still uncollected. Counts toward the listing cap. */
   awaitingPayout: boolean;
+  /** Time ran out and the item is still held. Counts toward the listing cap. */
+  expired: boolean;
   /** This row is part of the current survivor-ads page. */
   onBoard: boolean;
   expiresAt: number;

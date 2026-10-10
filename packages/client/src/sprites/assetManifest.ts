@@ -259,9 +259,26 @@ function scheduleMilitiaGuardPack(skin: number, track: TrackFn) {
         `MilitiaGuard${s}/Die/MilitiaGuard${s}_Die_${dir}_${tag}.png`,
       );
     }
+    if (s === 3) {
+      track(
+        `militiaguard3-idle-${dir}`,
+        `MilitiaGuard3/Idle/MilitiaGuard3_Idle_${dir}.png`,
+      );
+    }
+  }
+  if (s === 3) {
+    for (const dir of MILITIA_GUARD3_KNEEL_DIRS) {
+      track(
+        `militiaguard3-kneel-${dir}`,
+        `MilitiaGuard3/Kneel/MilitiaGuard3_Kneel_${dir}.png`,
+      );
+    }
   }
   scheduleMilitiaGuardSit(skin, track);
 }
+
+/** Kneel art exists for these facings only. */
+export const MILITIA_GUARD3_KNEEL_DIRS = ["SE", "SW", "S"] as const;
 
 function scheduleMilitiaCaptainPack(track: TrackFn) {
   for (const dir of DIRECTION_LABELS) {

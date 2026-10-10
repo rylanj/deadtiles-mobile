@@ -23,6 +23,7 @@ import {
   redOrderStanding,
   redOrderStandingLabel,
   normalizeRedManSkin,
+  storySpeechLines,
   type PlayerQuestsState,
   type QuestDefinition,
   type RedOrderTask,
@@ -36,7 +37,10 @@ export type RedOrderDialogUIHandlers = {
   onClose: () => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
+  onChooseLine?: (lineId: string) => void;
 };
+
+type RedOrderSpeechLine = { id: string; player: string; npc: readonly string[] };
 
 function progressQtyLabel(
   state: PlayerQuestsState,
@@ -95,6 +99,9 @@ export class RedOrderDialogUI {
   private extraPockets = 0;
   private questsJson = "";
   private activeLineId: string | null = null;
+  /** Story reply kept on screen after its line goes away. */
+  private scriptedLineId: string | null = null;
+  private scriptedReply: string | null = null;
   /** Task id currently expanded on the jobs reply (null = all collapsed). */
   private expandedTaskId: string | null = null;
   private denyTaskId = "";
@@ -226,6 +233,8 @@ export class RedOrderDialogUI {
     this.inventoryJson = opts.inventoryJson ?? "[]";
     this.questsJson = opts.questsJson ?? "";
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.expandedTaskId = null;
     this.visible = true;
     this.overlay.hidden = false;
@@ -268,6 +277,8 @@ export class RedOrderDialogUI {
     document.body.classList.remove("red-order-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.expandedTaskId = null;
     this.dogtagCount = 0;
     this.inventoryJson = "[]";
@@ -282,10 +293,31 @@ export class RedOrderDialogUI {
     return fromBag;
   }
 
+  /** Server answer to a story line. */
+  speak(lineId: string, text: string) {
+    this.scriptedLineId = lineId;
+    this.scriptedReply = text;
+    this.activeLineId = lineId;
+    if (this.visible) this.render();
+  }
+
+  private speechLines(): RedOrderSpeechLine[] {
+    const story = storySpeechLines(
+      "redOrder",
+      parseQuestsJson(this.questsJson),
+      (itemId) => this.itemCount(itemId),
+    ).map((line) => ({ id: line.id, player: line.player, npc: [line.reply ?? "…"] }));
+    return [...RED_ORDER_DIALOG_LINES, ...story];
+  }
+
   private render() {
     this.updateStandingPill();
     this.speechListEl.replaceChildren();
-    for (const line of RED_ORDER_DIALOG_LINES) {
+    const lines = this.speechLines();
+    const storyIds = new Set(
+      lines.filter((l) => !RED_ORDER_DIALOG_LINES.some((b) => b.id === l.id)).map((l) => l.id),
+    );
+    for (const line of lines) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "red-dialog-speech-btn";
@@ -296,14 +328,26 @@ export class RedOrderDialogUI {
       btn.addEventListener("click", () => {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
+        if (storyIds.has(line.id)) {
+          this.scriptedLineId = line.id;
+          this.scriptedReply = line.npc[0] ?? "…";
+          this.handlers.onChooseLine?.(line.id);
+        } else {
+          this.scriptedLineId = null;
+          this.scriptedReply = null;
+        }
         this.render();
       });
       this.speechListEl.appendChild(btn);
     }
 
-    const active = RED_ORDER_DIALOG_LINES.find((l) => l.id === this.activeLineId);
+    const active = lines.find((l) => l.id === this.activeLineId);
     this.responseEl.replaceChildren();
-    if (!active) {
+    const kept =
+      this.scriptedReply && this.scriptedLineId === this.activeLineId
+        ? this.scriptedReply
+        : null;
+    if (!active && !kept) {
       this.responseEl.classList.add("red-dialog-response--empty");
       this.responseEl.textContent = "Waiting for you to speak…";
       return;
@@ -312,11 +356,10 @@ export class RedOrderDialogUI {
     this.responseEl.classList.remove("red-dialog-response--empty");
     const reply = document.createElement("div");
     reply.className = "red-dialog-response-text";
-    reply.textContent = pickDialogVariant(
-      active.npc,
-      `${this.npcId}|${active.id}`,
-    );
+    reply.textContent =
+      kept ?? pickDialogVariant(active!.npc, `${this.npcId}|${active!.id}`);
     this.responseEl.appendChild(reply);
+    if (!active) return;
 
     if (active.id === "jobs") {
       const quests = parseQuestsJson(this.questsJson);
