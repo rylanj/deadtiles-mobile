@@ -7,16 +7,24 @@ import {
   type DayNightLook,
 } from "@zombie/shared";
 import { IS_MOBILE } from "../gameConfig";
+import { overworldObjectDepthCeiling } from "./depthSort";
 import { fillBuildingOuterBoundary } from "./IsoTiles";
 
 const LIGHT_TEX_KEY = "daynight-light";
 const FIRE_TEX_KEY = "daynight-fire-fill";
 const VIGNETTE_TEX_KEY = "daynight-vignette";
 
-/** Above cuboids / entities, below Phaser action labels (9.9e6). */
-export const DAYNIGHT_AMBIENT_DEPTH = 3_500_000;
-const DAYNIGHT_VIGNETTE_DEPTH = 3_500_001;
-export const DAYNIGHT_LIGHT_DEPTH = 3_500_002;
+/**
+ * Above every world sprite, below damage flashes (9e6) and action labels.
+ * A fixed band near 3.5e6 only covers the middle of the county: iso depth
+ * grows with x+y, so walls, trees, and buildings at the south and east
+ * border paint over the multiply overlay while ground (a fixed low layer)
+ * stays dark.
+ */
+const NIGHT_BAND = overworldObjectDepthCeiling() + 1_000;
+export const DAYNIGHT_AMBIENT_DEPTH = NIGHT_BAND;
+const DAYNIGHT_VIGNETTE_DEPTH = NIGHT_BAND + 1;
+export const DAYNIGHT_LIGHT_DEPTH = NIGHT_BAND + 2;
 
 const MAX_LIGHTS = IS_MOBILE ? 18 : 48;
 const FIRELIT_FADE_MS = 380;

@@ -41,3 +41,4 @@ export * from "./bear.js";
 export * from "./crow.js";
 export * from "./rabbit.js";
 export * from "./onboarding.js";
+export * from "./mapMarkers.js";

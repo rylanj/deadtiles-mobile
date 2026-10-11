@@ -58,7 +58,7 @@ import {
   PLAYER_MAX_HEALTH,
   type AshenMilitiaTask,
 } from "@zombie/shared";
-import { appendItemIcon, fillSpeechButton, markQuestKeepsake } from "./itemIcons";
+import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
@@ -244,7 +244,7 @@ export class AshenMilitiaDialogUI {
     this.responseEl = document.createElement("div");
     this.responseEl.className =
       "red-dialog-response red-dialog-response--empty ashen-dialog-reply";
-    this.responseEl.textContent = "Waiting for you to speak…";
+    this.responseEl.textContent = "Waiting for you to say something...";
     npcBody.appendChild(this.responseEl);
     npcPanel.append(npcHeader, npcBody);
 
@@ -332,6 +332,8 @@ export class AshenMilitiaDialogUI {
         ? Math.round(opts.doctorHealCost)
         : ASHEN_MILITIA_DOCTOR_HEAL_COST;
     this.activeLineId = null;
+    this.scriptedLineId = null;
+    this.scriptedReply = null;
     this.expandedTaskId = null;
     this.visible = true;
     this.overlay.hidden = false;
@@ -441,6 +443,16 @@ export class AshenMilitiaDialogUI {
     if (this.visible) this.render();
   }
 
+  /** Speech that only exists to advance a story quest. */
+  private isQuestChat(lineId: string): boolean {
+    if (this.isColeman) return lineId !== COLEMAN_SILENT_LINE.id;
+    if (this.isCaptain && lineId === STORY_LINE_YOU_WANTED) return true;
+    if (this.isDoctor && lineId === STORY_LINE_WHAT_HAPPENED) {
+      return this.storyPromptPending(lineId);
+    }
+    return false;
+  }
+
   private storyPromptPending(lineId: string): boolean {
     const quests = parseQuestsJson(this.questsJson);
     if (this.isDoctor && lineId === STORY_LINE_WHAT_HAPPENED) {
@@ -491,6 +503,7 @@ export class AshenMilitiaDialogUI {
             ? "bandages"
             : undefined;
       fillSpeechButton(btn, line.player, iconId);
+      if (this.isQuestChat(line.id)) markSpeechQuest(btn);
       btn.addEventListener("click", () => {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
@@ -524,17 +537,13 @@ export class AshenMilitiaDialogUI {
       this.appendStoryQuests();
       return;
     }
-    if (!active && lines[0]) {
-      this.activeLineId = lines[0].id;
-      this.scriptedLineId = null;
-      this.scriptedReply = null;
-      this.render();
-      return;
-    }
     this.responseEl.replaceChildren();
     if (!active) {
-      this.responseEl.classList.add("red-dialog-response--empty");
-      this.responseEl.textContent = "Waiting for you to speak…";
+      this.responseEl.classList.remove("red-dialog-response--empty");
+      const waiting = document.createElement("div");
+      waiting.className = "red-dialog-response-text red-dialog-response--empty";
+      waiting.textContent = "Waiting for you to say something...";
+      this.responseEl.appendChild(waiting);
       this.appendStoryQuests();
       return;
     }
@@ -757,7 +766,7 @@ export class AshenMilitiaDialogUI {
           makeDisplayCell({
             itemId: "rep",
             qtyLabel: `+${rep}`,
-            ariaLabel: `+${rep} Ashen Militia reputation`,
+            ariaLabel: `+${rep} ${ASHEN_MILITIA_FACTION} reputation`,
           }),
         );
       }
@@ -1096,7 +1105,7 @@ export class AshenMilitiaDialogUI {
       makeDisplayCell({
         itemId: "rep",
         qtyLabel: `+${task.rewardReputation}`,
-        ariaLabel: `+${task.rewardReputation} Ashen Militia reputation`,
+        ariaLabel: `+${task.rewardReputation} ${ASHEN_MILITIA_FACTION} reputation`,
       }),
     );
     if (questFlag(quests, task.id, "foundDead")) {

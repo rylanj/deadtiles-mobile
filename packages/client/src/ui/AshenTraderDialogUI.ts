@@ -35,7 +35,7 @@ import {
   type StorySpeechLine,
 } from "@zombie/shared";
 import { createDialogCloseButton } from "./dialogCloseBtn";
-import { appendItemIcon, fillSpeechButton, markQuestKeepsake } from "./itemIcons";
+import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 
@@ -177,7 +177,7 @@ export class AshenTraderDialogUI {
     this.responseEl = document.createElement("div");
     this.responseEl.className =
       "red-dialog-response red-dialog-response--empty ashen-dialog-response";
-    this.responseEl.textContent = "Waiting for you to speak…";
+    this.responseEl.textContent = "Waiting for you to say something...";
     npcBody.appendChild(this.responseEl);
     npcPanel.append(npcHeader, npcBody);
 
@@ -376,6 +376,7 @@ export class AshenTraderDialogUI {
         btn.classList.add("ashen-dialog-speech-btn--active");
       }
       fillSpeechButton(btn, line.player);
+      markSpeechQuest(btn);
       btn.addEventListener("click", () => {
         this.activeLineId = line.id;
         this.scriptedLineId = line.id;
@@ -400,7 +401,7 @@ export class AshenTraderDialogUI {
     }
     if (!active) {
       this.responseEl.classList.add("red-dialog-response--empty");
-      this.responseEl.textContent = "Waiting for you to speak…";
+      this.responseEl.textContent = "Waiting for you to say something...";
       return;
     }
     this.responseEl.classList.remove("red-dialog-response--empty");

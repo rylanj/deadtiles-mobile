@@ -295,37 +295,37 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     id: "join",
     player: "Can I join you guys?",
     npcMan: [
-      "Not taking people on. Try an Ashen Militia settlement for work.",
-      "We're not taking new people on the road. Too many mouths, too little trust. If you want work, ask around at an Ashen Militia settlement. They post jobs when they need hands.",
-      "Caravan's full. Trust's thin on the road anyway. Militia settlements post paid work when they need hands. Buyer jobs are with Kevin at the Birchport market.",
+      "Not taking people on. Try a National Guard post for work.",
+      "We're not taking new people on the road. Too many mouths, too little trust. If you want work, ask at Birchport. That's the National Guard hub in Ashen County. They post jobs when they need hands.",
+      "Caravan's full. Trust's thin on the road anyway. National Guard posts put up paid work when they need hands. Buyer jobs are with Kevin at the Birchport market.",
     ],
     npcGuard: [
-      "Full caravan. Try the militia for paid work.",
-      "Not our call. We already have a full caravan. Try the militia settlements if you're looking for paid work.",
-      "We don't hire strays mid-route. Militia towns post jobs. That's your better bet.",
+      "Full caravan. Try the National Guard for paid work.",
+      "Not our call. We already have a full caravan. Try Birchport or one of the smaller National Guard outposts if you're looking for paid work.",
+      "We don't hire strays mid-route. National Guard posts put up jobs. That's your better bet.",
     ],
   },
   {
     id: "home",
     player: "Do you guys have a home?",
     npcMan: [
-      "Mostly the road. A few stalls at militia settlements.",
-      "Not really. Most of us stay on the road through Ashen County. A few keep stalls at Ashen Militia settlements so people know where to find us when a caravan isn't passing through.",
-      "No fixed town. We're on the county roads most weeks. When a caravan isn't in, look for our stalls inside Ashen Militia settlements. That's where people expect to find us.",
+      "Mostly the road. A few stalls at National Guard posts.",
+      "Not really. Most of us stay on the road through Ashen County. A few keep stalls at National Guard posts so people know where to find us when a caravan isn't passing through.",
+      "No fixed town. We're on the county roads most weeks. When a caravan isn't in, look for our stalls at National Guard posts. Birchport is their hub in this county.",
     ],
   },
   {
     id: "militia",
-    player: "Are you with the Ashen Militia?",
+    player: "Are you with the National Guard?",
     npcMan: [
-      "No. Separate. They let us trade in their towns.",
-      "No. Separate group. The militia lets us trade at their settlements, and when bandits hit a caravan they sometimes ride out after them. We handle the goods. They handle the shooting, when they can spare it.",
-      "Separate outfit. Militia settlements give us stalls; sometimes they chase bandits off a hit caravan if they've got people free. Goods are our job. Guns are theirs.",
+      "No. Separate. They let us trade at their posts.",
+      "No. Separate group. The National Guard lets us trade at Birchport and their smaller outposts, and when bandits hit a caravan they sometimes ride out after them. We handle the goods. They handle the shooting, when they can spare it.",
+      "Separate outfit. National Guard posts give us stalls; sometimes they chase bandits off a hit caravan if they've got people free. Goods are our job. Guns are theirs.",
     ],
     npcGuard: [
       "Separate. They help when bandits hit, when they can.",
-      "Separate outfit. Militia looks the other way when we set up shop in their towns, and they've pulled our bacon out of the fire more than once on the road.",
-      "Not militia. Same county, different badge. They've bailed out caravans before. Don't confuse that for us wearing their colors.",
+      "Separate outfit. The National Guard looks the other way when we set up shop at their posts, and they've pulled our bacon out of the fire more than once on the road.",
+      "Not National Guard. Same county, different badge. They've bailed out caravans before. Don't confuse that for us wearing their colors.",
     ],
   },
   {
@@ -334,7 +334,7 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     npcMan: [
       "Walkers usual. Bandits worse. We keep moving.",
       "Depends on the week. Walkers are the usual problem. Bandits are worse when they show up. We keep moving and try not to camp in the open longer than we have to.",
-      "Week to week. Walkers are constant; bandits hit when a route looks soft. We don't linger in the open. Marked roads near militia posts are the least bad option.",
+      "Week to week. Walkers are constant; bandits hit when a route looks soft. We don't linger in the open. Marked roads near National Guard posts are the least bad option.",
     ],
     npcGuard: [
       "Quiet never lasts. Keep a weapon ready.",
@@ -371,7 +371,7 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     npcMan: [
       "Alright.",
       "Alright. Stay on the marked roads if you can.",
-      "Safe travels. Stick to marked roads near the militia posts when you can.",
+      "Safe travels. Stick to marked roads near the National Guard posts when you can.",
     ],
     npcGuard: [
       "Watch yourselves.",

@@ -1,4 +1,5 @@
 import { isStructureBuildKind, type StructureBuildKind } from "./buildCosts.js";
+import { parseMapMarkers, type MapMarker } from "./mapMarkers.js";
 import { MARKET_PRICE_MAX } from "./playerMarket.js";
 import { COOK_SLOT_COUNT, isRawMeat } from "./cooking.js";
 import type { FreeAimSurface } from "./combat.js";
@@ -492,6 +493,7 @@ export type ClientMessage =
   | { type: "prefabClose" }
   | { type: "clientReady" }
   | { type: "respawn" }
+  | { type: "setMapMarkers"; payload: { markers: MapMarker[] } }
   | { type: "chat"; payload: ChatMessage };
 
 const NO_PAYLOAD_TYPES = new Set([
@@ -953,6 +955,11 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
         },
       };
     }
+    case "setMapMarkers": {
+      const markers = parseMapMarkers(p.markers);
+      if (!markers) return null;
+      return { type, payload: { markers } };
+    }
     default:
       return null;
   }
@@ -1395,6 +1402,11 @@ export type ServerMessage =
   | {
       type: "skillLevelUp";
       payload: { label: string; subId: string; level: number };
+    }
+  | {
+      /** Owner-only personal map pins. */
+      type: "mapMarkerSync";
+      payload: { markers: MapMarker[] };
     }
   | {
       /** Owner-only note. Shown as a popup, not a chat bubble. */

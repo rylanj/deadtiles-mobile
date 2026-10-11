@@ -11,10 +11,13 @@ export const EXTEND_AMOUNT = 50;
 export const PLAYER_VIEW_RADIUS = 100;
 
 /**
- * Hard cap on mapWidth / mapHeight. Must stay below schema uint16 (65535)
- * to avoid wrap corruption from unbounded world growth.
+ * Hard cap on generated mapWidth / mapHeight. The live world is the fixed
+ * Ashen County generation rectangle (40 regions, 3840 tiles). Walkable county
+ * is the inner 36 regions, plus 16 tiles east, 16 west, 20 south, and 12
+ * north so the fence clears the buildings and yard fences on those sides.
+ * Must stay below schema uint16 (65535).
  */
-export const MAX_MAP_DIMENSION = 10_000;
+export const MAX_MAP_DIMENSION = 3_840;
 
 /** @deprecated Use INITIAL_MAP_WIDTH — kept for legacy imports. */
 export const WORLD_COLS = INITIAL_MAP_WIDTH;
@@ -234,11 +237,10 @@ export const ASHEN_HOSTILE_WARN_LINE =
 export const HOSPITAL_WEAPON_WARN_DELAY_MS = 10_000;
 export const HOSPITAL_WEAPON_WARN_LINE = "Put your weapon away now!";
 /**
- * Birchport hospital and military barracks: searching furniture in a
- * militia guard's LOS aims and warns. Captain Davis warns the same way
- * when he can see the search, but he does not shoot. Cancelling the
- * search stands them down. Completing it uses one free pass per server
- * restart; a second completed theft turns the garrison hostile.
+ * Faction theft. National Guard and Red Order aim and say this when they
+ * see a player search their furniture or one of their dead. Cancelling
+ * stands them down. Finishing turns them hostile: the Birchport garrison,
+ * or the Red Order squad in that building.
  */
 export const HOSPITAL_SEARCH_WARN_LINE = "Stop stealing now!";
 /**
@@ -249,6 +251,31 @@ export const BARRACKS_GATE_WARN_RADIUS = 5;
 export const BARRACKS_GATE_WARN_LEAVE_RADIUS = 6;
 export const BARRACKS_GATE_WARN_LINE =
   "This is a restricted area. You need to leave.";
+/**
+ * South county gate. One National Guard post on the far side speaks when a
+ * player comes this close. Leave radius is a bit larger so the edge does not spam.
+ */
+export const BORDER_GATE_GUARD_PREFIX = "ashen-border-gate:";
+export const BORDER_GATE_WARN_RADIUS = 5;
+export const BORDER_GATE_WARN_LEAVE_RADIUS = 7;
+export const BORDER_GATE_LINES = [
+  "You do not have permission to cross into neighboring counties",
+  "Nobody crosses into the next county without permission",
+  "You are not cleared to cross this border",
+  "Turn around. You do not have permission to leave this county",
+  "You cannot leave Ashen County. It is quarantined",
+  "Ashen County is under quarantine. You stay on that side",
+  "Quarantine is still up. Nobody walks out of Ashen County",
+  "This county is quarantined. The gate stays shut",
+  "Only authorized personnel can leave Ashen County",
+  "Authorized personnel only past this point",
+  "If you are not authorized, you do not leave Ashen County",
+  "You are not on the list. Authorized personnel only",
+  "Civilians cannot leave Ashen County",
+  "Civilians stay inside the county. That is the order",
+  "No civilians through this gate",
+  "You are a civilian. You do not leave Ashen County",
+] as const;
 /**
  * Market door: one outside trader guard speaks when a Hostile or Exiled
  * player comes this close. Leave radius is larger so the edge does not spam.

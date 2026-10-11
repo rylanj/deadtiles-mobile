@@ -378,6 +378,8 @@ export class AudioManager {
   private treeFalls = new Map<string, LiveTreeFall>();
   private treeChops = new Map<string, LiveTreeChop>();
   private liveZombieGroans: LiveGunshot[] = [];
+  /** Recent aggro one-shots. A city gunshot must not start one sound per zombie. */
+  private zombieAggroAt: number[] = [];
   private lastZombieGroanVariant = -1;
   private lastMeleeHitVariant: Partial<Record<MeleeHitBank, number>> = {};
   private exteriorRain: RainPlaylist = emptyRainPlaylist();
@@ -1159,6 +1161,17 @@ export class AudioManager {
   }
 
   playZombieAggro(source: GunshotSource) {
+    const now = performance.now();
+    const keepAfter = now - 450;
+    let kept = 0;
+    for (let i = 0; i < this.zombieAggroAt.length; i++) {
+      const at = this.zombieAggroAt[i]!;
+      if (at >= keepAfter) this.zombieAggroAt[kept++] = at;
+    }
+    this.zombieAggroAt.length = kept;
+    // Same live cap as groans. The flush plays nearest zombies first.
+    if (kept >= ZOMBIE_GROAN_MAX_LIVE) return;
+    this.zombieAggroAt.push(now);
     this.play("zombie_aggro", {
       volume: 0.85,
       source,

@@ -1,5 +1,5 @@
 /**
- * Ashen Militia dialog for MilitiaGuard1–3, MilitiaCaptain1 (Captain Davis),
+ * National Guard dialog for MilitiaGuard1–3, MilitiaCaptain1 (Captain Davis),
  * and MilitiaDoctor1 (Doctor Clark). Standing uses `ashenMilitiaReputation`,
  * separate from Ashen Trader `ashenReputation`.
  */
@@ -13,10 +13,10 @@ import {
   type AshenStanding,
 } from "./trade.js";
 
-/** Ashen Militia faction display name. */
-export const ASHEN_MILITIA_FACTION = "Ashen Militia";
+/** National Guard faction display name. */
+export const ASHEN_MILITIA_FACTION = "National Guard";
 
-/** Head of the Birchport Ashen Militia detachment (military barracks). */
+/** Head of the Birchport National Guard hub (military barracks). */
 export const ASHEN_MILITIA_CAPTAIN_NAME = "Captain Davis";
 
 /** Birchport hospital medic (ward floor). */
@@ -80,20 +80,20 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     id: "who",
     player: "Who are you?",
     npc: [
-      "Ashen Militia. We hold settlements in Ashen County.",
-      "Ashen Militia. We hold settlements in Ashen County and keep the roads around them walkable. Birchport is one detachment: military barracks, hospital, streets. Other towns have their own.",
-      "Militia. This is Ashen County ground. Birchport's ours here. The military barracks is the hub. The hospital is where we treat the wounded. Captains talk when another post needs bodies or crates.",
-      "Ashen Militia. Settlements and the roads that feed them. Each post has its own Captain. Birchport's barracks is the hub around here if you need more than a wave.",
+      "National Guard. Birchport is the hub for Ashen County.",
+      "National Guard. We still have posts across the country. Birchport is the main hub in Ashen County: military barracks, hospital, streets. A few smaller outposts cover the rest of the county.",
+      "National Guard. This is Ashen County. Birchport is the hub. The military barracks runs it. The hospital treats the wounded. A few smaller outposts sit out in the county.",
+      "National Guard. Posts across the country, and the roads between them. Birchport is the hub for this county if you need more than a wave.",
     ],
   },
   {
     id: "birchport",
     player: "What's Birchport?",
     npc: [
-      "Main settlement. Barracks, hospital, street patrols.",
-      "Primary settlement for this detachment. The military barracks is the operational hub. The hospital is where Clark and the ward staff treat the wounded. We patrol the streets. Stay on the marked roads and don't start trouble in the ward.",
-      "Birchport's our post. Barracks runs the detachment. Hospital's open for patch-ups. Traders pass through when they can. Stick to marked roads and keep weapons holstered in the ward.",
-      "Biggest settlement we've got around here. Military barracks is the hub. Hospital's where we send the wounded. Patrols on the streets. Other detachments cover the rest of the county.",
+      "Main hub in Ashen County. Barracks, hospital, street patrols.",
+      "Birchport is the National Guard hub for Ashen County. The military barracks runs it. The hospital is where Clark and the ward staff treat the wounded. We patrol the streets. Stay on the marked roads and don't start trouble in the ward.",
+      "Birchport's the hub for this county. Barracks runs it. Hospital's open for patch-ups. Traders pass through when they can. Stick to marked roads and keep weapons holstered in the ward.",
+      "Biggest post in Ashen County. The Guard has posts across the country, and a few smaller outposts sit out in the county. Military barracks is the hub. Hospital's where we send the wounded.",
     ],
   },
   {
@@ -101,9 +101,9 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     player: "Are you with the Ashen Traders?",
     npc: [
       "Separate outfit. They trade. We handle the guns.",
-      "Separate outfit. They move goods through the county. We let them trade in our towns and ride out when bandits hit a caravan, when we can spare the people. They handle barter. We handle the guns.",
-      "No. Ashen Traders are their own group. They move scrap and medicine through the county; we let them set up in our settlements and back them if bandits hit a caravan and we've got people to spare. Different jobs.",
-      "Related, not the same. Traders do the barter. We keep the towns and roads from falling apart.",
+      "Separate outfit. They move goods through the county. We let them trade at Birchport and the smaller outposts, and we ride out when bandits hit a caravan, when we can spare the people. They handle barter. We handle the guns.",
+      "No. Ashen Traders are their own group. They move scrap and medicine through the county; we let them set up at our posts and back them if bandits hit a caravan and we've got people to spare. Different jobs.",
+      "Related, not the same. Traders do the barter. We keep the posts and roads from falling apart.",
     ],
   },
   {
@@ -111,7 +111,7 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     player: "Any work for outsiders?",
     npc: [
       "Sometimes. Ask at Birchport. Don't shoot our people.",
-      "Sometimes. Captain Davis at the barracks posts ammo and field kits, and Doctor Clark at the hospital takes bandages and water. They don't let outsiders through the gate. Get in better with the militia first. Until then: thin walkers, stay off our people.",
+      "Sometimes. Captain Davis at the barracks posts ammo and field kits, and Doctor Clark at the hospital takes bandages and water. They don't let outsiders through the gate. Get in better with the National Guard first. Until then: thin walkers, stay off our people.",
       "When we need hands, Davis posts barracks jobs and Clark posts ward jobs. Outsiders stay outside the gate until your standing's up. Until then: thin walkers, stay off our people, and don't make a mess on the marked roads.",
       "Captain Davis in the military barracks might have something for you, and Doctor Clark at the hospital takes medical and water. They don't allow outsiders in. Raise your standing with us and that might change.",
     ],
@@ -126,10 +126,10 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     id: "roads",
     player: "How are the roads?",
     npc: [
-      "Patrols near settlements. Walkers everywhere else. Watch for bandits.",
-      "Patrols cover the arterials near our settlements. Quiet stretches don't stay quiet. Walkers are common. Bandits show up when they think nobody's watching.",
+      "Patrols near our posts. Walkers everywhere else. Watch for bandits.",
+      "Patrols cover the arterials near Birchport and the smaller outposts. Quiet stretches don't stay quiet. Walkers are common. Bandits show up when they think nobody's watching.",
       "Near Birchport and the other posts we keep the main roads swept when we can. Out past that, walkers are routine and bandits hit lone travelers on the quiet stretches. Travel marked routes if you've got a choice.",
-      "Arterials by the settlements are the best bet. Open country is walkers and the occasional ambush.",
+      "Arterials by the posts are the best bet. Open country is walkers and the occasional ambush.",
     ],
   },
   {
@@ -138,7 +138,7 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     npc: [
       "City crew, red armbands. Stay clear of their buildings.",
       "City crew with red armbands. They don't share streets with us and they've been hunting patrols for dog tags. Stay clear of their buildings if you can help it.",
-      "Red Order holds city blocks and wears red armbands. They've been hitting militia patrols for dog tags. Don't walk into their buildings looking for a chat. They don't share streets with Ashen.",
+      "Red Order holds city blocks and wears red armbands. They've been hitting National Guard patrols for dog tags. Don't walk into their buildings looking for a chat. They don't share streets with Ashen.",
       "Red armbands, city turf. They've been taking dog tags off our patrols. Avoid their buildings.",
     ],
   },
@@ -148,7 +148,7 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
     npc: [
       "Holstered weapon, no fights. Yes. Attack us and we remember.",
       "If you keep your weapon holstered and don't pick a fight, yes. Attack us and every Ashen post in the area remembers. Reputation cuts both ways.",
-      "Talk's fine with the gun put away. Start something and your standing with every Ashen post, militia and traders, drops. Reputation sticks.",
+      "Talk's fine with the gun put away. Start something and your standing with every Ashen post, National Guard and traders, drops. Reputation sticks.",
       "Yes, if you behave. Reputation with Ashen isn't local to this corner.",
     ],
   },
@@ -166,7 +166,7 @@ export const ASHEN_MILITIA_DIALOG_LINES: readonly AshenMilitiaDialogLine[] = [
 
 /**
  * Talk options for MilitiaCaptain1 (Captain Davis) in the barracks mess hall.
- * Head of the Birchport detachment; posts barracks supply turn-ins.
+ * Head of the Birchport hub; posts barracks supply turn-ins.
  * Friendlier than street guards. Ward jobs (bandages, water) go through Clark.
  */
 export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDialogLine[] =
@@ -175,23 +175,23 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       id: "you_wanted",
       player: "You wanted to speak to me?",
       npc: [
-        "I wanted to know what kind of trouble you got yourself into. The patrol that rescued you has since gone missing. They have not answered a radio call. That is not like them. They were with the National Guard before the world turned to shit. It is a shame you do not remember what happened before they brought you to the hospital.",
+        "I wanted to know what kind of trouble you got yourself into. The patrol that rescued you has since gone missing. They have not answered a radio call. That is not like them. They've been National Guard since before the world turned to shit. It is a shame you do not remember what happened before they brought you to the hospital.",
       ],
     },
     {
       id: "who",
       player: "Who are you?",
       npc: [
-        "Captain Davis, Ashen Militia. I head the Birchport detachment.",
-        "Captain Davis, Ashen Militia. I head the Birchport detachment from this barracks. Glad you made it in one piece.",
-        "Captain Davis. I head Birchport's Ashen Militia. The military barracks is our operational hub. There are several detachments across the county, each with its own Captain. We coordinate when another post needs supplies or people.",
+        "Captain Davis, National Guard. I run the Birchport hub.",
+        "Captain Davis, National Guard. I run the Birchport hub from this barracks. Glad you made it in one piece.",
+        "Captain Davis. I run the National Guard in Ashen County from this barracks. Birchport is the hub. A few smaller outposts cover the rest of the county, and the Guard has posts across the country besides ours.",
       ],
     },
     {
       id: "hospital",
       player: "Is the hospital your headquarters?",
       npc: [
-        "No. This barracks is the hub. The hospital is where we treat the wounded. We keep it under militia control so the ward stays open.",
+        "No. This barracks is the hub. The hospital is where we treat the wounded. We keep it under National Guard control so the ward stays open.",
         "No. Command runs from this barracks. The hospital is for the wounded. Clark runs the ward. We hold the building so he can keep working.",
         "Headquarters is here. The hospital is a ward for hurt soldiers and anyone else we can patch up. Holster up if you go in, and stay out of Clark's way.",
       ],
@@ -202,16 +202,16 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       npc: [
         "Safer than the open road. Still, don't wander alone after dark.",
         "Safer than the open road. Street patrols keep the worst of it off the main avenues. Still, don't wander alone after dark if you can help it.",
-        "Compared to the county roads, yes. This detachment holds the main streets. Side alleys and night walks are still a gamble. Stick with company if you can.",
+        "Compared to the county roads, yes. This hub holds the main streets. Side alleys and night walks are still a gamble. Stick with company if you can.",
       ],
     },
     {
       id: "detachments",
-      player: "Are there other militia posts?",
+      player: "Are there other National Guard posts?",
       npc: [
-        "Several detachments around the county. Each has its own Captain.",
-        "Yes. Detachments across Ashen County, each with its own Captain. We talk when a post runs short on crates or people and can spare either.",
-        "Birchport isn't the only one. Captains run their own detachments and coordinate when supplies or personnel need to move. Ask at the post you're nearest if you need work elsewhere.",
+        "A few smaller outposts in the county. Birchport is the hub.",
+        "Yes. The Guard has posts across the country. In Ashen County, Birchport is the hub, with a few smaller outposts besides. We talk when an outpost runs short and we can spare crates or people.",
+        "Birchport is the main post in this county, not the only one. Smaller outposts cover the rest of Ashen County. Other counties have their own hubs.",
       ],
     },
     {
@@ -220,7 +220,7 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       npc: [
         "When they can. Separate group, but we look out for each other.",
         "When they can. We give them a place to set up, and they keep medicine and ammo moving. Separate group from us, but we look out for each other.",
-        "Caravans stop here when the roads allow. Different outfit from the militia, but they move medicine and ammo we need, and we give them a safe stall. Ask them about stock, not me.",
+        "Caravans stop here when the roads allow. Different outfit from the National Guard, but they move medicine and ammo we need, and we give them a safe stall. Ask them about stock, not me.",
       ],
     },
     {
@@ -238,7 +238,7 @@ export const ASHEN_MILITIA_CAPTAIN_DIALOG_LINES: readonly AshenMilitiaCaptainDia
       npc: [
         "Ask the street guards for directions. If you're hurt, go to the hospital. Avoid red armbands.",
         "Talk to the guards if you need directions. Survivors who need a bed go to the hospital, not here. If someone in a red armband starts asking questions, walk away.",
-        "Street guards know the layout. Send anyone hurting to the hospital. Clark runs the ward and takes bandages and water there. Other detachments have their own Captains if you're out in the county. Red Order wears red armbands. Don't answer their questions and don't follow them into their buildings.",
+        "Street guards know the layout. Send anyone hurting to the hospital. Clark runs the ward and takes bandages and water there. A few smaller outposts cover the county if you're out past Birchport. Red Order wears red armbands. Don't answer their questions and don't follow them into their buildings.",
       ],
     },
     {
@@ -597,7 +597,7 @@ export function ashenMilitiaDoctorHealReplies(
 
 /**
  * Talk options for MilitiaDoctor1 (Doctor Clark) on the hospital ward floor.
- * Medic for Ashen Militia: patches hurt soldiers and outsiders.
+ * Medic for the National Guard: patches hurt soldiers and outsiders.
  */
 export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDialogLine[] =
   [
@@ -605,9 +605,9 @@ export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDial
       id: "who",
       player: "Who are you?",
       npc: [
-        "Doctor Clark. Ashen Militia medic. I keep the ward running.",
-        "Doctor Clark, Ashen Militia. I patch up hurt soldiers and outsiders who make it to the ward.",
-        "Clark. Militia medic for this hospital. Soldiers, patrols, survivors: if they're bleeding, they come through me.",
+        "Doctor Clark. National Guard medic. I keep the ward running.",
+        "Doctor Clark, National Guard. I patch up hurt soldiers and outsiders who make it to the ward.",
+        "Clark. National Guard medic for this hospital. Soldiers, patrols, survivors: if they're bleeding, they come through me.",
       ],
     },
     {
@@ -616,16 +616,16 @@ export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDial
       npc: [
         "A patrol found you on the road and brought you in. I patched you up. Be more careful.",
         "One of our patrols found you in a bad way out on the road. They hauled you to this ward and I put you back together. You're lucky they came through when they did. Be more careful next time.",
-        "You were down hard outside town. Militia patrol scooped you up and I treated you here. Without them you'd still be out there. Don't make them do it twice.",
+        "You were down hard outside town. A National Guard patrol scooped you up and I treated you here. Without them you'd still be out there. Don't make them do it twice.",
       ],
     },
     {
       id: "militia",
-      player: "You're with the Ashen Militia?",
+      player: "You're with the National Guard?",
       npc: [
-        "Yes. I handle the wounded for this detachment.",
-        "Yes. Captain Davis runs the detachment from the barracks. I deal with the bodies that come back hurt. Militia and outsiders alike, if they can pay or if they're ours.",
-        "Ashen Militia, hospital side. The barracks is their hub. Keeping people breathing is mine.",
+        "Yes. I handle the wounded for the Birchport hub.",
+        "Yes. Captain Davis runs the hub from the barracks. I deal with the bodies that come back hurt. Guard and outsiders alike, if they can pay or if they're ours.",
+        "National Guard, hospital side. Birchport is the hub for Ashen County. Keeping people breathing is mine.",
       ],
     },
     {
@@ -803,7 +803,7 @@ export function canTalkWithAshenMilitia(reputation: number): boolean {
   return canTradeWithAshen(reputation);
 }
 
-/** Anyone the militia will still talk to may use the Birchport barracks bargate. */
+/** Anyone the National Guard will still talk to may use the Birchport barracks bargate. */
 export function canEnterBirchportBarracks(reputation: number): boolean {
   return canTalkWithAshenMilitia(reputation);
 }

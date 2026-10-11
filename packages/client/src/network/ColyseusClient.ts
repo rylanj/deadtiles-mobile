@@ -3,6 +3,7 @@ import {
   WORLD_FULL_MESSAGE,
   WORLD_ROOM_NAME,
   type FreeAimSurface,
+  type MapMarker,
   type MarketStatePayload,
   type StructureBuildKind,
   type StructureFenceCorner,
@@ -780,6 +781,12 @@ export type BlueprintSyncEvent = {
   };
 };
 
+/** Personal map pins saved on the player row. Owner-only. */
+export type MapMarkerSyncEvent = {
+  type: "mapMarkerSync";
+  payload: { markers: MapMarker[] };
+};
+
 export type CraftOpenEvent = {
   type: "craftOpen";
   payload: {
@@ -1039,6 +1046,7 @@ export type ServerEvent =
   | QuestSyncEvent
   | SkillSyncEvent
   | BlueprintSyncEvent
+  | MapMarkerSyncEvent
   | CraftOpenEvent
   | CraftSyncEvent
   | FireplaceOpenEvent

@@ -340,8 +340,69 @@ function paintFamily(
   }
 }
 
-function streetDecalTextureKey(tx: number, ty: number) {
-  return `street-decal:${tx},${ty}`;
+/**
+ * Every decal is a frame of one shared atlas. A canvas texture per tile cost a
+ * GPU upload of 20-60ms each and broke sprite batching, which froze the fill
+ * after zooming out over a city.
+ */
+const ATLAS_KEY = "street-decal-atlas";
+const VARIANTS_PER_KIND = IS_MOBILE ? 24 : 40;
+const ATLAS_COLUMNS = 8;
+const ATLAS_GAP = 2;
+const DECAL_KINDS = [TileType.Road, TileType.Pavement] as const;
+
+function decalFrameName(ttype: TileType, variant: number) {
+  return `${ttype === TileType.Road ? "road" : "pave"}-${variant}`;
+}
+
+function ensureDecalAtlas(scene: Phaser.Scene): boolean {
+  if (scene.textures.exists(ATLAS_KEY)) return true;
+
+  const width = TILE_WIDTH + TILE_DISPLAY_BLEED;
+  const height = TILE_HEIGHT + TILE_DISPLAY_BLEED;
+  const cellW = width + ATLAS_GAP;
+  const cellH = height + ATLAS_GAP;
+  const total = VARIANTS_PER_KIND * DECAL_KINDS.length;
+  const rows = Math.ceil(total / ATLAS_COLUMNS);
+  const atlasW = ATLAS_COLUMNS * cellW;
+  const atlasH = rows * cellH;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = atlasW;
+  canvas.height = atlasH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  const image = ctx.createImageData(atlasW, atlasH);
+
+  const frames: Array<{ name: string; x: number; y: number }> = [];
+  let slot = 0;
+  for (const ttype of DECAL_KINDS) {
+    const weights = ttype === TileType.Road ? ROAD_WEIGHTS : PAVEMENT_WEIGHTS;
+    for (let v = 0; v < VARIANTS_PER_KIND; v++) {
+      const ox = (slot % ATLAS_COLUMNS) * cellW;
+      const oy = Math.floor(slot / ATLAS_COLUMNS) * cellH;
+      slot++;
+      const rng = rngFor(`street-decal-variant:${ttype}:${v}`);
+      const families: Family[] = [pickFamily(rng, weights, null)];
+      if (rng() < 0.34) families.push(pickFamily(rng, weights, families[0]!));
+      const strength = 0.48 + rng() * 0.5;
+      // paintFamily clips to the diamond around (cx, cy), so each variant
+      // stays inside its own cell of the shared buffer.
+      const cx = ox + width / 2;
+      const cy = oy + height / 2;
+      for (const family of families) {
+        paintFamily(image.data, atlasW, atlasH, cx, cy, family, rng, strength);
+      }
+      frames.push({ name: decalFrameName(ttype, v), x: ox, y: oy });
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+
+  const texture = scene.textures.addCanvas(ATLAS_KEY, canvas);
+  if (!texture) return false;
+  for (const f of frames) texture.add(f.name, 0, f.x, f.y, width, height);
+  texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+  return true;
 }
 
 /** Sparse dirt, debris, and plant wear on a road or pavement diamond. */
@@ -353,51 +414,31 @@ export function maybeSpawnStreetSurfaceDecal(
 ): Phaser.GameObjects.Image | null {
   if (ttype !== TileType.Road && ttype !== TileType.Pavement) return null;
   if (!shouldDecorate(tx, ty, ttype)) return null;
+  if (!ensureDecalAtlas(scene)) return null;
 
   const rng = rngFor(`street-decal:${tx},${ty}`);
-  const weights = ttype === TileType.Road ? ROAD_WEIGHTS : PAVEMENT_WEIGHTS;
-  const families: Family[] = [pickFamily(rng, weights, null)];
-  if (rng() < 0.34) families.push(pickFamily(rng, weights, families[0]!));
-  const strength = 0.48 + rng() * 0.5;
-
+  const variant = Math.floor(rng() * VARIANTS_PER_KIND) % VARIANTS_PER_KIND;
   const width = TILE_WIDTH + TILE_DISPLAY_BLEED;
   const height = TILE_HEIGHT + TILE_DISPLAY_BLEED;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  const image = ctx.createImageData(width, height);
-  const cx = width / 2;
-  const cy = height / 2;
-  for (const family of families) {
-    paintFamily(image.data, width, height, cx, cy, family, rng, strength);
-  }
-  ctx.putImageData(image, 0, 0);
-
-  const key = streetDecalTextureKey(tx, ty);
-  if (scene.textures.exists(key)) scene.textures.remove(key);
-  scene.textures.addCanvas(key, canvas);
-  scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
 
   const iso = cartesianToIso(tx + 0.5, ty + 0.5);
-  const img = scene.add.image(iso.x, iso.y + streetSurfaceY(tx, ty), key);
+  const img = scene.add.image(
+    iso.x,
+    iso.y + streetSurfaceY(tx, ty),
+    ATLAS_KEY,
+    decalFrameName(ttype, variant),
+  );
   img.setOrigin(0.5, 0.5);
   img.setDisplaySize(width, height);
   img.setFlipX(rng() < 0.5);
   img.setDepth(tileIndicatorDepth(tx, ty));
-  img.setName(key);
+  img.setName(`street-decal:${tx},${ty}`);
   return img;
 }
 
 export function destroyStreetSurfaceDecal(
-  scene: Phaser.Scene,
+  _scene: Phaser.Scene,
   image: Phaser.GameObjects.Image | null | undefined,
 ) {
-  if (!image) return;
-  const key = image.texture?.key;
-  image.destroy();
-  if (key && key.startsWith("street-decal:") && scene.textures.exists(key)) {
-    scene.textures.remove(key);
-  }
+  image?.destroy();
 }

@@ -28,7 +28,7 @@ import {
   type QuestDefinition,
   type RedOrderTask,
 } from "@zombie/shared";
-import { appendItemIcon, fillSpeechButton, markQuestKeepsake } from "./itemIcons";
+import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
@@ -188,7 +188,7 @@ export class RedOrderDialogUI {
     npcBody.className = "red-dialog-body";
     this.responseEl = document.createElement("div");
     this.responseEl.className = "red-dialog-response red-dialog-response--empty";
-    this.responseEl.textContent = "Waiting for you to speak…";
+    this.responseEl.textContent = "Waiting for you to say something...";
     npcBody.appendChild(this.responseEl);
     npcPanel.append(npcHeader, npcBody);
 
@@ -325,6 +325,7 @@ export class RedOrderDialogUI {
         btn.classList.add("red-dialog-speech-btn--active");
       }
       fillSpeechButton(btn, line.player, line.id === "jobs" ? "journal" : undefined);
+      if (storyIds.has(line.id)) markSpeechQuest(btn);
       btn.addEventListener("click", () => {
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
@@ -349,7 +350,7 @@ export class RedOrderDialogUI {
         : null;
     if (!active && !kept) {
       this.responseEl.classList.add("red-dialog-response--empty");
-      this.responseEl.textContent = "Waiting for you to speak…";
+      this.responseEl.textContent = "Waiting for you to say something...";
       return;
     }
 

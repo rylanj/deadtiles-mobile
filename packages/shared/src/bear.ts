@@ -5,7 +5,11 @@ import {
   isWoodedForestAt,
   seededRandom,
 } from "./worldgen.js";
-import { INITIAL_WORLD_BOUNDS, type WorldBounds } from "./worldBounds.js";
+import {
+  INITIAL_WORLD_BOUNDS,
+  isNearBorderWall,
+  type WorldBounds,
+} from "./worldBounds.js";
 
 /** One bear site per this many tiles. Most wooded cells still roll empty. */
 export const BEAR_CELL = 160;
@@ -65,6 +69,7 @@ export type BearSpawn = {
 };
 
 function denTileOk(tx: number, ty: number, bounds: WorldBounds): boolean {
+  if (isNearBorderWall(tx, ty)) return false;
   if (!isWoodedForestAt(tx, ty)) return false;
   if (isInBirchport(tx + 0.5, ty + 0.5)) return false;
   if (isInBirchportBarracks(tx, ty)) return false;

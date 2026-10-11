@@ -410,34 +410,44 @@ function forEachPerimeterTile(
 ) {
   const x1 = bld.ox + bld.w - 1;
   const y1 = bld.oy + bld.h - 1;
+  // SW (south) and SE (east) only. The NW and NE edges sit behind the
+  // building in the isometric view, so those decals are never seen.
   for (let tx = bld.ox; tx <= x1; tx++) {
-    visit(tx, bld.oy - 1);
     visit(tx, y1 + 1);
   }
   for (let ty = bld.oy; ty <= y1; ty++) {
-    visit(bld.ox - 1, ty);
     visit(x1 + 1, ty);
   }
 }
 
 function canvasBounds(bld: BuildingInfo) {
-  const pad = 1;
-  const left = bld.ox - pad;
-  const top = bld.oy - pad;
-  const right = bld.ox + bld.w + pad;
-  const bottom = bld.oy + bld.h + pad;
+  const { ox, oy, w, h } = bld;
+  // Tight screen box around the visible south and east perimeter strips.
   const corners = [
-    cartesianToIso(left, top),
-    cartesianToIso(right, top),
-    cartesianToIso(right, bottom),
-    cartesianToIso(left, bottom),
+    cartesianToIso(ox, oy + h),
+    cartesianToIso(ox + w, oy + h),
+    cartesianToIso(ox + w, oy + h + 1),
+    cartesianToIso(ox, oy + h + 1),
+    cartesianToIso(ox + w, oy),
+    cartesianToIso(ox + w + 1, oy),
+    cartesianToIso(ox + w + 1, oy + h),
   ];
   const padX = TILE_WIDTH / 2 + 4;
   const padY = TILE_HEIGHT / 2 + 4;
-  const minX = Math.min(corners[0]!.x, corners[1]!.x, corners[2]!.x, corners[3]!.x) - padX;
-  const maxX = Math.max(corners[0]!.x, corners[1]!.x, corners[2]!.x, corners[3]!.x) + padX;
-  const minY = Math.min(corners[0]!.y, corners[1]!.y, corners[2]!.y, corners[3]!.y) - padY;
-  const maxY = Math.max(corners[0]!.y, corners[1]!.y, corners[2]!.y, corners[3]!.y) + padY;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const corner of corners) {
+    if (corner.x < minX) minX = corner.x;
+    if (corner.x > maxX) maxX = corner.x;
+    if (corner.y < minY) minY = corner.y;
+    if (corner.y > maxY) maxY = corner.y;
+  }
+  minX -= padX;
+  maxX += padX;
+  minY -= padY;
+  maxY += padY;
   return {
     originX: Math.floor(minX),
     originY: Math.floor(minY),

@@ -66,10 +66,10 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     title: "Talk to Doctor Clark",
     body:
       "Doctor Clark patched you up. Walk up to him and press E to talk, then ask what happened to you. " +
-      "This ward belongs to the Ashen Militia. Weapons can't be drawn here, and searching their furniture counts as theft.",
+      "This ward belongs to the National Guard. Weapons can't be drawn here, and searching their furniture or their dead counts as theft.",
     mobileBody:
       "Doctor Clark patched you up. Tap him to talk, then ask what happened to you. " +
-      "This ward belongs to the Ashen Militia. Weapons can't be drawn here, and searching their furniture counts as theft.",
+      "This ward belongs to the National Guard. Weapons can't be drawn here, and searching their furniture or their dead counts as theft.",
   },
   eat_drink: {
     id: "eat_drink",
@@ -87,9 +87,9 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     chapter: "wake",
     title: "Check your map",
     body:
-      "Press M to open the map. Birchport's hospital, barracks and market are marked. Captain Davis runs the militia from the barracks.",
+      "Press M to open the map. Birchport's hospital, barracks and market are marked. Captain Davis runs the National Guard from the barracks.",
     mobileBody:
-      "Tap the map button. Birchport's hospital, barracks and market are marked. Captain Davis runs the militia from the barracks.",
+      "Tap the map button. Birchport's hospital, barracks and market are marked. Captain Davis runs the National Guard from the barracks.",
   },
   leave_hospital: {
     id: "leave_hospital",
@@ -111,7 +111,7 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     chapter: "birchport",
     title: "Report to Captain Davis",
     body:
-      "Birchport is held by the Ashen Militia. Weapons can't be drawn on its streets or inside faction buildings, so town is safe ground. " +
+      "Birchport is held by the National Guard. Weapons can't be drawn on its streets or inside faction buildings, so town is safe ground. " +
       "Go through the barracks gate (marked on your map) and find Captain Davis in the mess hall.",
   },
   accept_aye_captain: {
@@ -133,7 +133,7 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     chapter: "patrol",
     title: "Accept Two Behind It",
     body:
-      "Accept Two Behind It. Read it before you take it. That is how Davis says you earn the militia's trust.",
+      "Accept Two Behind It. Read it before you take it. That is how Davis says you earn the National Guard's trust.",
   },
   search_coleman: {
     id: "search_coleman",
@@ -289,7 +289,7 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
   theft_warning: {
     id: "theft_warning",
     title: "Stop stealing",
-    body: "The militia warned you. Searching their furniture gets one warning. Finish another search and the whole Birchport garrison turns hostile.",
+    body: "They warned you. Finish searching their supplies or their dead and they open fire. Stop searching and they stand down. The National Guard turns the whole Birchport garrison. The Red Order turns the squad in that building.",
   },
   weapon_broke: {
     id: "weapon_broke",
@@ -344,7 +344,7 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
   red_order_inside: {
     id: "red_order_inside",
     title: "Inside their walls",
-    body: "Weapons stay holstered here, the same as any faction building. Don't steal from them. You can earn standing with the Red Order and the Ashen for now. That will not last forever.",
+    body: "Weapons stay holstered here, the same as any faction building. If they see you finish searching their furniture or their dead, that squad turns hostile. Stop the search and they stand down. You can earn standing with the Red Order and the Ashen for now. That will not last forever.",
   },
   ashen_traders_intro: {
     id: "ashen_traders_intro",
@@ -442,9 +442,9 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
     id: "factions",
     title: "Factions and standing",
     paragraphs: [
-      "Ashen Militia: hold Birchport and the county roads. Captain Davis at the barracks and Doctor Clark at the hospital post jobs.",
+      "National Guard: posts across the country. Birchport is their hub in Ashen County, with a few smaller outposts besides. Captain Davis at the barracks and Doctor Clark at the hospital post jobs.",
       "Ashen Traders: run caravans and the Birchport market. They buy, sell, and keep medicine and ammo moving.",
-      "The Red Order: hold city blocks and want the Ashen gone. They run Birchport's supermarket and post their own work.",
+      "The Red Order: hold city blocks and want the Ashen gone. They run Birchport's supermarket and post their own work. Their furniture and their dead are protected. If they see you finish a search, that squad turns hostile.",
       "Standing runs Exiled, Hostile, Wary, Neutral, Warm, Friendly, Allied. Everyone starts Wary. Jobs raise it. Attacking a faction or stealing from it drops it a full level. Hostile groups refuse to talk and may shoot. Ashen standing recovers slowly from Hostile, but Exiled is permanent.",
       "For now you can work for both the Ashen and the Red Order. Later jobs will force you to pick a side.",
     ],
@@ -454,7 +454,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
     title: "Birchport rules",
     paragraphs: [
       "Weapons can't be drawn on Birchport's streets or inside faction buildings, so town is safe ground.",
-      "Militia watch the hospital and barracks. Searching their furniture counts as theft. They warn you once, and the next theft turns the garrison against you.",
+      "The National Guard watches the hospital and barracks, and their dead wherever they fell. Searching their furniture or one of their bodies counts as theft. If a guard sees you finish, the whole Birchport garrison turns hostile. Stop the search and they stand down.",
       "Fighting players or guards in Birchport turns the whole garrison hostile.",
     ],
   },

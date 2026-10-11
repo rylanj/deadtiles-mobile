@@ -30,7 +30,10 @@ import {
 } from "./constants.js";
 import { generateSettlementName } from "./settlementNames.js";
 import {
+  BIRCHPORT_CELL_ORIGIN_X,
+  BIRCHPORT_CELL_ORIGIN_Y,
   INITIAL_WORLD_BOUNDS,
+  getBorderWallAt,
   isInWorldBounds,
   type WorldBounds,
 } from "./worldBounds.js";
@@ -899,13 +902,10 @@ const CITY_MIN_CELL_GAP = 3;
 
 /**
  * Forced city cell for {@link PLAYER_SPAWN_HUB_NAME} ("Birchport").
- * Name is derived from `city:${cx},${cy}` — keep these origins stable.
+ * Name is derived from `city:${cx},${cy}`. Origins live in worldBounds.
  */
-const PLAYER_SPAWN_HUB_CELL_CX = -192;
-const PLAYER_SPAWN_HUB_CELL_CY = 96;
-
 function isPlayerSpawnHubCell(cx: number, cy: number): boolean {
-  return cx === PLAYER_SPAWN_HUB_CELL_CX && cy === PLAYER_SPAWN_HUB_CELL_CY;
+  return cx === BIRCHPORT_CELL_ORIGIN_X && cy === BIRCHPORT_CELL_ORIGIN_Y;
 }
 
 /**
@@ -2594,6 +2594,7 @@ function getCachedLayout(cx: number, cy: number): CachedLayout | null {
   if (type !== "city") { _layoutCache.set(key, null); return null; }
   const { rng: _r, p: _p, tier: _t, ...rest } = computeGridLayout(cx, cy, "city");
   _layoutCache.set(key, rest);
+  indexLayoutArterials(rest.arterials);
   return rest;
 }
 
@@ -3963,6 +3964,88 @@ function getStreetTileTypeInCell(
  * joining road's interior width (4 tiles on town side roads) without
  * removing the arterial's corner pavement.
  */
+/**
+ * Arterials are stored on both endpoint cities. An L-bend can fall outside
+ * URBAN_REACH of each of them, so a local cell scan draws only a sliver of
+ * the road. The map chart paints the whole segment from the city layout, and
+ * that sliver's live tiles then hide the chart until the player walks away.
+ * Index every segment onto the cells it crosses, and fill that index from
+ * the full inter-city search the first time a cell is queried.
+ */
+const arterialsByCell = new Map<string, Arterial[]>();
+const arterialCellReady = new Set<string>();
+const arterialCellPending = new Set<string>();
+
+function arterialCellKey(cx: number, cy: number): string {
+  return `${cx}:${cy}`;
+}
+
+function arterialCellOrigin(tile: number): number {
+  return Math.floor(tile / SETTLEMENT_CELL) * SETTLEMENT_CELL;
+}
+
+function indexLayoutArterials(arterials: readonly Arterial[]): void {
+  for (const a of arterials) {
+    const key = arterialSegmentKey(a);
+    const minCX = arterialCellOrigin(a.x0);
+    const maxCX = arterialCellOrigin(a.x1 - 1);
+    const minCY = arterialCellOrigin(a.y0);
+    const maxCY = arterialCellOrigin(a.y1 - 1);
+    for (let cy = minCY; cy <= maxCY; cy += SETTLEMENT_CELL) {
+      for (let cx = minCX; cx <= maxCX; cx += SETTLEMENT_CELL) {
+        const cell = arterialCellKey(cx, cy);
+        let bucket = arterialsByCell.get(cell);
+        if (!bucket) {
+          bucket = [];
+          arterialsByCell.set(cell, bucket);
+        }
+        if (bucket.some((seg) => arterialSegmentKey(seg) === key)) continue;
+        bucket.push(a);
+      }
+    }
+  }
+}
+
+function ensureArterialsIndexedAt(tx: number, ty: number): void {
+  const rx = arterialCellOrigin(tx);
+  const ry = arterialCellOrigin(ty);
+  const key = arterialCellKey(rx, ry);
+  if (arterialCellReady.has(key) || arterialCellPending.has(key)) return;
+  arterialCellPending.add(key);
+  const reach = INTER_CITY_SEARCH_CELLS * SETTLEMENT_CELL;
+  const minCX = arterialCellOrigin(rx - reach);
+  const maxCX = arterialCellOrigin(rx + SETTLEMENT_CELL - 1 + reach);
+  const minCY = arterialCellOrigin(ry - reach);
+  const maxCY = arterialCellOrigin(ry + SETTLEMENT_CELL - 1 + reach);
+  for (let cy = minCY; cy <= maxCY; cy += SETTLEMENT_CELL) {
+    for (let cx = minCX; cx <= maxCX; cx += SETTLEMENT_CELL) {
+      getCachedLayout(cx, cy);
+    }
+  }
+  arterialCellPending.delete(key);
+  arterialCellReady.add(key);
+}
+
+function arterialsIndexedAt(tx: number, ty: number): readonly Arterial[] {
+  ensureArterialsIndexedAt(tx, ty);
+  return (
+    arterialsByCell.get(
+      arterialCellKey(arterialCellOrigin(tx), arterialCellOrigin(ty)),
+    ) ?? []
+  );
+}
+
+function roadInteriorOnArterial(
+  tx: number,
+  ty: number,
+  a: Arterial,
+  inRoadInterior: (rel: number, width: number) => boolean,
+): boolean {
+  if (tx < a.x0 || tx >= a.x1 || ty < a.y0 || ty >= a.y1) return false;
+  if (a.orient === "v") return inRoadInterior(tx - a.x0, a.width);
+  return inRoadInterior(ty - a.y0, a.width);
+}
+
 function isRoadSurfaceAt(tx: number, ty: number): boolean {
   const sw = STREET_TOTAL;
   const reach = URBAN_REACH;
@@ -3995,14 +4078,12 @@ function isRoadSurfaceAt(tx: number, ty: number): boolean {
         if (inRoadInterior(ty - sy, sw)) return true;
       }
       for (const a of arterials) {
-        if (tx < a.x0 || tx >= a.x1 || ty < a.y0 || ty >= a.y1) continue;
-        if (a.orient === "v") {
-          if (inRoadInterior(tx - a.x0, a.width)) return true;
-        } else {
-          if (inRoadInterior(ty - a.y0, a.width)) return true;
-        }
+        if (roadInteriorOnArterial(tx, ty, a, inRoadInterior)) return true;
       }
     }
+  }
+  for (const a of arterialsIndexedAt(tx, ty)) {
+    if (roadInteriorOnArterial(tx, ty, a, inRoadInterior)) return true;
   }
   return false;
 }
@@ -4089,6 +4170,32 @@ export function getStreetTileType(tx: number, ty: number): TileType | null {
   let hasH = false, hPaveN = false, hPaveS = false, hCapW = false, hCapE = false;
   const allArterials: Arterial[] = [];
   const artKeys = new Set<string>();
+  const noteArterial = (a: Arterial) => {
+    const key = arterialSegmentKey(a);
+    if (!artKeys.has(key)) {
+      artKeys.add(key);
+      allArterials.push(a);
+    }
+    if (tx < a.x0 || tx >= a.x1 || ty < a.y0 || ty >= a.y1) return;
+    const asw = a.width;
+    if (a.orient === "v") {
+      hasV = true;
+      const rel = tx - a.x0;
+      if (rel < STREET_PAVEMENT) vPaveW = true;
+      if (rel >= asw - STREET_PAVEMENT) vPaveE = true;
+      // Segment ends always eligible for caps; open arms of L-turns are
+      // handled by the intersection rule below via neighbour checks.
+      if (ty === a.y0) vCapN = true;
+      if (ty === a.y1 - 1) vCapS = true;
+    } else {
+      hasH = true;
+      const rel = ty - a.y0;
+      if (rel < STREET_PAVEMENT) hPaveN = true;
+      if (rel >= asw - STREET_PAVEMENT) hPaveS = true;
+      if (tx === a.x0) hCapW = true;
+      if (tx === a.x1 - 1) hCapE = true;
+    }
+  };
 
   for (let cx = minCX; cx <= maxCX; cx += SETTLEMENT_CELL) {
     for (let cy = minCY; cy <= maxCY; cy += SETTLEMENT_CELL) {
@@ -4125,34 +4232,13 @@ export function getStreetTileType(tx: number, ty: number): TileType | null {
       }
 
       // ── Arterial bands (width-aware, includes town side roads) ──────────
-      for (const a of arterials) {
-        const key = `${a.orient}:${a.x0},${a.y0},${a.x1},${a.y1},${a.width}`;
-        if (!artKeys.has(key)) {
-          artKeys.add(key);
-          allArterials.push(a);
-        }
-        if (tx < a.x0 || tx >= a.x1 || ty < a.y0 || ty >= a.y1) continue;
-        const asw = a.width;
-        if (a.orient === "v") {
-          hasV = true;
-          const rel = tx - a.x0;
-          if (rel < STREET_PAVEMENT) vPaveW = true;
-          if (rel >= asw - STREET_PAVEMENT) vPaveE = true;
-          // Segment ends always eligible for caps; open arms of L-turns are
-          // handled by the intersection rule below via neighbour checks.
-          if (ty === a.y0) vCapN = true;
-          if (ty === a.y1 - 1) vCapS = true;
-        } else {
-          hasH = true;
-          const rel = ty - a.y0;
-          if (rel < STREET_PAVEMENT) hPaveN = true;
-          if (rel >= asw - STREET_PAVEMENT) hPaveS = true;
-          if (tx === a.x0) hCapW = true;
-          if (tx === a.x1 - 1) hCapE = true;
-        }
-      }
+      for (const a of arterials) noteArterial(a);
     }
   }
+  // L-bend arterials can sit outside URBAN_REACH of both endpoint cities.
+  // The map chart still paints them from the city layout. Pull those in so
+  // the world and the map agree while the tiles are on screen.
+  for (const a of arterialsIndexedAt(tx, ty)) noteArterial(a);
 
   if (!hasV && !hasH) return null;
 
@@ -4262,6 +4348,44 @@ function streetlightFacingOnArterialCurb(
  * Deterministic Streetlight1 on arterial pavement facing into the road, or null.
  * Sparse along the curb so roads stay readable.
  */
+function streetlightOnSegment(
+  tx: number,
+  ty: number,
+  a: Arterial,
+  seen: Set<string>,
+): StreetlightInfo | null {
+  const facing = streetlightFacingOnArterialCurb(tx, ty, a);
+  if (!facing) return null;
+  const key = arterialSegmentKey(a);
+  if (seen.has(key)) return null;
+  seen.add(key);
+
+  const along = a.orient === "v" ? ty : tx;
+  const start = a.orient === "v" ? a.y0 : a.x0;
+  const end = a.orient === "v" ? a.y1 : a.x1;
+  if (
+    along < start + STREETLIGHT_END_MARGIN ||
+    along >= end - STREETLIGHT_END_MARGIN
+  ) {
+    return null;
+  }
+
+  const phaseRng = seededRandom(`streetlight-phase:${key}`);
+  const phase = Math.floor(phaseRng() * STREETLIGHT_SPACING);
+  const rel = along - start;
+  if (
+    ((rel - phase) % STREETLIGHT_SPACING + STREETLIGHT_SPACING) %
+      STREETLIGHT_SPACING !==
+    0
+  ) {
+    return null;
+  }
+
+  const slotRng = seededRandom(`streetlight:${key}:${along}`);
+  if (slotRng() >= STREETLIGHT_CHANCE) return null;
+  return { ox: tx, oy: ty, facing };
+}
+
 export function getStreetlightAt(tx: number, ty: number): StreetlightInfo | null {
   if (getBuildingAt(tx, ty)) return null;
 
@@ -4276,41 +4400,15 @@ export function getStreetlightAt(tx: number, ty: number): StreetlightInfo | null
     for (let cy = minCY; cy <= maxCY; cy += SETTLEMENT_CELL) {
       const layout = getCachedLayout(cx, cy);
       if (!layout) continue;
-
       for (const a of layout.arterials) {
-        const facing = streetlightFacingOnArterialCurb(tx, ty, a);
-        if (!facing) continue;
-        const key = arterialSegmentKey(a);
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        const along = a.orient === "v" ? ty : tx;
-        const start = a.orient === "v" ? a.y0 : a.x0;
-        const end = a.orient === "v" ? a.y1 : a.x1;
-        if (
-          along < start + STREETLIGHT_END_MARGIN ||
-          along >= end - STREETLIGHT_END_MARGIN
-        ) {
-          continue;
-        }
-
-        const phaseRng = seededRandom(`streetlight-phase:${key}`);
-        const phase = Math.floor(phaseRng() * STREETLIGHT_SPACING);
-        const rel = along - start;
-        if (
-          ((rel - phase) % STREETLIGHT_SPACING + STREETLIGHT_SPACING) %
-            STREETLIGHT_SPACING !==
-          0
-        ) {
-          continue;
-        }
-
-        const slotRng = seededRandom(`streetlight:${key}:${along}`);
-        if (slotRng() >= STREETLIGHT_CHANCE) continue;
-
-        return { ox: tx, oy: ty, facing };
+        const light = streetlightOnSegment(tx, ty, a, seen);
+        if (light) return light;
       }
     }
+  }
+  for (const a of arterialsIndexedAt(tx, ty)) {
+    const light = streetlightOnSegment(tx, ty, a, seen);
+    if (light) return light;
   }
 
   return null;
@@ -4785,6 +4883,7 @@ export function generateTile(
   y: number,
   _seedWord: string = MAP_SEED_WORD,
 ): TileType {
+  if (getBorderWallAt(x, y)) return TileType.Wall;
   if (getBuildingAt(x, y)) return TileType.Wall;
   const street = getStreetTileType(x, y);
   if (street !== null) {
@@ -4836,15 +4935,18 @@ export function findNearestWalkableNear(
   y: number,
   bounds: WorldBounds = INITIAL_WORLD_BOUNDS,
   maxRadius = 24,
+  limit: WorldBounds = bounds,
 ): { x: number; y: number } | null {
-  if (canMoveAt(x, y, bounds)) return { x, y };
+  const allowed = (px: number, py: number) =>
+    isInWorldBounds(px, py, limit) && canMoveAt(px, py, bounds);
+  if (allowed(x, y)) return { x, y };
 
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   const bld = getBuildingAt(tx, ty);
   if (bld) {
     const door = buildingExitApproachWorldPos(bld);
-    if (canMoveAt(door.x, door.y, bounds)) return door;
+    if (allowed(door.x, door.y)) return door;
   }
 
   for (let r = 1; r <= maxRadius; r++) {
@@ -4853,7 +4955,7 @@ export function findNearestWalkableNear(
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const nx = tx + dx + 0.5;
         const ny = ty + dy + 0.5;
-        if (canMoveAt(nx, ny, bounds)) return { x: nx, y: ny };
+        if (allowed(nx, ny)) return { x: nx, y: ny };
       }
     }
   }
@@ -5305,7 +5407,7 @@ export function evictDistantCells(
 }
 
 /** Precomputed map chart, in tiles on each side. Centered on Birchport. */
-export const BIRCHPORT_MAP_CHART_TILES = 10_000;
+export const BIRCHPORT_MAP_CHART_TILES = 5_000;
 /**
  * Tiles around Birchport painted before the player enters. The rest of the
  * chart fills in the background.

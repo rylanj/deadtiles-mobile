@@ -1,5 +1,7 @@
 import Phaser from "phaser";
 import {
+  BORDER_WALL_RUN_TILES,
+  borderWallFootprint,
   cartesianToIso,
   TILE_WIDTH,
   structureFenceFootprint,
@@ -62,6 +64,10 @@ export function loadFenceAssets(scene: Phaser.Scene) {
     scene.load.image(chainLinkFenceTextureKey(facing), CHAINLINK_FILES[facing]);
   }
   for (const facing of CHAINLINK_FACINGS) {
+    scene.load.image(borderWallTextureKey(facing), BORDER_WALL_FILES[facing]);
+    scene.load.image(borderGateTextureKey(facing), BORDER_GATE_FILES[facing]);
+  }
+  for (const facing of CHAINLINK_FACINGS) {
     scene.load.image(bargateTextureKey(facing), BARGATE_FILES[facing]);
     for (let f = 1; f <= 5; f++) {
       scene.load.image(
@@ -85,6 +91,16 @@ const CHAINLINK_FACINGS: StructureFenceFacing[] = ["SE", "SW"];
 const CHAINLINK_FILES: Record<StructureFenceFacing, string> = {
   SE: "Fence/ChainLinkFence1_SE.png",
   SW: "Fence/ChainLinkFence1_SW.png",
+};
+
+const BORDER_WALL_FILES: Record<StructureFenceFacing, string> = {
+  SE: "Fence/BorderWall1_SE.png",
+  SW: "Fence/BorderWall1_SW.png",
+};
+
+const BORDER_GATE_FILES: Record<StructureFenceFacing, string> = {
+  SE: "Fence/BorderGate1_SE.png",
+  SW: "Fence/BorderGate1_SW.png",
 };
 
 const BARGATE_FILES: Record<StructureFenceFacing, string> = {
@@ -120,6 +136,14 @@ const CHAINLINK_CORNER_SHIFT_X = -0.01;
 
 export function chainLinkFenceTextureKey(facing: StructureFenceFacing): string {
   return `chainlink-fence-${facing.toLowerCase()}`;
+}
+
+export function borderWallTextureKey(facing: StructureFenceFacing): string {
+  return `border-wall-${facing.toLowerCase()}`;
+}
+
+export function borderGateTextureKey(facing: StructureFenceFacing): string {
+  return `border-gate-${facing.toLowerCase()}`;
 }
 
 export function bargateTextureKey(facing: StructureFenceFacing): string {
@@ -215,6 +239,47 @@ export function layoutChainLinkFenceCornerImage(
   image.setAlpha(alpha);
 }
 
+/**
+ * Metal between the end posts, in source pixels.
+ * The full opaque box is 198px, but the barbed wire sticks past the posts,
+ * so fitting that box left a gap between sheets.
+ */
+const BORDER_WALL_CONTENT_SPAN = 188;
+/** Overlap so neighbouring posts meet instead of leaving a seam. */
+const BORDER_WALL_SEAM_BLEED = 1.1;
+/** Bottom of the metal sheets in the 256px canvas. */
+const BORDER_WALL_ORIGIN_Y = 251 / 256;
+/**
+ * Drop onto the near edge of the tile (positive screen-Y).
+ * Tuned on the old 3-tile sheet. Divided by the later size changes so the
+ * base stays put while the sheets grow.
+ */
+const BORDER_WALL_LOWER =
+  0.29 * (3 / 4) * (1.04 / 198) / (BORDER_WALL_SEAM_BLEED / BORDER_WALL_CONTENT_SPAN);
+
+function borderWallUniformScale(): number {
+  const runPx = (TILE_WIDTH / 2) * BORDER_WALL_RUN_TILES;
+  return (runPx / BORDER_WALL_CONTENT_SPAN) * BORDER_WALL_SEAM_BLEED;
+}
+
+/** Straight county-border panel or gate. Base sits on the centre of its 4-tile run. */
+export function layoutBorderWallImage(
+  image: Phaser.GameObjects.Image,
+  ox: number,
+  oy: number,
+  facing: StructureFenceFacing,
+): void {
+  const { w, h } = borderWallFootprint(facing);
+  const pos = cartesianToIso(ox + w / 2, oy + h / 2);
+  const scale = borderWallUniformScale();
+  const nativeW = image.frame.realWidth || image.width;
+  const nativeH = image.frame.realHeight || image.height;
+  const displayH = nativeH * scale;
+  image.setPosition(pos.x, pos.y + displayH * BORDER_WALL_LOWER);
+  image.setOrigin(0.5, BORDER_WALL_ORIGIN_Y);
+  image.setDisplaySize(nativeW * scale, displayH);
+}
+
 /** Call once after fence textures have finished loading. */
 export function configureFenceTextures(scene: Phaser.Scene) {
   for (const facing of FENCE_FACINGS) {
@@ -241,6 +306,14 @@ export function configureFenceTextures(scene: Phaser.Scene) {
       if (!scene.textures.exists(active)) continue;
       scene.textures.get(active).setFilter(Phaser.Textures.FilterMode.LINEAR);
     }
+  }
+  for (const facing of CHAINLINK_FACINGS) {
+    const key = borderWallTextureKey(facing);
+    if (!scene.textures.exists(key)) continue;
+    scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+    const gateKey = borderGateTextureKey(facing);
+    if (!scene.textures.exists(gateKey)) continue;
+    scene.textures.get(gateKey).setFilter(Phaser.Textures.FilterMode.NEAREST);
   }
   for (const corner of ["SWSE", "SESW"] as const) {
     const key = chainLinkFenceCornerTextureKey(corner);

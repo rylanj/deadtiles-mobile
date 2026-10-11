@@ -608,6 +608,24 @@ export function configureGroundTileSprite(
   tile.setDisplaySize(groundTileCanvasWidth(), groundTileCanvasHeight());
 }
 
+/**
+ * Display texture for one overworld ground tile. `native` means the frame is
+ * already exactly one tile canvas, so it can be drawn unscaled (Blitter bobs).
+ */
+export function groundTileDisplayTexture(
+  scene: Phaser.Scene,
+  baseKey = "tile-ground",
+): { key: string; width: number; height: number; native: boolean } | null {
+  const key = ensureDisplayGroundTexture(scene, baseKey);
+  if (!scene.textures.exists(key)) return null;
+  const width = groundTileCanvasWidth();
+  const height = groundTileCanvasHeight();
+  const frame = scene.textures.getFrame(key);
+  const native =
+    !!frame && frame.width === width && frame.height === height;
+  return { key, width, height, native };
+}
+
 /** Single-tile grass (tree underlays) — shared display texture, no runtime bake. */
 export function createGroundTileImage(
   scene: Phaser.Scene,

@@ -244,6 +244,7 @@ import {
   isNightPhase,
   type ChatBroadcast,
   type ClientMessage,
+  type MapMarker,
   type InteriorWallTile,
   type RaycastTarget,
   type StructureBuildKind,
@@ -263,6 +264,9 @@ import {
   stepBirchportMapChart,
   type QuestMapMarker,
   buildingEntranceRun,
+  borderWallFootprint,
+  borderWallsNear,
+  getBorderWallAt,
 } from "@zombie/shared";
 import {
   drawProceduralWorld,
@@ -270,9 +274,11 @@ import {
   interiorEntityRenderDepth,
   interiorFurnitureDepthBias,
   LOCAL_PLAYER_DEPTH_BIAS,
+  entityRenderDepth,
   overworldCorpseRenderDepth,
   overworldEntityRenderDepth,
   applyOverworldStructureEntityDepth,
+  borderWallSortDepth,
   chainLinkFenceCornerDepthFootprint,
   chainLinkFenceCornerSortDepth,
   chainLinkFenceDepthFootprint,
@@ -305,6 +311,7 @@ import {
   startVramTelemetry,
   stopVramTelemetry,
 } from "../diagnostics/textureBudget";
+import { framePerf } from "../diagnostics/framePerf";
 import {
   addImageForKey,
   addSpriteForKey,
@@ -676,6 +683,21 @@ const MISS_DUST_BY_WEAPON: Record<number, MissDustConfig> = {
 };
 
 type CombatEntityKind = "player" | "zombie" | "guard" | "coywolf" | "bear" | "crow" | "rabbit";
+
+/**
+ * Tiles from the cursor's feet tile to a sprite's feet. Covers the drawn body
+ * (head is up-screen of the feet) so aim tint still hits torsos and flying crows.
+ * Anything farther cannot be under the cursor, so hover skips getBounds.
+ */
+const HOVER_TILE_REACH: Record<CombatEntityKind, number> = {
+  player: 8,
+  zombie: 8,
+  guard: 8,
+  coywolf: 8,
+  bear: 10,
+  rabbit: 6,
+  crow: 14,
+};
 
 /** Un-built prefab tile — mirrors a server StructureRecord with status "prefab". */
 type StorageBoxTile = {
@@ -1203,6 +1225,11 @@ export class WorldScene extends Phaser.Scene {
   >();
   /** Zombie ids with pending Colyseus data — flushed once per render frame. */
   private pendingZombieRefreshIds = new Set<string>();
+  /**
+   * Far-zombie building-depth fills used this frame. A gunshot walks a whole
+   * city onto new tiles; uncapped fills stall the frame that has to fire.
+   */
+  private distantDepthFills = 0;
   private static readonly FIGHTING_STANCE_MS = FIGHTING_STANCE_MS;
   private static readonly DOUBLE_CLICK_MS = 300;
   /** Chebyshev tiles: enough woodland to feel like a forest, cheap 4×4 tree scan. */
@@ -1211,6 +1238,16 @@ export class WorldScene extends Phaser.Scene {
   /** Gap between groans from the same zombie (hashed onto worldTimeMs). */
   private static readonly ZOMBIE_GROAN_GAP_MIN_MS = 16_000;
   private static readonly ZOMBIE_GROAN_GAP_MAX_MS = 38_000;
+  /**
+   * Chebyshev tiles. Inside this, zombies keep per-frame building depth.
+   * This covers a normal zoomed-in view (about 30–45 tiles to the screen
+   * corner). Only the extra crowd a zoom-out reveals takes the cheap path.
+   */
+  private static readonly ZOMBIE_DETAIL_RADIUS = 40;
+  /** Hysteresis so a zombie on the ring does not flip detail on and off. */
+  private static readonly ZOMBIE_DETAIL_EXIT_RADIUS = 48;
+  /** New far-zombie building depths computed per frame. The rest wait a frame. */
+  private static readonly ZOMBIE_DISTANT_DEPTH_BUDGET = 12;
   private static readonly DOCTOR_IDLE_SWITCH_MIN_MS = 60_000;
   private static readonly DOCTOR_IDLE_SWITCH_MAX_MS = 180_000;
 
@@ -1937,6 +1974,7 @@ export class WorldScene extends Phaser.Scene {
     startVramTelemetry(this);
     AudioManager.get().bind(this);
     exposeVramDebugHook(this);
+    framePerf.attachScene(this);
     this.statusEl = document.getElementById("status") ?? undefined;
     this.healthFillEl = document.getElementById("health-fill") ?? undefined;
     this.healthCapEl = document.getElementById("health-cap") ?? undefined;
@@ -2082,7 +2120,9 @@ export class WorldScene extends Phaser.Scene {
       onChooseLine: (lineId) => this.sendAshenMilitiaChooseLine(lineId),
       onHeal: () => this.sendAshenMilitiaHeal(),
     });
-    this.mapOverlayUI = new MapOverlayUI();
+    this.mapOverlayUI = new MapOverlayUI({
+      onMarkersChange: (markers) => this.sendMapMarkers(markers),
+    });
     this.weaponHotbar?.destroy();
     this.weaponHotbar = new WeaponHotbar({
       onSlot: (slot) => {
@@ -2355,6 +2395,7 @@ export class WorldScene extends Phaser.Scene {
       }
       const room = existingRoom;
       this.room = room;
+      framePerf.attachRoom(room);
       const cachedPlayerId = this.registry.get("playerId") as string | undefined;
       this.registry.remove("playerId");
       this.sessionId =
@@ -2549,6 +2590,8 @@ export class WorldScene extends Phaser.Scene {
           this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "skillSync") {
           this.applySkillSync(msg.payload.skillsJson);
+        } else if (msg.type === "mapMarkerSync") {
+          this.mapOverlayUI?.applyServerMarkers(msg.payload.markers);
         } else if (msg.type === "blueprintSync") {
           this.applyBlueprintSync(msg.payload.learnedBlueprintsJson);
           if (msg.payload.weaponId) {
@@ -2944,18 +2987,27 @@ export class WorldScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     if (!this.room?.state?.players || !this.worldRevealReady) return;
+    this.distantDepthFills = 0;
+    const perf = framePerf.on ? framePerf : null;
+    perf?.begin();
     const frameDelta = Math.min(delta, MAX_FRAME_DELTA_MS);
     this.syncBlockingUiInputState();
     this.flushPendingZombieRefreshes();
+    perf?.lap("zombieFlush");
     this.handleInventoryInput();
     this.handleMapInput();
     this.handleJournalInput();
     this.handleStructureBuildInput();
+    perf?.lap("uiInput");
     this.syncWorldTiles();
+    perf?.lap("worldTiles");
     this.syncInteriorView();
+    perf?.lap("interior");
     this.updateSearchHover();
     this.updateLootableHover();
+    perf?.lap("searchHover");
     this.updateEntityHover();
+    perf?.lap("entityHover");
     this.updateDoorHover();
     this.updateBargateHover();
     this.updateFireplaceHover();
@@ -2964,6 +3016,7 @@ export class WorldScene extends Phaser.Scene {
     this.updateGraveHover();
     this.updateCellarHover();
     this.updateBuildModeHover();
+    perf?.lap("otherHover");
     this.updateCombatPursuit();
     this.updateInteractPursuit();
     this.updateLootPursuit();
@@ -2979,9 +3032,11 @@ export class WorldScene extends Phaser.Scene {
     this.updateRedOrderDialogProximity();
     this.updateAshenTraderDialogProximity();
     this.updateAshenMilitiaDialogProximity();
+    perf?.lap("pursuitProximity");
     this.handleCombatInput(frameDelta);
     this.handleAimInput();
     this.handleAutoFire();
+    perf?.lap("combatInput");
     this.handleKeyboardMovement();
     this.handleSearchInput();
     this.updateContainerLootProximity();
@@ -2994,22 +3049,30 @@ export class WorldScene extends Phaser.Scene {
     this.stepMapChart();
     this.refreshMapOverlay();
     this.refreshHotbar();
+    perf?.lap("movementUi");
     this.refreshAllVisuals(frameDelta);
+    perf?.lap("visuals:rest");
     this.tickExteriorSoftPurge(frameDelta);
+    perf?.lap("softPurge");
     this.updateLocalPlayerHud();
     this.updateChatBubbles();
     this.updateEntityActionLabels();
+    perf?.lap("hudLabels");
     this.updateDayNightLighting(frameDelta);
+    perf?.lap("dayNight");
     this.chimneySmoke?.update(
       frameDelta,
       !!this.room?.state?.players?.get(this.sessionId)?.inInterior,
     );
+    perf?.lap("smoke");
     this.syncGunshotListener();
     this.syncFireplaceAudio();
     this.syncOutdoorAmbience(frameDelta);
     this.tickZombieGroans();
     this.tickFootsteps();
+    perf?.lap("audio");
     this.refreshCombatLockBanner();
+    perf?.end();
   }
 
   private updateDamageOverlay(delta: number) {
@@ -3043,6 +3106,7 @@ export class WorldScene extends Phaser.Scene {
     this.forestAmbienceInForest = false;
     this.zombieGroanNextAt.clear();
     stopVramTelemetry();
+    framePerf.detachScene();
     resetFurnitureAssets();
     resetEntityAssetLoader(this);
     // Invalidate in-flight pack loads via loadEpoch only — do not reset/removeAll
@@ -9242,7 +9306,11 @@ export class WorldScene extends Phaser.Scene {
     worldX: number,
     worldY: number,
   ): FurnitureDepthFootprint[] {
+    const tx = Math.floor(worldX);
+    const ty = Math.floor(worldY);
+    const borders = borderWallsNear(tx, ty, OVERWORLD_STRUCTURE_DEPTH_REACH);
     if (
+      borders.length === 0 &&
       this.structureWallKeysOverworld.size === 0 &&
       this.structureDoorsOverworld.size === 0 &&
       this.tempOverworldWallKeys.size === 0 &&
@@ -9251,8 +9319,6 @@ export class WorldScene extends Phaser.Scene {
     ) {
       return [];
     }
-    const tx = Math.floor(worldX);
-    const ty = Math.floor(worldY);
     const out: FurnitureDepthFootprint[] = [];
     // Probe the neighbourhood rather than scanning every placed tile — a base
     // can be hundreds of tiles and this runs per entity per frame.
@@ -9324,6 +9390,19 @@ export class WorldScene extends Phaser.Scene {
         }
         out.push(chainLinkFenceCornerDepthFootprint(corner.x, corner.y, true));
       }
+    }
+    for (const wall of borders) {
+      const footprint = chainLinkFenceDepthFootprint(
+        wall.ox,
+        wall.oy,
+        wall.facing,
+        true,
+      );
+      const size = borderWallFootprint(wall.facing);
+      footprint.w = size.w;
+      footprint.h = size.h;
+      footprint.depth = borderWallSortDepth(wall.ox, wall.oy, wall.facing);
+      out.push(footprint);
     }
     return out;
   }
@@ -9413,6 +9492,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private overworldSightBlockedAt(tx: number, ty: number): boolean {
+    if (getBorderWallAt(tx, ty)) return true;
     const key = `${tx},${ty}`;
     if (this.structureWallKeysOverworld.has(key)) return true;
     if (this.tempOverworldWallKeys.has(key)) return true;
@@ -9872,6 +9952,9 @@ export class WorldScene extends Phaser.Scene {
     const weaponEquipped =
       !!equippedWeapon && (isMeleeWeapon(equippedWeapon) || this.aimHeld);
     const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const cursorCart = isoToCartesian(worldPt.x, worldPt.y);
+    const cursorTX = Math.floor(cursorCart.x);
+    const cursorTY = Math.floor(cursorCart.y);
 
     let bestId: string | null = null;
     let bestKind: CombatEntityKind | null = null;
@@ -9886,6 +9969,16 @@ export class WorldScene extends Phaser.Scene {
     ) => {
       if (!data || data.isDead || data.alive === false) return;
       if (!sprite?.visible) return;
+      const foot = sprite.getData("server") as { x?: number; y?: number } | undefined;
+      if (typeof foot?.x === "number" && typeof foot?.y === "number") {
+        const reach = HOVER_TILE_REACH[kind];
+        if (
+          Math.abs(Math.floor(foot.x) - cursorTX) > reach ||
+          Math.abs(Math.floor(foot.y) - cursorTY) > reach
+        ) {
+          return;
+        }
+      }
       const bounds = sprite.getBounds();
       if (!bounds.contains(worldPt.x, worldPt.y)) return;
       // Desktop: ignore transparent PNG padding so hover/click follows the
@@ -14760,7 +14853,21 @@ export class WorldScene extends Phaser.Scene {
     if (this.pendingZombieRefreshIds.size === 0 || !this.room?.state?.zombies) return;
 
     const zombies = this.room.state.zombies;
-    for (const id of this.pendingZombieRefreshIds) {
+    const me = this.room.state.players.get(this.sessionId);
+    const ids = [...this.pendingZombieRefreshIds];
+    // Nearest first so the aggro-sound cap keeps the zombies you can actually hear.
+    if (me && ids.length > 1) {
+      const px = me.x;
+      const py = me.y;
+      ids.sort((a, b) => {
+        const za = zombies.get(a);
+        const zb = zombies.get(b);
+        const da = za ? Math.max(Math.abs(za.x - px), Math.abs(za.y - py)) : 0;
+        const db = zb ? Math.max(Math.abs(zb.x - px), Math.abs(zb.y - py)) : 0;
+        return da - db;
+      });
+    }
+    for (const id of ids) {
       const data = zombies.get(id) as ZombieSchema | undefined;
       if (!data) continue;
 
@@ -14807,9 +14914,19 @@ export class WorldScene extends Phaser.Scene {
       }
 
       sprite.setData("server", next);
-      // Paint immediately on spawn/schema — idle zombies used to keep the
-      // placeholder/fallback frame until a movement patch changed visualKey.
-      this.updateEntityFromState(sprite, "zombie", id);
+      const wasLod = sprite.getData("zombieLod") === 1;
+      const distant = this.zombieIsDistant(
+        next.x,
+        next.y,
+        !!next.inInterior,
+        wasLod,
+      );
+      // Far zombies are painted once later this frame, on the cheap path.
+      // Snapshots above already landed, so delaying that paint does not rubber-band.
+      // Near zombies still paint here so a death or spawn in front of you is immediate.
+      if (!distant) {
+        this.updateEntityFromState(sprite, "zombie", id);
+      }
     }
     this.pendingZombieRefreshIds.clear();
   }
@@ -15060,6 +15177,138 @@ export class WorldScene extends Phaser.Scene {
     return { x: cx, y: cy };
   }
 
+  /**
+   * Velocity for a guard snapshot so the sprite glides between slow outer steps.
+   * A door, a floor change, or a jump of several tiles snaps instead of sliding.
+   */
+  private noteGuardMotion(
+    sprite: EntitySprite,
+    prev: {
+      x?: number;
+      y?: number;
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    } | undefined,
+    next: {
+      x: number;
+      y: number;
+      anim?: string;
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    },
+  ) {
+    const minTickSec = TICK_MS / 1000;
+    if (
+      !prev ||
+      prev.x == null ||
+      prev.y == null ||
+      prev.inInterior !== next.inInterior ||
+      prev.buildingX !== next.buildingX ||
+      prev.buildingY !== next.buildingY ||
+      Math.abs(next.x - prev.x) > 3 ||
+      Math.abs(next.y - prev.y) > 3
+    ) {
+      sprite.setData("renderX", next.x);
+      sprite.setData("renderY", next.y);
+      sprite.setData("snapX", next.x);
+      sprite.setData("snapY", next.y);
+      sprite.setData("snapAt", performance.now());
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+      return;
+    }
+    if (prev.x === next.x && prev.y === next.y) {
+      // A facing or health patch must not cancel a glide that is still walking.
+      if (next.anim !== "walk") {
+        sprite.setData("renderX", next.x);
+        sprite.setData("renderY", next.y);
+        sprite.setData("snapX", next.x);
+        sprite.setData("snapY", next.y);
+        sprite.setData("snapAt", performance.now());
+        sprite.setData("velX", 0);
+        sprite.setData("velY", 0);
+      }
+      return;
+    }
+    const now = performance.now();
+    const prevSnapAt = (sprite.getData("snapAt") as number | undefined) ?? now - TICK_MS;
+    const deltaSec = Math.min(
+      Math.max((now - prevSnapAt) / 1000, minTickSec),
+      minTickSec * 4,
+    );
+    sprite.setData("velX", (next.x - prev.x) / deltaSec);
+    sprite.setData("velY", (next.y - prev.y) / deltaSec);
+    sprite.setData("snapX", next.x);
+    sprite.setData("snapY", next.y);
+    sprite.setData("snapAt", now);
+  }
+
+  /**
+   * Far city zombies skip per-frame building probes. Hysteresis keeps a body
+   * that is pacing the ring from flipping between the two paths.
+   */
+  private zombieIsDistant(
+    x: number,
+    y: number,
+    inInterior: boolean,
+    wasLod: boolean,
+  ): boolean {
+    if (inInterior) return false;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me || me.inInterior) return false;
+    const dist = Math.max(Math.abs(x - me.x), Math.abs(y - me.y));
+    const limit = wasLod
+      ? WorldScene.ZOMBIE_DETAIL_RADIUS
+      : WorldScene.ZOMBIE_DETAIL_EXIT_RADIUS;
+    return dist > limit;
+  }
+
+  private zombieUsesDistantLod(
+    sprite: EntitySprite,
+    x: number,
+    y: number,
+    inInterior: boolean,
+  ): boolean {
+    const wasLod = sprite.getData("zombieLod") === 1;
+    const distant = this.zombieIsDistant(x, y, inInterior, wasLod);
+    if (distant !== wasLod) sprite.setData("zombieLod", distant ? 1 : 0);
+    return distant;
+  }
+
+  /**
+   * Building depth for a far zombie, remembered per tile. New tiles share a
+   * per-frame budget so a horde stepping onto fresh streets cannot stall a shot.
+   * Over budget, the last depth is kept (or a plain iso key until the first fill).
+   */
+  private distantZombieDepth(
+    sprite: EntitySprite,
+    x: number,
+    y: number,
+    isDead: boolean,
+  ): number {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    const tileKey = `${tx},${ty},${isDead ? 1 : 0}`;
+    const cachedTile = sprite.getData("lodDepthTile") as string | undefined;
+    const cachedDepth = sprite.getData("lodDepth") as number | undefined;
+    if (cachedTile === tileKey && typeof cachedDepth === "number") return cachedDepth;
+    if (this.distantDepthFills >= WorldScene.ZOMBIE_DISTANT_DEPTH_BUDGET) {
+      if (typeof cachedDepth === "number") return cachedDepth;
+      return entityRenderDepth(tx + 0.5, ty + 0.5);
+    }
+    this.distantDepthFills += 1;
+    // Same building and player-wall rules as up close, sampled at the tile
+    // centre and reused until they step onto the next tile.
+    const depth = isDead
+      ? this.overworldCorpseDepth(tx + 0.5, ty + 0.5)
+      : this.overworldEntityDepth(tx + 0.5, ty + 0.5);
+    sprite.setData("lodDepthTile", tileKey);
+    sprite.setData("lodDepth", depth);
+    return depth;
+  }
+
   private getZombieRenderPosition(
     sprite: EntitySprite,
     serverX: number,
@@ -15071,7 +15320,9 @@ export class WorldScene extends Phaser.Scene {
     const velY = (sprite.getData("velY") as number | undefined) ?? 0;
     const snapAt = (sprite.getData("snapAt") as number | undefined) ?? performance.now();
     const tickSec = TICK_MS / 1000;
-    const elapsed = Math.min((performance.now() - snapAt) / 1000, tickSec * 2);
+    // 4 ticks covers a calm outer step (5 Hz). A 20 Hz patch arrives sooner,
+    // so combat and the near ring are unchanged.
+    const elapsed = Math.min((performance.now() - snapAt) / 1000, tickSec * 4);
 
     let x = snapX + velX * elapsed;
     let y = snapY + velY * elapsed;
@@ -15312,6 +15563,7 @@ export class WorldScene extends Phaser.Scene {
       // idle traders can sit silent for minutes.)
       const existing = this.guardSprites.get(id);
       if (existing) {
+        this.noteGuardMotion(existing, existing.getData("server"), data);
         existing.setData("server", {
           x: data.x,
           y: data.y,
@@ -15410,6 +15662,7 @@ export class WorldScene extends Phaser.Scene {
       this.cancelEntityFireAnim(id);
       sprite.setData("visualKey", "");
     }
+    this.noteGuardMotion(sprite, sprite.getData("server"), data);
     sprite.setData("server", {
       x: data.x,
       y: data.y,
@@ -15529,10 +15782,15 @@ export class WorldScene extends Phaser.Scene {
     this.tickCoywolfWalkAnims(delta / 1000);
     this.tickBearWalkAnims(delta / 1000);
     this.tickRabbitWalkAnims(delta / 1000);
+    const perf = framePerf.on ? framePerf : null;
+    perf?.lap("visuals:walkAnims");
     this.syncNearbyEntityAssets();
+    perf?.lap("visuals:assets");
     this.ensureVisibleEntities();
+    perf?.lap("visuals:ensure");
     // Create any zombies queued by ensure (living flush already ran earlier).
     this.flushPendingZombieRefreshes();
+    perf?.lap("visuals:zombieFlush");
 
     for (const sprite of this.playerSprites.values()) {
       const data = sprite.getData("server") as
@@ -15559,6 +15817,7 @@ export class WorldScene extends Phaser.Scene {
       // Corpses are static — hide when culled so zoom/pan can restore them.
       this.updateEntityFromState(sprite, "corpse", sprite.entityId);
     }
+    perf?.lap("visuals:playersCorpses");
 
     for (const sprite of this.zombieSprites.values()) {
       const data = sprite.getData("server") as ZombieServerSnapshot | undefined;
@@ -15570,6 +15829,7 @@ export class WorldScene extends Phaser.Scene {
       }
       this.updateEntityFromState(sprite, "zombie", sprite.entityId);
     }
+    perf?.lap("visuals:zombies");
 
     for (const sprite of this.coywolfSprites.values()) {
       const data = sprite.getData("server") as
@@ -16312,14 +16572,24 @@ export class WorldScene extends Phaser.Scene {
 
     sprite.setVisible(true);
 
+    const distantZombie =
+      kind === "zombie" &&
+      this.zombieUsesDistantLod(sprite, data.x, data.y, !!data.inInterior);
     const renderPos =
-      kind === "zombie" || kind === "coywolf" || kind === "bear" || kind === "crow" || kind === "rabbit"
+      kind === "zombie" ||
+      kind === "guard" ||
+      kind === "coywolf" ||
+      kind === "bear" ||
+      kind === "crow" ||
+      kind === "rabbit"
         ? this.getZombieRenderPosition(sprite, data.x, data.y)
         : kind === "player"
           ? this.getPlayerRenderPosition(sprite, data.x, data.y)
           : { x: data.x, y: data.y };
     const iso = cartesianToIso(renderPos.x, renderPos.y);
-    let depth = isDead
+    let depth = distantZombie
+      ? this.distantZombieDepth(sprite, renderPos.x, renderPos.y, isDead)
+      : isDead
       ? data.inInterior
         ? this.interiorCorpseDepth(
             renderPos.x,
@@ -16355,7 +16625,9 @@ export class WorldScene extends Phaser.Scene {
       iso.x,
       entityFeetY(iso.y) + crawlDrop + coyoteDrop + bearDrop + rabbitDrop - crowLift,
     );
-    sprite.setDepth(depth);
+    // Far zombies hold one depth per tile. Setting it every interpolated step
+    // re-sorts every building and tree in a zoomed-out city.
+    if (sprite.depth !== depth) sprite.setDepth(depth);
 
     if (entityId === this.sessionId && kind === "player") {
       if (data.inInterior) {
@@ -17700,6 +17972,15 @@ export class WorldScene extends Phaser.Scene {
       doctorHealCost: this.localSkillMods().doctorHealCost,
       extraPockets: this.localExtraPockets(),
     });
+  }
+
+  private sendMapMarkers(markers: MapMarker[]) {
+    if (!this.room) return;
+    const message: ClientMessage = {
+      type: "setMapMarkers",
+      payload: { markers },
+    };
+    this.room.send("action", message);
   }
 
   private sendQuestAccept(questId: string, npcId?: string) {

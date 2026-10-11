@@ -227,9 +227,9 @@ function questFromMilitiaTask(
 /** Migrated Red Order dog-tag turn-in (was RED_ORDER_ASHEN_PATROL_TASK). */
 export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
   id: "ashen_patrol_dogtags",
-  title: "Ashen Patrol Dog Tags",
+  title: "National Guard Dog Tags",
   description:
-    "Ashen Militia patrols have been a problem. Bring Red Order one set of dog tags. Once a day.",
+    "National Guard patrols have been a problem. Bring Red Order one set of dog tags. Once a day.",
   faction: "redOrder",
   giver: "redOrder",
   dialogLineId: "jobs",
@@ -240,7 +240,7 @@ export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
     {
       id: "turn_in_dogtag",
       kind: "turnInItem",
-      label: "Turn in Ashen dog tags",
+      label: "Turn in National Guard dog tags",
       itemId: "dogtag",
       quantity: 1,
       count: 1,
@@ -680,7 +680,7 @@ export const QUEST_LEFT_ON_THE_DESK_FIND_OBJECTIVE = "find_supply_list";
  * Kevin's board at the Birchport market.
  * Repeatable rows are daily and always posted.
  * Two unfinished one-time rows show at a time, in the order below.
- * Turning one in opens the next. Reputation is Ashen Traders, never the militia.
+ * Turning one in opens the next. Reputation is Ashen Traders, never the National Guard.
  */
 export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
   {
@@ -886,7 +886,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_LEFT_ON_THE_DESK,
     title: "Left on the Desk",
     description:
-      "A militia patrol will not radio a supply order. The Red Order and bandits listen. They left the list in the manager's office of a department store in another city. Find it in the office furniture and bring it to Kevin. One time.",
+      "A National Guard patrol will not radio a supply order. The Red Order and bandits listen. They left the list in the manager's office of a department store in another city. Find it in the office furniture and bring it to Kevin. One time.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",

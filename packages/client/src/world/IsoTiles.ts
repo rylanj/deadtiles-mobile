@@ -6,6 +6,9 @@ import {
   getBirchportGraveAt,
   getCellarAt,
   getBuildingAt,
+  borderWallFootprint,
+  getBorderWallAt,
+  isBorderGate,
   getFencesAt,
   getStreetlightAt,
   getStreetTileType,
@@ -47,6 +50,7 @@ import {
 } from "../gameConfig";
 import {
   createGroundTileImage,
+  groundTileDisplayTexture,
   TILE_DISPLAY_BLEED,
 } from "./TileTextures";
 import {
@@ -92,12 +96,16 @@ import {
   OCCLUSION_OVERLAY_DEPTH,
 } from "./BuildingOcclusion";
 import {
+  borderGateTextureKey,
+  borderWallTextureKey,
   fenceCornerFromFacings,
   fenceCornerTextureKey,
   fenceTextureKey,
+  layoutBorderWallImage,
   type FenceCorner,
 } from "../sprites/FenceAssets";
 import { renderStats } from "../diagnostics/textureBudget";
+import { framePerf } from "../diagnostics/framePerf";
 import {
   cellarTextureKey,
   graveTextureKey,
@@ -115,13 +123,17 @@ import {
   applyBuildingTreeDepth,
   applyBuildingStreetlightDepth,
   applyBuildingFenceDepth,
+  borderWallSortDepth,
+  chainLinkFenceSortDepth,
   playerWallOccluderDepth,
+  tuckBehindBorderWalls,
   tuckBehindPlayerWalls,
 } from "./depthSort";
 
 export {
   applyFurnitureEntityDepth,
   applyOverworldStructureEntityDepth,
+  borderWallSortDepth,
   buildingWallDepth,
   chainLinkFenceCornerDepthFootprint,
   chainLinkFenceCornerSortDepth,
@@ -242,6 +254,7 @@ const SOLID_BUILDINGS_PER_SYNC = IS_MOBILE ? 4 : 12;
  * so it is budgeted like cold bakes rather than done for the whole view at once.
  */
 const BUILDING_LOD_UPDATES_PER_SYNC = IS_MOBILE ? 3 : 16;
+const BUILDING_LOD_TIME_BUDGET_MS = IS_MOBILE ? 4 : 6;
 
 /**
  * Screen slack around the viewport for the near (3x supersampled) bake tier.
@@ -536,18 +549,69 @@ function inwardEdgeBands(prev: ViewRect, next: ViewRect): EdgeBand[] {
   return bands;
 }
 
+export type GroundTileObject = Phaser.GameObjects.Image | Phaser.GameObjects.Bob;
+
+/**
+ * One Blitter per ground texture per layer. Zoomed out, the view holds ~40k
+ * ground tiles; as Images they cost ~0.45us each to render (about 18ms a
+ * frame). Bobs draw the same unscaled frame for a fraction of that.
+ */
+const groundBlitters = new WeakMap<
+  Phaser.GameObjects.Container,
+  Map<string, Phaser.GameObjects.Blitter>
+>();
+
 export function createGroundTile(
   scene: Phaser.Scene,
   x: number,
   y: number,
   parent: Phaser.GameObjects.Container,
   baseKey = "tile-ground",
-): Phaser.GameObjects.Image | null {
-  const tile = createGroundTileImage(scene, x, y, baseKey);
-  if (!tile) return null;
-  tile.setDepth(groundSortDepth(x, y));
-  parent.add(tile);
-  return tile;
+): GroundTileObject | null {
+  const display = groundTileDisplayTexture(scene, baseKey);
+  if (!display) return null;
+  if (!display.native) {
+    // Fallback art that needs scaling to the tile canvas: Bobs cannot scale.
+    const tile = createGroundTileImage(scene, x, y, baseKey);
+    if (!tile) return null;
+    tile.setDepth(groundSortDepth(x, y));
+    parent.add(tile);
+    return tile;
+  }
+  let byKey = groundBlitters.get(parent);
+  if (!byKey) {
+    byKey = new Map();
+    groundBlitters.set(parent, byKey);
+  }
+  const blitterFor = (key: string) => {
+    let b = byKey!.get(key);
+    if (!b || !b.scene) {
+      b = scene.add.blitter(0, 0, key);
+      parent.add(b);
+      byKey!.set(key, b);
+    }
+    return b;
+  };
+  // Grass first so concrete/barracks bleed always paints over it, whatever
+  // order the tiles happen to stream in.
+  if (baseKey !== "tile-ground") {
+    const grass = groundTileDisplayTexture(scene, "tile-ground");
+    if (grass?.native) blitterFor(grass.key);
+  }
+  const blitter = blitterFor(display.key);
+  const iso = cartesianToIso(x + 0.5, y + 0.5);
+  return blitter.create(iso.x - display.width / 2, iso.y - display.height / 2);
+}
+
+export function destroyGroundTileObject(
+  parent: Phaser.GameObjects.Container,
+  tile: GroundTileObject,
+) {
+  if (tile instanceof Phaser.GameObjects.Bob) {
+    tile.destroy();
+  } else {
+    parent.remove(tile, true);
+  }
 }
 
 function treeTextureKey(variant: number): string {
@@ -653,7 +717,8 @@ function yardFenceInFrontOfTree(tx: number, ty: number): boolean {
 /** Sort depth for a tree sprite (matches createTreeSprite). */
 export function treeRenderDepth(tree: TreeInfo): number {
   const base = entityRenderDepth(tree.ox + 0.5, tree.oy + 0.5);
-  const depth = applyBuildingTreeDepth(base, tree.ox, tree.oy);
+  let depth = applyBuildingTreeDepth(base, tree.ox, tree.oy);
+  depth = tuckBehindBorderWalls(depth, tree.ox, tree.oy);
   if (playerWallOccluderDepth(tree.ox, tree.oy) == null) return depth;
   if (!yardFenceInFrontOfTree(tree.ox, tree.oy)) return depth;
   return tuckBehindPlayerWalls(depth, tree.ox, tree.oy);
@@ -965,47 +1030,107 @@ function curbEndPad(isCorner: boolean) {
   return isCorner ? 0 : CURB_OPEN_END_PX;
 }
 
+type CurbRun = { from: number; to: number };
+
+/**
+ * Extent of the curb run through each curb tile. Walking a run costs a
+ * worldgen lookup per tile, and every pavement tile used to walk its whole
+ * street (40-60ms per road tile on long avenues). Each run is walked once
+ * and shared by all of its tiles.
+ */
+const curbRunCache = new Map<string, CurbRun>();
+const CURB_RUN_CACHE_MAX = 60_000;
+
+function cacheCurbRun(prefix: string, fixed: number, run: CurbRun) {
+  if (curbRunCache.size + (run.to - run.from + 1) > CURB_RUN_CACHE_MAX) {
+    curbRunCache.clear();
+  }
+  for (let i = run.from; i <= run.to; i++) {
+    curbRunCache.set(
+      prefix === "S" ? `S${i},${fixed}` : `E${fixed},${i}`,
+      run,
+    );
+  }
+}
+
+function curbRunSouth(x: number, y: number): CurbRun {
+  const cached = curbRunCache.get(`S${x},${y}`);
+  if (cached) return cached;
+  let x0 = x;
+  let x1 = x;
+  while (hasCurbSouth(x0 - 1, y)) x0--;
+  while (hasCurbSouth(x1 + 1, y)) x1++;
+  const run = { from: x0, to: x1 };
+  cacheCurbRun("S", y, run);
+  return run;
+}
+
+function curbRunEast(x: number, y: number): CurbRun {
+  const cached = curbRunCache.get(`E${x},${y}`);
+  if (cached) return cached;
+  let y0 = y;
+  let y1 = y;
+  while (hasCurbEast(x, y0 - 1)) y0--;
+  while (hasCurbEast(x, y1 + 1)) y1++;
+  const run = { from: y0, to: y1 };
+  cacheCurbRun("E", x, run);
+  return run;
+}
+
+/**
+ * Curb lips go on their own layer above every road diamond, so a run only
+ * needs drawing once per chunk. `drawnRuns` is that chunk's record.
+ */
 function drawCurbRunsThrough(
-  g: Phaser.GameObjects.Graphics,
+  curbs: Phaser.GameObjects.Graphics,
+  drawnRuns: Set<string>,
   x: number,
   y: number,
 ) {
-  if (hasCurbSouth(x, y)) {
-    let x0 = x;
-    let x1 = x;
-    while (hasCurbSouth(x0 - 1, y)) x0--;
-    while (hasCurbSouth(x1 + 1, y)) x1++;
-    fillCurbRun(
-      g,
-      x0,
-      y + 1,
-      x1 + 1,
-      y + 1,
-      CURB_SW,
-      curbEndPad(hasCurbWest(x0, y)),
-      curbEndPad(hasCurbEast(x1, y)),
-    );
+  const south = hasCurbSouth(x, y);
+  const east = hasCurbEast(x, y);
+  if (south) {
+    const run = curbRunSouth(x, y);
+    const key = `S${run.from},${y}`;
+    if (!drawnRuns.has(key)) {
+      drawnRuns.add(key);
+      fillCurbRun(
+        curbs,
+        run.from,
+        y + 1,
+        run.to + 1,
+        y + 1,
+        CURB_SW,
+        curbEndPad(hasCurbWest(run.from, y)),
+        curbEndPad(hasCurbEast(run.to, y)),
+      );
+    }
   }
-  if (hasCurbEast(x, y)) {
-    let y0 = y;
-    let y1 = y;
-    while (hasCurbEast(x, y0 - 1)) y0--;
-    while (hasCurbEast(x, y1 + 1)) y1++;
-    fillCurbRun(
-      g,
-      x + 1,
-      y0,
-      x + 1,
-      y1 + 1,
-      CURB_SE,
-      curbEndPad(hasCurbNorth(x, y0)),
-      curbEndPad(hasCurbSouth(x, y1)),
-    );
+  if (east) {
+    const run = curbRunEast(x, y);
+    const key = `E${x},${run.from}`;
+    if (!drawnRuns.has(key)) {
+      drawnRuns.add(key);
+      fillCurbRun(
+        curbs,
+        x + 1,
+        run.from,
+        x + 1,
+        run.to + 1,
+        CURB_SE,
+        curbEndPad(hasCurbNorth(x, run.from)),
+        curbEndPad(hasCurbSouth(x, run.to)),
+      );
+    }
   }
 
   // Only the camera-facing SE/SW lips. NE/NW sit behind the walk top.
-  if (hasCurbSouth(x, y) && hasCurbEast(x, y)) {
-    fillCurbCornerCap(g, x + 1, y + 1, CURB_SW);
+  if (south && east) {
+    const key = `C${x},${y}`;
+    if (!drawnRuns.has(key)) {
+      drawnRuns.add(key);
+      fillCurbCornerCap(curbs, x + 1, y + 1, CURB_SW);
+    }
   }
 }
 
@@ -1027,18 +1152,21 @@ function fillCurbCornerCap(
   );
 }
 
-function drawPavementTile(g: Phaser.GameObjects.Graphics, x: number, y: number) {
+function drawPavementTile(
+  chunk: TrackedStreetChunk,
+  x: number,
+  y: number,
+) {
   const n = isoCorner(x, y);
   const e = isoCorner(x + 1, y);
   const s = isoCorner(x + 1, y + 1);
   const w = isoCorner(x, y + 1);
-  fillIsoQuad(g, n, e, s, w, WALK_TOP);
-  // Lip last so a later road diamond cannot leave a notch at the tile join.
-  drawCurbRunsThrough(g, x, y);
+  fillIsoQuad(chunk.graphics, n, e, s, w, WALK_TOP);
+  drawCurbRunsThrough(chunk.curbs, chunk.curbRuns, x, y);
 }
 
 function stampPavementAroundRoad(
-  g: Phaser.GameObjects.Graphics,
+  chunk: TrackedStreetChunk,
   x: number,
   y: number,
 ) {
@@ -1046,14 +1174,14 @@ function stampPavementAroundRoad(
     for (let dx = -1; dx <= 1; dx++) {
       if (dx === 0 && dy === 0) continue;
       if (isPavementTile(x + dx, y + dy)) {
-        drawPavementTile(g, x + dx, y + dy);
+        drawPavementTile(chunk, x + dx, y + dy);
       }
     }
   }
 }
 
 function drawStreetTile(
-  g: Phaser.GameObjects.Graphics,
+  chunk: TrackedStreetChunk,
   x: number,
   y: number,
   ttype: TileType,
@@ -1062,13 +1190,20 @@ function drawStreetTile(
   const hh = (TILE_HEIGHT + TILE_DISPLAY_BLEED) / 2;
 
   if (ttype === TileType.Pavement) {
-    drawPavementTile(g, x, y);
+    drawPavementTile(chunk, x, y);
     return;
   }
 
   const center = cartesianToIso(x + 0.5, y + 0.5);
-  fillStreetDiamond(g, center.x, center.y + STREET_RECESS, hw, hh, 0x3a3b3c);
-  stampPavementAroundRoad(g, x, y);
+  fillStreetDiamond(
+    chunk.graphics,
+    center.x,
+    center.y + STREET_RECESS,
+    hw,
+    hh,
+    0x3a3b3c,
+  );
+  stampPavementAroundRoad(chunk, x, y);
 }
 
 /**
@@ -1325,6 +1460,10 @@ function buildingLodForDistance(
 
 type TrackedStreetChunk = {
   graphics: Phaser.GameObjects.Graphics;
+  /** Curb lips, on curbLayer so they always sit above road diamonds. */
+  curbs: Phaser.GameObjects.Graphics;
+  /** Curb runs and corner caps already drawn into `curbs`. */
+  curbRuns: Set<string>;
   /** Tile keys actually drawn into this chunk (road/pavement only). */
   tiles: Set<string>;
 };
@@ -1338,10 +1477,11 @@ export class WorldTileManager {
   /** Grass / concrete sit behind streets so bleed cannot cover sidewalk edges. */
   private grassLayer: Phaser.GameObjects.Container;
   private streetLayer: Phaser.GameObjects.Container;
+  private curbLayer: Phaser.GameObjects.Container;
   /** Open grass sprites keyed by tileKey. */
-  private grassTiles = new Map<string, Phaser.GameObjects.Image>();
+  private grassTiles = new Map<string, GroundTileObject>();
   /** Tree-underlay grass sprites keyed by tileKey. */
-  private treeGroundTiles = new Map<string, Phaser.GameObjects.Image>();
+  private treeGroundTiles = new Map<string, GroundTileObject>();
   private streetChunks = new Map<string, TrackedStreetChunk>();
   /** Sparse dirt/debris/plant decals on road and pavement tiles. */
   private streetDecalObjects = new Map<string, Phaser.GameObjects.Image>();
@@ -1365,6 +1505,8 @@ export class WorldTileManager {
   private cellarObjects = new Map<string, Phaser.GameObjects.Image>();
   /** Fence sprites keyed by `tx,ty,facing`. */
   private fenceObjects = new Map<string, Phaser.GameObjects.Image>();
+  /** County border panels keyed by origin `ox,oy`. */
+  private borderWallObjects = new Map<string, Phaser.GameObjects.Image>();
   private buildingHighlight: Phaser.GameObjects.Graphics;
   private interactionHighlight: Phaser.GameObjects.Graphics;
   /** High-depth copy of the loot diamond, masked to building/tree pixels. */
@@ -1406,7 +1548,8 @@ export class WorldTileManager {
     this.groundLayer.setDepth(GROUND_LAYER_DEPTH);
     this.grassLayer = scene.add.container(0, 0);
     this.streetLayer = scene.add.container(0, 0);
-    this.groundLayer.add([this.grassLayer, this.streetLayer]);
+    this.curbLayer = scene.add.container(0, 0);
+    this.groundLayer.add([this.grassLayer, this.streetLayer, this.curbLayer]);
     this.buildingHighlight = scene.add.graphics();
     this.interactionHighlight = scene.add.graphics();
     this.interactionHighlightOccluded = scene.add.graphics();
@@ -1418,7 +1561,10 @@ export class WorldTileManager {
   setOverworldVisible(visible: boolean) {
     this.overworldHidden = !visible;
     this.groundLayer.setVisible(visible);
-    for (const chunk of this.streetChunks.values()) chunk.graphics.setVisible(visible);
+    for (const chunk of this.streetChunks.values()) {
+      chunk.graphics.setVisible(visible);
+      chunk.curbs.setVisible(visible);
+    }
     for (const b of this.buildingObjects.values()) b.cuboid.display.setVisible(visible);
     for (const b of this.buildingCache.values()) b.cuboid.display.setVisible(false);
     for (const t of this.treeObjects.values()) t.setVisible(visible);
@@ -1426,6 +1572,7 @@ export class WorldTileManager {
     for (const g of this.graveObjects.values()) g.setVisible(visible);
     for (const c of this.cellarObjects.values()) c.setVisible(visible);
     for (const f of this.fenceObjects.values()) f.setVisible(visible);
+    for (const w of this.borderWallObjects.values()) w.setVisible(visible);
     for (const d of this.edgeDecalObjects.values()) d.setVisible(visible);
     for (const d of this.streetDecalObjects.values()) d.setVisible(visible);
     for (const p of this.puddleObjects.values()) {
@@ -1706,7 +1853,11 @@ export class WorldTileManager {
       const graphics = this.scene.add.graphics();
       graphics.setDepth(groundSortDepth(chunkX, chunkY));
       this.streetLayer.add(graphics);
-      chunk = { graphics, tiles: new Set() };
+      const curbs = this.scene.add.graphics();
+      curbs.setDepth(groundSortDepth(chunkX, chunkY));
+      curbs.setVisible(graphics.visible);
+      this.curbLayer.add(curbs);
+      chunk = { graphics, curbs, curbRuns: new Set(), tiles: new Set() };
       this.streetChunks.set(key, chunk);
     }
     return chunk;
@@ -1715,14 +1866,14 @@ export class WorldTileManager {
   private destroyGroundTile(key: string) {
     const grass = this.grassTiles.get(key);
     if (grass) {
-      this.grassLayer.remove(grass, true);
+      destroyGroundTileObject(this.grassLayer, grass);
       this.grassTiles.delete(key);
       return;
     }
 
     const treeTile = this.treeGroundTiles.get(key);
     if (treeTile) {
-      this.grassLayer.remove(treeTile, true);
+      destroyGroundTileObject(this.grassLayer, treeTile);
       this.treeGroundTiles.delete(key);
     }
   }
@@ -1830,6 +1981,50 @@ export class WorldTileManager {
       const depth = this.depthForFenceObject(key);
       if (img.depth !== depth) img.setDepth(depth);
     }
+    for (const [key, img] of this.borderWallObjects) {
+      const comma = key.indexOf(",");
+      const ox = parseInt(key.slice(0, comma), 10);
+      const oy = parseInt(key.slice(comma + 1), 10);
+      const wall = getBorderWallAt(ox, oy);
+      if (!wall) continue;
+      const depth = borderWallSortDepth(wall.ox, wall.oy, wall.facing);
+      if (img.depth !== depth) img.setDepth(depth);
+    }
+  }
+
+  /** Ground plus one sprite for the panel that owns this border tile. */
+  private placeBorderWallTile(
+    x: number,
+    y: number,
+    border: { ox: number; oy: number; facing: "SE" | "SW" },
+  ) {
+    const key = tileKey(x, y);
+    this.destroyGroundTile(key);
+    if (!this.treeGroundTiles.has(key)) {
+      const ground = createGroundTile(this.scene, x, y, this.grassLayer);
+      if (ground) this.treeGroundTiles.set(key, ground);
+    }
+    const spriteKey = `${border.ox},${border.oy}`;
+    if (!this.borderWallObjects.has(spriteKey)) {
+      const tex = isBorderGate(border.ox, border.oy)
+        ? borderGateTextureKey(border.facing)
+        : borderWallTextureKey(border.facing);
+      const texture = this.scene.textures.exists(tex) ? tex : "__DEFAULT";
+      const img = this.scene.add.image(0, 0, texture);
+      layoutBorderWallImage(img, border.ox, border.oy, border.facing);
+      img.setDepth(borderWallSortDepth(border.ox, border.oy, border.facing));
+      if (this.overworldHidden) img.setVisible(false);
+      this.borderWallObjects.set(spriteKey, img);
+    }
+    const street = getStreetTileType(x, y);
+    this.minimapKinds.set(
+      key,
+      street === TileType.Road
+        ? "road"
+        : street === TileType.Pavement
+          ? "pavement"
+          : "floor",
+    );
   }
 
   private depthForFenceObject(key: string): number {
@@ -2022,9 +2217,16 @@ export class WorldTileManager {
 
         if (alreadyDrawn) continue;
 
+        const opT0 = framePerf.on ? performance.now() : 0;
+        let opTType = -1;
         try {
           const ttype = generateTile(x, y);
+          opTType = ttype;
           if (ttype === TileType.Wall) {
+            const border = getBorderWallAt(x, y);
+            if (border) {
+              this.placeBorderWallTile(x, y, border);
+            } else {
             const bld = getBuildingAt(x, y);
             if (bld) {
               const bldKey = tileKey(bld.ox, bld.oy);
@@ -2049,7 +2251,11 @@ export class WorldTileManager {
                       return true;
                     }
                     budget.solids--;
+                    const solidT0 = framePerf.on ? performance.now() : 0;
                     this.placeSolidBuilding(bld);
+                    if (framePerf.on) {
+                      framePerf.op("solidBuilding", performance.now() - solidT0);
+                    }
                   }
                   this.deferredBuildings.set(bldKey, bld);
                   this.drawn.add(key);
@@ -2069,7 +2275,7 @@ export class WorldTileManager {
                   getStreetTileType(x, y) ?? TileType.Pavement;
                 this.destroyGroundTile(key);
                 const chunk = this.getStreetChunk(x, y);
-                drawStreetTile(chunk.graphics, x, y, streetUnder);
+                drawStreetTile(chunk, x, y, streetUnder);
                 chunk.tiles.add(key);
                 this.ensureStreetDecal(x, y, streetUnder);
                 this.ensurePuddleSite(x, y);
@@ -2183,10 +2389,11 @@ export class WorldTileManager {
                 }
               }
             }
+            }
           } else if (ttype === TileType.Road || ttype === TileType.Pavement) {
             this.destroyGroundTile(key);
             const chunk = this.getStreetChunk(x, y);
-            drawStreetTile(chunk.graphics, x, y, ttype);
+            drawStreetTile(chunk, x, y, ttype);
             chunk.tiles.add(key);
             this.ensureStreetDecal(x, y, ttype);
             this.ensurePuddleSite(x, y);
@@ -2240,6 +2447,9 @@ export class WorldTileManager {
         } catch (err) {
           console.error(`Failed to draw tile ${key}`, err);
           // Leave undrawn so a later pass can retry; budget already charged.
+        }
+        if (framePerf.on) {
+          framePerf.op(`tile:type${opTType}`, performance.now() - opT0);
         }
       }
     }
@@ -2490,7 +2700,9 @@ export class WorldTileManager {
       if (!this.deferredBuildings.has(key)) continue;
       this.deferredBuildings.delete(key);
       budget.buildings--;
+      const opT0 = framePerf.on ? performance.now() : 0;
       if (!this.placeBuilding(bld)) this.markBuildingFootprintDrawn(bld);
+      if (framePerf.on) framePerf.op("bakeBuilding", performance.now() - opT0);
     }
   }
 
@@ -2571,6 +2783,9 @@ export class WorldTileManager {
       this.edgeWorkPending() ||
       this.deferredBuildings.size > 0;
 
+    const perf = framePerf.on ? framePerf : null;
+    perf?.lap("tiles:prep");
+
     // Stable view with nothing queued: a short underfoot pass, then warm
     // worldgen while the paint budget is free.
     if (!viewStale && !fillPending) {
@@ -2599,7 +2814,9 @@ export class WorldTileManager {
           1,
         );
       }
+      perf?.lap("tiles:idleScan");
       this.refreshBuildingLods();
+      perf?.lap("tiles:lods");
       return;
     }
 
@@ -2621,6 +2838,7 @@ export class WorldTileManager {
       // Growing the view cannot expose a tile that was inside the old cull
       // ring, so skip the full sprite walk on zoom-out.
       if (!viewGrew) this.cullFarObjects();
+      perf?.lap("tiles:cull");
 
       let addedBands = 0;
       if (!hadView || jump) {
@@ -2653,6 +2871,7 @@ export class WorldTileManager {
       if (addedBands <= 8) {
         preWarmCellsNearPlayer(cx, cy, keepDist, PREWARM_CELLS_PER_FRAME);
       }
+      perf?.lap("tiles:prewarm");
 
       if (playerMoved || !hadSync) this.lastSyncTile = { x: cx, y: cy };
       this.lastView = { ...region };
@@ -2672,6 +2891,7 @@ export class WorldTileManager {
     // Waiting until the edge fill finished left every new lot empty.
     this.dropOutsideDeferredBuildings();
     this.drainDeferredBuildings(budget);
+    perf?.lap("tiles:deferredBakes");
 
     this.syncTileRegion(
       Math.max(this.view.minX, cx - PRIORITY_FILL_RADIUS),
@@ -2685,6 +2905,7 @@ export class WorldTileManager {
         deferBuildings: true,
       },
     );
+    perf?.lap("tiles:underfoot");
 
     if (this.tilesRemainingInRegion) {
       const wasRemaining = this.tilesRemainingInRegion;
@@ -2705,26 +2926,32 @@ export class WorldTileManager {
         this.refreshAllTreeDepths();
       }
     }
+    perf?.lap("tiles:viewScan");
 
     this.drainEdgeBands(budget);
+    perf?.lap("tiles:edgeBands");
 
     this.dropOutsideDeferredBuildings();
     if (performance.now() < budget.deadline) {
       this.drainDeferredBuildings(budget);
     }
+    perf?.lap("tiles:deferredBakes");
 
     const revealing =
       this.tilesRemainingInRegion ||
       this.edgeWorkPending() ||
       this.deferredBuildings.size > 0;
     if (!revealing) this.refreshBuildingLods();
+    perf?.lap("tiles:lods");
 
     if (viewStale) {
       const snapCx = cx;
       const snapCy = cy;
       const snapKeep = keepDist;
       setTimeout(() => {
+        const t0 = framePerf.on ? performance.now() : 0;
         evictDistantCells(snapCx, snapCy, snapKeep);
+        if (framePerf.on) framePerf.op("evictCells", performance.now() - t0);
       }, 0);
     }
   }
@@ -2918,9 +3145,13 @@ export class WorldTileManager {
       this.evictCachedBuildings(IS_MOBILE ? 0 : 16);
     }
 
+    // Count alone let 16 re-bakes land in one frame (160ms+ after a zoom).
+    // Leftovers stay pending and this pass re-runs every stable frame.
+    const deadline = performance.now() + BUILDING_LOD_TIME_BUDGET_MS;
     let remaining = budget;
     for (const { key, tracked, bld, want, healing, dist } of pending) {
       if (remaining <= 0) break;
+      if (remaining < budget && performance.now() >= deadline) break;
 
       remaining -= 1;
       const depth = buildingWallDepth(bld);
@@ -3140,7 +3371,7 @@ export class WorldTileManager {
       const ty = parseInt(key.slice(comma + 1), 10);
       if (!outside(tx, ty, tx, ty)) continue;
       grassToRemove.push(key);
-      this.grassLayer.remove(img, true);
+      destroyGroundTileObject(this.grassLayer, img);
     }
     for (const key of grassToRemove) {
       this.grassTiles.delete(key);
@@ -3180,6 +3411,7 @@ export class WorldTileManager {
         this.clearPuddleSite(tile);
       }
       chunk.graphics.destroy();
+      chunk.curbs.destroy();
     }
     for (const key of chunkKeysToRemove) {
       this.streetChunks.delete(key);
@@ -3296,6 +3528,31 @@ export class WorldTileManager {
       this.minimapKinds.delete(tile);
       this.destroyGroundTile(tile);
     }
+
+    const borderKeysToRemove: string[] = [];
+    for (const [key, img] of this.borderWallObjects) {
+      const comma = key.indexOf(",");
+      const ox = parseInt(key.slice(0, comma), 10);
+      const oy = parseInt(key.slice(comma + 1), 10);
+      const wall = getBorderWallAt(ox, oy);
+      const footprint = wall
+        ? borderWallFootprint(wall.facing)
+        : { w: 4, h: 1 };
+      const w = footprint.w;
+      const h = footprint.h;
+      if (!outside(ox, oy, ox + w - 1, oy + h - 1)) continue;
+      borderKeysToRemove.push(key);
+      img.destroy();
+      for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+          const tile = tileKey(ox + dx, oy + dy);
+          this.drawn.delete(tile);
+          this.minimapKinds.delete(tile);
+          this.destroyGroundTile(tile);
+        }
+      }
+    }
+    for (const key of borderKeysToRemove) this.borderWallObjects.delete(key);
   }
 
   /** Visible streetlight sprites, for night lamp pools. */

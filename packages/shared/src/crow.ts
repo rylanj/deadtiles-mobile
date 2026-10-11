@@ -7,7 +7,11 @@ import {
   isWoodedForestAt,
   seededRandom,
 } from "./worldgen.js";
-import { INITIAL_WORLD_BOUNDS, type WorldBounds } from "./worldBounds.js";
+import {
+  INITIAL_WORLD_BOUNDS,
+  isNearBorderWall,
+  type WorldBounds,
+} from "./worldBounds.js";
 
 /** One crow site per this many tiles. Most wooded cells still roll empty. */
 export const CROW_CELL = 96;
@@ -112,6 +116,7 @@ export function rollCrowMeatQuantity(id: string): number {
 }
 
 function perchTileOk(tx: number, ty: number, bounds: WorldBounds): boolean {
+  if (isNearBorderWall(tx, ty)) return false;
   if (!isWoodedForestAt(tx, ty)) return false;
   if (isInBirchport(tx + 0.5, ty + 0.5)) return false;
   if (isInBirchportBarracks(tx, ty)) return false;

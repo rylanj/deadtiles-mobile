@@ -5,6 +5,7 @@ import {
   SUB_SKILLS_BY_PARENT,
   SUB_SKILL_LABELS,
   SUB_SKILL_BENEFIT,
+  ASHEN_MILITIA_FACTION,
   FIELD_GUIDE_PAGES,
   canAbandonQuest,
   listTrackedJournalQuests,
@@ -101,7 +102,7 @@ const REP_FACTIONS: readonly QuestFaction[] = [
 
 function reputationLabel(faction: QuestFaction): string {
   if (faction === "ashenTraders") return "Ashen Traders reputation";
-  if (faction === "ashenMilitia") return "Ashen Militia reputation";
+  if (faction === "ashenMilitia") return `${ASHEN_MILITIA_FACTION} reputation`;
   if (faction === "redOrder") return "Red Order reputation";
   return "reputation";
 }

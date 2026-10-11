@@ -453,6 +453,12 @@ const CART_BOTTOM_PAD = -Math.round(CART_RENDER_HEIGHT * 0.05);
 const RETAIL_CASE_RENDER_HEIGHT = Math.round(SUPERSHELF_RENDER_HEIGHT * 0.8);
 /** Feet sit 21px above the canvas bottom. */
 const RETAIL_CASE_BOTTOM_PAD = Math.round(RETAIL_CASE_RENDER_HEIGHT * (21 / 256));
+/** GunRack1-4 — same sit as the glass cases, then raise by 5% of display height. */
+const GUNRACK_BOTTOM_PAD =
+  RETAIL_CASE_BOTTOM_PAD - Math.round(RETAIL_CASE_RENDER_HEIGHT * 0.05);
+/** GunCase1-3 — same sit, then lower by 2.5% of display height. */
+const GUNCASE_BOTTOM_PAD =
+  RETAIL_CASE_BOTTOM_PAD + Math.round(RETAIL_CASE_RENDER_HEIGHT * 0.03);
 /** SuperFridge1 — commercial drink cooler bank. */
 const SUPERFRIDGE_RENDER_HEIGHT = Math.round(FURNITURE_RENDER_HEIGHT * 1.25);
 /** SuperFridge1 — lower by 10% of display height. */
@@ -787,6 +793,8 @@ function furnitureBottomPad(objectType: string): number {
   }
   if (objectType === "mannequin3") return MANNEQUIN_CHILD_BOTTOM_PAD;
   if (objectType === "cart1" || objectType === "cart2") return CART_BOTTOM_PAD;
+  if (objectType.startsWith("gunrack")) return GUNRACK_BOTTOM_PAD;
+  if (objectType.startsWith("guncase")) return GUNCASE_BOTTOM_PAD;
   if (
     objectType === "retailcase1" ||
     objectType === "retailcase2" ||

@@ -63,7 +63,7 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
     npc: [
       "Red Order. We hold city blocks. Ashen stay out.",
       "Red Order. We hold parts of the cities and put people to work keeping them that way. If you're looking for the Ashen, try somewhere else. We don't share streets with them.",
-      "We're the Red Order. City crews, red armbands. We clear buildings, put survivors to work, and keep Ashen Militia off our turf. You won't find their checkpoints in our streets.",
+      "We're the Red Order. City crews, red armbands. We clear buildings, put survivors to work, and keep the National Guard off our turf. You won't find their checkpoints in our streets.",
       "Name's Red Order. We take city ground and keep it. Ashen run their county roads. We don't share.",
     ],
   },
@@ -71,10 +71,10 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
     id: "join",
     player: "How do I get in?",
     npc: [
-      "Show up useful. Killing Ashen Militia helps.",
-      "You don't ask. You show up useful. Killing Ashen Militia helps. They're armored and they look out for each other, so don't treat it like target practice.",
-      "Nobody fills out a form. Bring proof you can handle Ashen Militia: dog tags from their patrols. They're armored, they fight as a group, and they don't forget. Do that and people start noticing.",
-      "Earn it. Hit Ashen patrols, bring dog tags, don't get yourself killed. Asking alone doesn't get you an armband.",
+      "Show up useful. Killing National Guard patrols helps.",
+      "You don't ask. You show up useful. Killing National Guard patrols helps. They're armored and they look out for each other, so don't treat it like target practice.",
+      "Nobody fills out a form. Bring proof you can handle the National Guard: dog tags from their patrols. They're armored, they fight as a group, and they don't forget. Do that and people start noticing.",
+      "Earn it. Hit National Guard patrols, bring dog tags, don't get yourself killed. Asking alone doesn't get you an armband.",
     ],
   },
   {
@@ -102,9 +102,9 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
     player: "What's your problem with the Ashen?",
     npc: [
       "They hold checkpoints and leave towns hollow. We stay.",
-      "Militia hold checkpoints and call it order. Traders move scrap and call it a market. Both leave towns hollow. We stay and rebuild.",
-      "Ashen Militia lock down roads and settlements in their county. Their traders skim the leftovers. Neither of them rebuilds a city block. We clear buildings, put people to work, and keep the walkers out of our streets.",
-      "Militia play sheriff on the roads. Traders chase scrap. We hold ground that actually matters.",
+      "The National Guard holds checkpoints and calls it order. Traders move scrap and call it a market. Both leave towns hollow. We stay and rebuild.",
+      "The National Guard locks down roads. Birchport is their hub in this county, and they've got smaller outposts besides. Their traders skim the leftovers. Neither of them rebuilds a city block. We clear buildings, put people to work, and keep the walkers out of our streets.",
+      "The National Guard plays sheriff on the roads. Traders chase scrap. We hold ground that actually matters.",
     ],
   },
   {
@@ -112,8 +112,8 @@ export const RED_ORDER_DIALOG_LINES: readonly RedOrderDialogLine[] = [
     player: "Do you have any jobs for me?",
     npc: [
       "Dog tags. Rags for armbands. A gold ring if you find one. A warehouse if you can clear it.",
-      "Ashen Militia patrols have been a problem. Bring dog tags. We also take rags, a gold ring, and a cleared warehouse.",
-      "Work's simple: Ashen dog tags, cloth for armbands, a ring to melt, or a warehouse full of walkers. Tags pay best. They're not soft targets.",
+      "National Guard patrols have been a problem. Bring dog tags. We also take rags, a gold ring, and a cleared warehouse.",
+      "Work's simple: National Guard dog tags, cloth for armbands, a ring to melt, or a warehouse full of walkers. Tags pay best. They're not soft targets.",
       "Yes. Tags, rags, a gold ring, or floor space in a warehouse. Pay's decent if you survive it.",
     ],
   },
@@ -156,7 +156,7 @@ export type RedOrderTask = {
   completionWindowMs?: number;
 };
 
-/** Turn-in: Ashen Militia dog tags. Once a day. */
+/** Turn-in: National Guard dog tags. Once a day. */
 export const RED_ORDER_ASHEN_PATROL_TASK: RedOrderTask = {
   id: "ashen_patrol_dogtags",
   dialogLineId: "jobs",
@@ -164,7 +164,7 @@ export const RED_ORDER_ASHEN_PATROL_TASK: RedOrderTask = {
   requireQty: 1,
   rewardBanknotes: 50,
   rewardReputation: 30,
-  label: "Ashen Patrol Dog Tags",
+  label: "National Guard Dog Tags",
   requireItemLabel: "Dog Tags",
   maxCompletionsPerWindow: 1,
   completionWindowMs: RED_ORDER_TASK_WINDOW_MS,

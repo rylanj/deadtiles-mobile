@@ -6,6 +6,9 @@
  * (scripts/check-entity-wall-order.mts, scripts/check-wall-building-order.mts).
  */
 import {
+  ASHEN_COUNTY_GENERATION_BOUNDS,
+  borderWallFootprint,
+  borderWallsNear,
   buildingCuboidScreenDepth,
   type BuildingInfo,
   ENTITY_RENDER_HEIGHT,
@@ -16,6 +19,8 @@ import {
   TILE_HEIGHT,
   TILE_WIDTH,
   WALL_DEPTH,
+  worldMaxX,
+  worldMaxY,
   type StructureFenceFacing,
 } from "@zombie/shared";
 
@@ -230,6 +235,25 @@ export function chainLinkFenceCornerDepthFootprint(
 /** Building walls — slightly above entities when depth keys tie. */
 export function wallRenderDepth(tileX: number, tileY: number) {
   return OBJECT_DEPTH_BAND + isoSortKey(tileX, tileY) + 6;
+}
+
+/**
+ * Tiles a cuboid or fence run can stick past the last generated tile.
+ * Depth still follows that southeast corner.
+ */
+const DEPTH_CEILING_OVERHANG = 64;
+
+/**
+ * Highest painter depth a world sprite can reach inside the generated map.
+ * Night, weather, and other full-screen overlays must sit above this or the
+ * southeast of the county paints over them and stays full bright.
+ */
+export function overworldObjectDepthCeiling(): number {
+  const maxX =
+    worldMaxX(ASHEN_COUNTY_GENERATION_BOUNDS) - 1 + DEPTH_CEILING_OVERHANG;
+  const maxY =
+    worldMaxY(ASHEN_COUNTY_GENERATION_BOUNDS) - 1 + DEPTH_CEILING_OVERHANG;
+  return wallRenderDepth(maxX, maxY) + 16;
 }
 
 /**
@@ -1427,6 +1451,99 @@ export function playerWallOccluderDepth(
     if (top < ceiling) ceiling = top;
   }
   return ceiling < Number.POSITIVE_INFINITY ? ceiling : null;
+}
+
+/**
+ * A border sheet is one sprite keyed at its far origin, so a building or
+ * tree beside the near end outranks that origin and paints over the metal.
+ * Lots on the far side of the sheet, close enough for the cuboid to overlap
+ * it, lift the whole sheet above them. Camera-side lots stay in front.
+ */
+const BORDER_BUILDING_TOUCH_TILES = 2;
+
+const borderWallDepthCache = new Map<string, number>();
+
+export function borderWallSortDepth(
+  ox: number,
+  oy: number,
+  facing: StructureFenceFacing,
+): number {
+  const cacheKey = `${ox},${oy},${facing}`;
+  const cached = borderWallDepthCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let depth = chainLinkFenceSortDepth(ox, oy, facing, true);
+  const { w, h } = borderWallFootprint(facing);
+  const seen = new Set<string>();
+  const samples = [
+    { x: ox, y: oy },
+    { x: ox + w - 1, y: oy + h - 1 },
+  ];
+  for (const sample of samples) {
+    for (const bld of getBuildingsNearTile(sample.x, sample.y, 6)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!buildingSitsBehindBorder(bld, ox, oy, w, h, facing)) continue;
+      const buildingDepth = buildingWallDepth(bld);
+      if (depth <= buildingDepth) depth = buildingDepth + 1;
+    }
+  }
+
+  if (borderWallDepthCache.size > 2048) borderWallDepthCache.clear();
+  borderWallDepthCache.set(cacheKey, depth);
+  return depth;
+}
+
+function buildingSitsBehindBorder(
+  bld: { ox: number; oy: number; w: number; h: number },
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+  facing: StructureFenceFacing,
+): boolean {
+  if (facing === "SE") {
+    // North-south sheet. The camera side is +X.
+    if (bld.ox > ox) return false;
+    if (bld.ox + bld.w - 1 < ox - BORDER_BUILDING_TOUCH_TILES) return false;
+    return bld.oy <= oy + h && bld.oy + bld.h - 1 >= oy - 1;
+  }
+  // East-west sheet. The camera side is +Y.
+  if (bld.oy > oy) return false;
+  if (bld.oy + bld.h - 1 < oy - BORDER_BUILDING_TOUCH_TILES) return false;
+  return bld.ox <= ox + w && bld.ox + bld.w - 1 >= ox - 1;
+}
+
+const BORDER_TREE_DEPTH_REACH = 4;
+
+export function tuckBehindBorderWalls(
+  depth: number,
+  tx: number,
+  ty: number,
+): number {
+  const walls = borderWallsNear(tx, ty, BORDER_TREE_DEPTH_REACH);
+  if (walls.length === 0) return depth;
+  let result = depth;
+  for (const wall of walls) {
+    const size = borderWallFootprint(wall.facing);
+    const footprint: FurnitureDepthFootprint = {
+      ox: wall.ox,
+      oy: wall.oy,
+      w: size.w,
+      h: size.h,
+      partition: true,
+      axis: wall.facing === "SE" ? "ns" : "ew",
+      depth: borderWallSortDepth(wall.ox, wall.oy, wall.facing),
+      entityStep: CHAINLINK_ENTITY_STEP,
+    };
+    if (!isWestOrNorthOfFurniture(tx, ty, footprint, BORDER_TREE_DEPTH_REACH)) {
+      continue;
+    }
+    const wd = footprintSortDepth(footprint);
+    if (result > wd) result = wd - CHAINLINK_ENTITY_STEP;
+  }
+  return result;
 }
 
 /**

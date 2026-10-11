@@ -196,6 +196,19 @@ export function fillSpeechButton(
   button.append(text);
 }
 
+/** Gold map diamond on a speech option that exists for a quest. */
+export function markSpeechQuest(button: HTMLButtonElement): void {
+  const mark = document.createElement("span");
+  mark.className = "red-dialog-speech-quest";
+  mark.setAttribute("aria-hidden", "true");
+  const diamond = document.createElement("span");
+  diamond.className = "red-dialog-speech-quest-diamond";
+  mark.appendChild(diamond);
+  const label = button.querySelector(".red-dialog-speech-label");
+  if (label) button.insertBefore(mark, label);
+  else button.prepend(mark);
+}
+
 /** Thin green fill bar along the bottom of an inventory cell. */
 export function appendItemDurabilityBar(
   parent: HTMLElement,

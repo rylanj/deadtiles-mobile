@@ -1,5 +1,5 @@
 /**
- * Linked Ashen Militia story. Each quest is granted when the previous one
+ * Linked National Guard story. Each quest is granted when the previous one
  * is turned in. They are not posted on the daily board.
  */
 
@@ -72,8 +72,65 @@ export const STORY_OBJECTIVE_HEAR_COLEMAN = "hear_coleman";
 export const STORY_OBJECTIVE_GET_CONFESSION = "get_confession";
 export const STORY_OBJECTIVE_DELIVER_CONFESSION = "deliver_confession";
 
-/** Kevin's full count takes six in-game hours. */
-export const STORY_COUNT_WAIT_MS = Math.round(DAY_LENGTH_MS / 4);
+/** Kevin's full count takes three in-game hours on the world clock. */
+export const STORY_COUNT_WAIT_MS = Math.round((DAY_LENGTH_MS / 24) * 3);
+
+/** One in-game hour, in world-clock milliseconds. */
+const STORY_GAME_HOUR_MS = DAY_LENGTH_MS / 24;
+
+/**
+ * Older readyAt values are unix timestamps from the wall clock.
+ * A world-clock reading never gets this large.
+ */
+const STORY_COUNT_WALL_CLOCK_MS = 1_000_000_000_000;
+
+/**
+ * World-clock moment Kevin finishes the count.
+ * Older saves stored a wall-clock deadline. Those keep whatever real time
+ * is still left, measured from now on the world clock, and never more than
+ * the current three-hour wait.
+ */
+export function resolveStoryCountReadyAt(
+  stored: number | undefined,
+  worldNow: number,
+  wallNow: number,
+): number {
+  if (stored == null || !Number.isFinite(stored) || stored <= 0) return 0;
+  let ready = stored;
+  if (stored >= STORY_COUNT_WALL_CLOCK_MS) {
+    const remain = Math.max(0, stored - wallNow);
+    ready = worldNow + remain;
+  }
+  const cap = worldNow + STORY_COUNT_WAIT_MS;
+  return ready > cap ? cap : ready;
+}
+
+/** "3 more hours", "1 hour and 20 minutes", "another minute". */
+export function formatStoryCountRemaining(remainingMs: number): string {
+  const ms = Math.max(0, remainingMs);
+  const minuteMs = STORY_GAME_HOUR_MS / 60;
+  let hours = Math.floor(ms / STORY_GAME_HOUR_MS);
+  let minutes = Math.ceil((ms - hours * STORY_GAME_HOUR_MS) / minuteMs);
+  if (minutes >= 60) {
+    hours += 1;
+    minutes = 0;
+  }
+  if (hours <= 0 && minutes <= 0) minutes = 1;
+
+  const hourWord = hours === 1 ? "hour" : "hours";
+  const minuteWord = minutes === 1 ? "minute" : "minutes";
+  if (hours > 0 && minutes > 0) {
+    return `${hours} ${hourWord} and ${minutes} ${minuteWord}`;
+  }
+  if (hours === 1) return "another hour";
+  if (hours > 1) return `${hours} more hours`;
+  if (minutes === 1) return "another minute";
+  return `${minutes} more minutes`;
+}
+
+export function storyCountWaitingReply(remainingMs: number): string {
+  return `Not yet. I'm still going through the shelves. Give me ${formatStoryCountRemaining(remainingMs)}.`;
+}
 
 /** Per-player story NPCs. Never simulated, never hurt, seen only by their owner. */
 export const STORY_NPC_ID_PREFIX = "story-npc:";
@@ -97,13 +154,13 @@ export const COLEMAN_ANIM_KNEEL = "kneel";
 export const COLEMAN_ANIM_STAND = "idle-unarmed";
 
 export const STORY_FOUND_REPLY =
-  "A week ago a patrol found you on the road, hurt bad. They carried you back here and I put you together again. Sergeant Coleman came in every day while you were under. He sat with you a while, hardly said a word, then went back out on patrol. I don't have any spare clothes to give you. Search a department store or a house if you want something to wear. Captain Davis runs the Birchport detachment. He is in the barracks mess hall, and he wants to speak to you about what happened.";
+  "A week ago a patrol found you on the road, hurt bad. They carried you back here and I put you together again. Sergeant Coleman came in every day while you were under. He sat with you a while, hardly said a word, then went back out on patrol. I don't have any spare clothes to give you. Search a department store or a house if you want something to wear. Captain Davis runs the National Guard hub in Birchport. He is in the barracks mess hall, and he wants to speak to you about what happened.";
 
 export const STORY_FOUND_NO_ROOM =
   "I would send you out with a map and a meal, but you have no free pocket. Make room, then ask me again.";
 
 export const STORY_DAVIS_REPLY =
-  "I wanted to know what kind of trouble you got yourself into. The patrol that brought you in was Sergeant Coleman and Corporal Holland. Both have been missing since yesterday, and neither is answering the radio. That is not like them. They were with the National Guard before the world turned to shit. It is a shame you do not remember what happened before they brought you to the hospital.";
+  "I wanted to know what kind of trouble you got yourself into. The patrol that brought you in was Sergeant Coleman and Corporal Holland. Both have been missing since yesterday, and neither is answering the radio. That is not like them. They've been National Guard since before the world turned to shit. It is a shame you do not remember what happened before they brought you to the hospital.";
 
 export const STORY_BLOOD_BRIEF =
   "Blood on the carpet, and Holland's tag. I won't ask where it turned up. Something went wrong in that room, and the Red Order trade out of that end of Forestford. I'll hold on to the tag for now.";
@@ -202,7 +259,7 @@ export const QUEST_FOUND_ON_THE_ROAD: QuestDefinition = {
   id: QUEST_ID_FOUND_ON_THE_ROAD,
   title: "Found on the Road",
   description:
-    "You were found injured a week ago. An Ashen Militia patrol carried you to the Birchport hospital. Speak to Doctor Clark and find out what happened to you.",
+    "You were found injured a week ago. A National Guard patrol carried you to the Birchport hospital. Speak to Doctor Clark and find out what happened to you.",
   faction: "ashenMilitia",
   giver: "ashenDoctor",
   story: true,
@@ -233,7 +290,7 @@ export const QUEST_AYE_CAPTAIN: QuestDefinition = {
   id: QUEST_ID_AYE_CAPTAIN,
   title: "Aye, aye, Captain",
   description:
-    "Captain Davis wants to speak to you. He runs the Birchport detachment from the barracks mess hall. Go and find out what he wants.",
+    "Captain Davis wants to speak to you. He runs the National Guard hub in Birchport from the barracks mess hall. Go and find out what he wants.",
   faction: "ashenMilitia",
   giver: "ashenDoctor",
   story: true,
@@ -259,7 +316,7 @@ export const QUEST_TWO_BEHIND: QuestDefinition = {
   id: QUEST_ID_TWO_BEHIND,
   title: "Two Behind It",
   description:
-    "If you want the Ashen Militia to trust you, help find the patrol that saved you. Search Sergeant Coleman's house in Birchport for anything that helps. You do not know which piece of furniture matters. Bring what you find back to Captain Davis.",
+    "If you want the National Guard to trust you, help find the patrol that saved you. Search Sergeant Coleman's house in Birchport for anything that helps. You do not know which piece of furniture matters. Bring what you find back to Captain Davis.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   story: true,
@@ -635,7 +692,7 @@ export const STORY_REPLY_SHOW_TAG_WRONG_PLACE =
   "Never seen the name. Whatever you're selling, take it to the supermarket in Birchport.";
 
 export const STORY_REPLY_DAVIS_SENT =
-  "Missing? Not that I've noticed, and I notice most things. We're due a full count anyway. Give me six hours to get through the stock, then come back and I'll tell you what's short.";
+  "Missing? Not that I've noticed, and I notice most things. We're due a full count anyway. Give me three hours to get through the stock, then come back and I'll tell you what's short.";
 
 export const STORY_REPLY_COUNT_READY =
   "Done, and it's worse than I thought. Patrol issue, mostly. Rounds, batteries, dressings. Never more than a little at a time, going back weeks. Here's the list. One more thing. A man tried to sell me a battery last month with the Birchport stamp ground off the casing. Said he got it from the police station in East Forestford. I sent him on his way.";
