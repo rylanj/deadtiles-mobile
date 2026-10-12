@@ -316,7 +316,7 @@ export const QUEST_TWO_BEHIND: QuestDefinition = {
   id: QUEST_ID_TWO_BEHIND,
   title: "Two Behind It",
   description:
-    "If you want the National Guard to trust you, help find the patrol that saved you. Search Sergeant Coleman's house in Birchport for anything that helps. You do not know which piece of furniture matters. Bring what you find back to Captain Davis.",
+    "If you want the National Guard to trust you, help find the patrol that saved you. Sergeant Coleman kept a house in Birchport. Something he left there may say where he went. Look through the rooms and bring what you find to Captain Davis.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   story: true,
@@ -331,7 +331,7 @@ export const QUEST_TWO_BEHIND: QuestDefinition = {
     {
       id: STORY_OBJECTIVE_FIND_NOTE,
       kind: "story",
-      label: "Search Sergeant Coleman's house for clues",
+      label: "Look through Coleman's house for what he left",
       count: 1,
     },
   ],
@@ -397,7 +397,7 @@ export const QUEST_HOLLANDS_DIARY: QuestDefinition = {
   id: QUEST_ID_HOLLANDS_DIARY,
   title: "Holland's Diary",
   description:
-    "Corporal Holland kept a diary. Davis has marked his house in Birchport. Find the diary and bring it to Davis.",
+    "Corporal Holland kept a diary. Davis has marked his house in Birchport. Look through the rooms and bring the diary to Davis.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   story: true,
@@ -412,7 +412,7 @@ export const QUEST_HOLLANDS_DIARY: QuestDefinition = {
     {
       id: STORY_OBJECTIVE_FIND_DIARY,
       kind: "story",
-      label: "Search Holland's house for his diary",
+      label: "Look through Holland's house for his diary",
       count: 1,
     },
   ],
@@ -423,7 +423,7 @@ export const QUEST_BIRCHPORT_MARK: QuestDefinition = {
   id: QUEST_ID_BIRCHPORT_MARK,
   title: "Birchport Mark",
   description:
-    "Holland waited at the diner in East Forestford while Coleman went into the motel. Davis has marked the diner. Search it for anything left behind and bring it to Davis.",
+    "Holland waited at the diner in East Forestford while Coleman went into the motel. Davis has marked the diner. Look through it for anything left behind and bring it to Davis.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   story: true,
@@ -438,7 +438,7 @@ export const QUEST_BIRCHPORT_MARK: QuestDefinition = {
     {
       id: STORY_OBJECTIVE_FIND_WANT_LIST,
       kind: "story",
-      label: "Search the diner",
+      label: "Look through the diner",
       count: 1,
     },
   ],

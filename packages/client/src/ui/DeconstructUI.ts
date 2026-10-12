@@ -5,6 +5,7 @@ import {
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import { claimPageOverlay } from "./pageOverlay";
 
 export type DeconstructUIHandlers = {
   onClose: () => void;
@@ -122,6 +123,7 @@ export class DeconstructUI {
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -155,6 +157,11 @@ export class DeconstructUI {
     document.body.classList.remove("deconstruct-open");
     this.tile = null;
     this.refund = [];
+  }
+
+  destroy() {
+    this.close();
+    this.overlay.remove();
   }
 
   private render() {

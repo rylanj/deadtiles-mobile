@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 
-/** Matches SpriteAlphaOutlinePipeline opaque threshold (~0.05). */
+/** Opaque enough to count as the sprite silhouette (~0.05 alpha). */
 const DEFAULT_ALPHA_TOLERANCE = 13;
 
 type PixelHitImage = Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;

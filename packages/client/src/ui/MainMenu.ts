@@ -160,10 +160,19 @@ export class MainMenu {
 
     const title = document.createElement("h1");
     title.className = "main-menu-title";
+    const mark = document.createElement("img");
+    mark.className = "brand-mark";
+    mark.src = "/brand/deadtiles-mark.svg";
+    mark.alt = "";
+    mark.width = 32;
+    mark.height = 32;
+    const titleText = document.createElement("span");
+    titleText.className = "main-menu-title-text";
     const tiles = document.createElement("span");
     tiles.className = "brand-tiles";
     tiles.textContent = "TILES";
-    title.append("DEAD", tiles);
+    titleText.append("DEAD", tiles);
+    title.append(mark, titleText);
 
     const subtitle = document.createElement("span");
     subtitle.className = "main-menu-subtitle";

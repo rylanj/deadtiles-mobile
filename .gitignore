@@ -145,6 +145,7 @@ vite.config.ts.timestamp-*
 # Deadtiles
 .DS_Store
 scripts/maps/
+pitch/
 packages/server/data/.auth_secret
 packages/server/data/*.db
 packages/server/data/*.db-shm

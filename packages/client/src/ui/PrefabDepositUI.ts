@@ -13,6 +13,7 @@ import {
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import { claimPageOverlay } from "./pageOverlay";
 
 export type PrefabDepositUIHandlers = {
   onClose: () => void;
@@ -143,6 +144,7 @@ export class PrefabDepositUI {
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -178,6 +180,11 @@ export class PrefabDepositUI {
     this.tile = null;
     this.deposits = {};
     this.inventory = [];
+  }
+
+  destroy() {
+    this.close();
+    this.overlay.remove();
   }
 
   private applyState(state: PrefabDepositUIState) {

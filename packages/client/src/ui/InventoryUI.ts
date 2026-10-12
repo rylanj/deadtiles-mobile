@@ -911,6 +911,8 @@ export class InventoryUI {
 
   destroy() {
     cancelAllSlotDrags();
+    this.visible = false;
+    this.overlay.hidden = true;
     this.overlay.remove();
     document.body.classList.remove("inventory-open");
   }

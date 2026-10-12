@@ -32,6 +32,9 @@ import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } 
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
+import { claimPageOverlay } from "./pageOverlay";
+import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import { PhoneTalkNav, TalkSheet, syncTalkSheet, type TalkPush } from "./talkSheet";
 
 export type RedOrderDialogUIHandlers = {
   onClose: () => void;
@@ -114,6 +117,15 @@ export class RedOrderDialogUI {
   private standingPillEl: HTMLElement;
   private speechListEl: HTMLElement;
   private responseEl: HTMLElement;
+  private npcTitleEl!: HTMLElement;
+  private layoutEl!: HTMLElement;
+  private playerBodyEl!: HTMLElement;
+  private npcBodyEl!: HTMLElement;
+  private avatarHome!: HTMLElement;
+  private titleHome!: HTMLElement;
+  private sheet!: TalkSheet;
+  private phoneNav = new PhoneTalkNav();
+  private unbindPhoneResize: () => void = () => {};
 
   constructor(private handlers: RedOrderDialogUIHandlers) {
     this.overlay = document.createElement("div");
@@ -170,14 +182,14 @@ export class RedOrderDialogUI {
     npcTitleWrap.className = "trader-panel-header-text";
     const npcTitleRow = document.createElement("div");
     npcTitleRow.className = "trader-title-row";
-    const npcTitle = document.createElement("h2");
-    npcTitle.className = "inventory-title";
-    npcTitle.textContent = RED_ORDER_FACTION;
+    this.npcTitleEl = document.createElement("h2");
+    this.npcTitleEl.className = "inventory-title";
+    this.npcTitleEl.textContent = RED_ORDER_FACTION;
     this.standingPillEl = document.createElement("div");
     this.standingPillEl.className =
       "trader-standing-pill trader-standing-pill--wary";
     this.standingPillEl.textContent = "Wary";
-    npcTitleRow.append(npcTitle, this.standingPillEl);
+    npcTitleRow.append(this.npcTitleEl, this.standingPillEl);
     const npcHint = document.createElement("span");
     npcHint.className = "inventory-hint";
     npcHint.textContent = "Their reply";
@@ -194,12 +206,30 @@ export class RedOrderDialogUI {
 
     columns.append(playerPanel, npcPanel);
     layout.append(toolbar, columns);
-    this.overlay.appendChild(layout);
+    this.layoutEl = layout;
+    this.playerBodyEl = playerBody;
+    this.npcBodyEl = npcBody;
+    this.avatarHome = npcHeader;
+    this.titleHome = npcTitleRow;
+    this.sheet = new TalkSheet("red", () => this.handlers.onClose(), () => {
+      this.phoneNav.back();
+      this.render();
+    });
+    this.overlay.append(layout, this.sheet.root);
 
     this.overlay.addEventListener("click", (e) => {
+      if (usePhoneDialogSheet()) return;
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    this.unbindPhoneResize = bindPhoneDialogResize(
+      () => this.visible,
+      () => this.overlay.classList.contains("talk-sheet-mode"),
+      () => this.render(),
+      this.overlay,
+    );
+
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -236,6 +266,7 @@ export class RedOrderDialogUI {
     this.scriptedLineId = null;
     this.scriptedReply = null;
     this.expandedTaskId = null;
+    this.phoneNav.resetForLine();
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("red-order-dialog-open");
@@ -249,6 +280,7 @@ export class RedOrderDialogUI {
     this.denyReason = reason;
     this.expandedTaskId = taskId;
     this.activeLineId = "jobs";
+    this.phoneNav.reopen();
     this.render();
   }
 
@@ -274,15 +306,25 @@ export class RedOrderDialogUI {
   close() {
     this.visible = false;
     this.overlay.hidden = true;
+    this.overlay.classList.remove("talk-sheet-mode");
     document.body.classList.remove("red-order-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
     this.scriptedLineId = null;
     this.scriptedReply = null;
     this.expandedTaskId = null;
+    this.phoneNav.resetForLine();
     this.dogtagCount = 0;
     this.inventoryJson = "[]";
     this.questsJson = "";
+  }
+
+  destroy() {
+    this.close();
+    this.unbindPhoneResize();
+    this.unbindPhoneResize = () => {};
+    this.sheet.dispose();
+    this.overlay.remove();
   }
 
   private itemCount(itemId: string): number {
@@ -311,6 +353,33 @@ export class RedOrderDialogUI {
   }
 
   private render() {
+    this.renderContents();
+    this.presentTalk();
+  }
+
+  private presentTalk() {
+    const push: TalkPush | null = this.activeLineId === "jobs" ? "jobs" : null;
+    syncTalkSheet({
+      overlay: this.overlay,
+      layoutEl: this.layoutEl,
+      speechListEl: this.speechListEl,
+      responseEl: this.responseEl,
+      playerBodyEl: this.playerBodyEl,
+      npcBodyEl: this.npcBodyEl,
+      npcAvatarEl: this.npcAvatarEl,
+      npcTitleEl: this.npcTitleEl,
+      standingEl: this.standingPillEl,
+      avatarHome: this.avatarHome,
+      titleHome: this.titleHome,
+      sheet: this.sheet,
+      nav: this.phoneNav,
+      push,
+      activeLineId: this.activeLineId,
+      rerender: () => this.render(),
+    });
+  }
+
+  private renderContents() {
     this.updateStandingPill();
     this.speechListEl.replaceChildren();
     const lines = this.speechLines();
@@ -327,6 +396,7 @@ export class RedOrderDialogUI {
       fillSpeechButton(btn, line.player, line.id === "jobs" ? "journal" : undefined);
       if (storyIds.has(line.id)) markSpeechQuest(btn);
       btn.addEventListener("click", () => {
+        this.phoneNav.resetForLine();
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
         if (storyIds.has(line.id)) {
@@ -366,6 +436,7 @@ export class RedOrderDialogUI {
       const quests = parseQuestsJson(this.questsJson);
       const list = document.createElement("div");
       list.className = "craft-recipe-list red-dialog-task-list";
+      list.dataset.talkSheet = "jobs";
       for (const task of RED_ORDER_TASKS) {
         const def = getQuestDefinition(task.id);
         if (def && !isQuestListed(quests, def)) continue;

@@ -929,6 +929,8 @@ export class MapOverlayUI {
   destroy() {
     document.removeEventListener("keydown", this.onMarkerEditorKey, true);
     this.rememberView();
+    this.visible = false;
+    this.overlay.hidden = true;
     this.overlay.remove();
     document.body.classList.remove("map-open");
   }

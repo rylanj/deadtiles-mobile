@@ -217,6 +217,26 @@ const MOTEL_AWNING_VALANCE_PX = 2.5;
 const MOTEL_VENT_TOP = "#8f8a82";
 const MOTEL_VENT_SIDE = "#5e5a54";
 const MOTEL_VENT_FRONT = "#74706a";
+/** Dark base course, as a fraction of the storey. */
+const MOTEL_PLINTH_FRAC = 0.08;
+/** Belt just under the window sills. */
+const MOTEL_BELT: readonly [number, number] = [0.22, 0.255];
+/** Light sill ledge on top of the belt. */
+const MOTEL_BELT_LIP: readonly [number, number] = [0.255, 0.275];
+/**
+ * Header just above Window1. The art tops out near 0.72 of the storey.
+ * The office door covers the dark band on its own tile.
+ */
+const MOTEL_HEAD: readonly [number, number] = [0.748, 0.785];
+const MOTEL_HEAD_LIP: readonly [number, number] = [0.785, 0.812];
+/** Fascia under the eave. Pilasters stop at its underside. */
+const MOTEL_CORNICE_FRAC = 0.12;
+/** Raised stucco pilaster width, screen px at 1×. */
+const MOTEL_PIER_PX = 6;
+/** Share of street windows that grow a wall-pack AC unit. */
+const MOTEL_AC_CHANCE = 0.22;
+/** Top of that unit, just under the motel window sill (0.32). */
+const MOTEL_AC_TOP = 0.31;
 
 /** Weathered enamel. SW face is the lit iso wall. */
 const DINER_WALL_FRONT = "#e4d7c4";
@@ -1810,15 +1830,18 @@ function drawApartmentAcUnit(
   bottomRight: Point,
   level: number,
   side: boolean,
+  /** Top of the box, as a fraction of the storey. */
+  topFrac = 0.2,
 ) {
+  const bottom = topFrac - 0.14;
   const l = lerpPoint(bottomLeft, bottomRight, 0.3);
   const r = lerpPoint(bottomLeft, bottomRight, 0.7);
-  fillWallBand(ctx, l, r, 0.06, 0.2, level, side ? "#a9adb0" : "#bcc0c3");
-  fillWallBand(ctx, l, r, 0.18, 0.2, level, side ? "#c4c8cb" : "#d5d8da");
+  fillWallBand(ctx, l, r, bottom, topFrac, level, side ? "#a9adb0" : "#bcc0c3");
+  fillWallBand(ctx, l, r, topFrac - 0.02, topFrac, level, side ? "#c4c8cb" : "#d5d8da");
   const gl = lerpPoint(bottomLeft, bottomRight, 0.36);
   const gr = lerpPoint(bottomLeft, bottomRight, 0.64);
-  for (const f of [0.09, 0.12, 0.15]) {
-    fillWallBand(ctx, gl, gr, f, f + 0.01, level, "#7b8084");
+  for (const f of [0.03, 0.06, 0.09]) {
+    fillWallBand(ctx, gl, gr, bottom + f, bottom + f + 0.01, level, "#7b8084");
   }
 }
 
@@ -3493,6 +3516,14 @@ type MotelPalette = {
   /** Darker band along the parapet foot and the wall base. */
   band: string;
   bandSide: string;
+  /** Raised pilaster, a step lighter than the stucco. */
+  pier: string;
+  pierSide: string;
+  pierEdge: string;
+  pierEdgeSide: string;
+  /** Light cap on the cornice and the sill ledge. */
+  coping: string;
+  copingSide: string;
 };
 
 function motelPalette(bld: BuildingFootprint): MotelPalette {
@@ -3507,6 +3538,12 @@ function motelPalette(bld: BuildingFootprint): MotelPalette {
     cap: shadeHex(wall, 0.84),
     band: shadeHex(wall, 0.65),
     bandSide: shadeHex(wall, 0.55),
+    pier: shadeHex(wall, 1.08),
+    pierSide: shadeHex(wall, 0.94),
+    pierEdge: shadeHex(wall, 0.7),
+    pierEdgeSide: shadeHex(wall, 0.58),
+    coping: shadeHex(wall, 1.14),
+    copingSide: shadeHex(wall, 1.0),
   };
 }
 
@@ -3966,6 +4003,101 @@ function motelStreetFace(
   return { face, a, b, out: { x: oxN, y: oyN } };
 }
 
+/** Office door span and the street windows that step out from it. */
+function motelStreetOpenings(bld: BuildingFootprint): {
+  face: "SE" | "SW";
+  doorStart: number;
+  doorEnd: number;
+  windows: number[];
+} | null {
+  if (bld.entranceX == null || bld.entranceY == null) return null;
+  const face = buildingEntranceFace({
+    ox: bld.ox,
+    oy: bld.oy,
+    w: bld.w,
+    h: bld.h,
+    entranceX: bld.entranceX,
+    entranceY: bld.entranceY,
+  });
+  const faceLen = face === "SE" ? bld.h : bld.w;
+  const doorStart = face === "SE" ? bld.entranceY - bld.oy : bld.entranceX - bld.ox;
+  const doorEnd = doorStart + buildingEntranceSpan(bld);
+  const windows: number[] = [];
+  const push = (i: number) => {
+    if (i >= 1 && i < faceLen - 1) windows.push(i);
+  };
+  for (let i = doorStart - 2; i >= 1; i -= 2) push(i);
+  for (let i = doorEnd + 1; i < faceLen - 1; i += 2) push(i);
+  return { face, doorStart, doorEnd, windows };
+}
+
+/**
+ * Breaks the flat stucco the way apartment upper floors do: a base course,
+ * a sill belt, a header, pilasters, and a cornice. The existing windows
+ * sit in that band.
+ */
+function drawMotelFacade(
+  ctx: CanvasRenderingContext2D,
+  bld: BuildingFootprint,
+  oSw: Point,
+  oSe: Point,
+  oNe: Point,
+) {
+  const pal = motelPalette(bld);
+  const openings = motelStreetOpenings(bld);
+  const street = openings?.face ?? null;
+  const corniceAt = 1 - MOTEL_CORNICE_FRAC;
+
+  for (const face of ["SW", "SE"] as const) {
+    const side = face === "SE";
+    const a = side ? oNe : oSw;
+    const faceLen = side ? bld.h : bld.w;
+    const isStreet = face === street;
+    const doorStart = isStreet && openings ? openings.doorStart : -1;
+    const doorEnd = isStreet && openings ? openings.doorEnd : -1;
+    const lenPx = Math.hypot(oSe.x - a.x, oSe.y - a.y) || 1;
+    const half = MOTEL_PIER_PX / 2 / lenPx;
+    const pier = side ? pal.pierSide : pal.pier;
+    const pierEdge = side ? pal.pierEdgeSide : pal.pierEdge;
+
+    const drawPier = (t: number) => {
+      if (
+        doorEnd > doorStart &&
+        t > doorStart / faceLen + 0.004 &&
+        t < doorEnd / faceLen - 0.004
+      ) {
+        return;
+      }
+      drawWallPier(
+        ctx, a, oSe, t, MOTEL_PIER_PX,
+        MOTEL_PLINTH_FRAC, corniceAt,
+        pier, pierEdge,
+      );
+    };
+    drawPier(half);
+    drawPier(1 - half);
+    for (let i = 2; i < faceLen; i += 2) drawPier(i / faceLen);
+  }
+
+  fillFacadeBand(ctx, oSw, oSe, oNe, 0, MOTEL_PLINTH_FRAC, 0, pal.band, pal.bandSide);
+  fillFacadeBand(
+    ctx, oSw, oSe, oNe,
+    MOTEL_PLINTH_FRAC, MOTEL_PLINTH_FRAC + 0.018,
+    0, pal.coping, pal.copingSide,
+  );
+  fillFacadeBand(ctx, oSw, oSe, oNe, MOTEL_BELT[0], MOTEL_BELT[1], 0, pal.trim, pal.trimSide);
+  fillFacadeBand(ctx, oSw, oSe, oNe, MOTEL_BELT_LIP[0], MOTEL_BELT_LIP[1], 0, pal.coping, pal.copingSide);
+  fillFacadeBand(ctx, oSw, oSe, oNe, MOTEL_HEAD[0], MOTEL_HEAD[1], 0, pal.trim, pal.trimSide);
+  fillFacadeBand(ctx, oSw, oSe, oNe, MOTEL_HEAD_LIP[0], MOTEL_HEAD_LIP[1], 0, pal.coping, pal.copingSide);
+  fillFacadeBand(ctx, oSw, oSe, oNe, corniceAt, 1, 0, pal.pier, pal.pierSide);
+  fillFacadeBand(
+    ctx, oSw, oSe, oNe,
+    corniceAt, corniceAt + 0.028,
+    0, pal.band, pal.bandSide,
+  );
+  fillFacadeBand(ctx, oSw, oSe, oNe, 0.968, 1, 0, pal.coping, pal.copingSide);
+}
+
 function paintMotelBuilding(
   scene: Phaser.Scene,
   bld: BuildingFootprint,
@@ -4000,18 +4132,7 @@ function paintMotelBuilding(
     pal.wallSide,
   );
 
-  drawVerticalCornerCladding(
-    ctx,
-    oSw,
-    oSe,
-    oNe,
-    d,
-    pal.trim,
-    pal.trimSide,
-  );
-
-  fillWallBand(ctx, oSw, oSe, 0, 0.07, 0, pal.band);
-  fillWallBand(ctx, oNe, oSe, 0, 0.07, 0, pal.bandSide);
+  drawMotelFacade(ctx, bld, oSw, oSe, oNe);
   drawMotelWindowsAndDoors(ctx, scene, bld, offset, d);
   paintStandardWallWear(ctx, oSw, oSe, oNe, d, bld);
   drawMotelOfficeAwning(ctx, bld, offset);
@@ -4094,7 +4215,6 @@ function drawMotelWindowsAndDoors(
     entranceY: bld.entranceY,
   });
   const { ox, oy, w, h } = bld;
-  const faceLen = face === "SE" ? h : w;
   const door = resolveDoorSource(scene, bld);
   const edge = door ? entranceWallEdge(bld, offset) : null;
   if (door && edge) {
@@ -4112,33 +4232,40 @@ function drawMotelWindowsAndDoors(
   const windowRaw = resolveWindowSource(scene, face);
   const window = windowRaw ? prepareWallOverlay(windowRaw) : null;
   if (!window) return;
-  const span = buildingEntranceSpan(bld);
-  // Face-local door span [doorStart, doorEnd).
-  const doorStart = face === "SE" ? bld.entranceY - oy : bld.entranceX - ox;
-  const doorEnd = doorStart + span;
+  const openings = motelStreetOpenings(bld);
+  const windows = openings?.windows ?? [];
+  const side = face === "SE";
+  const forced =
+    windows[Math.floor(apartmentRoll(bld, 0xac11) * windows.length)] ?? -1;
 
-  const placeAt = (i: number) => {
-    // Keep clear of corner tiles.
-    if (i < 1 || i >= faceLen - 1) return;
+  for (const i of windows) {
     const tx = face === "SE" ? ox + w - 1 : ox + i;
     const ty = face === "SE" ? oy + i : oy + h - 1;
     const tileEdge = wallTileEdge(face, tx, ty, bld, offset);
-    if (!tileEdge) return;
+    if (!tileEdge) continue;
     drawWindowOnWallTile(
       ctx,
       window,
       tileEdge.bottomLeft,
       tileEdge.bottomRight,
       0,
-      face === "SE",
+      side,
       0.32,
     );
-  };
-
-  // Walk outward from the door: leave ≥1 empty tile beside the span,
-  // then every other bay toward each corner.
-  for (let i = doorStart - 2; i >= 1; i -= 2) placeAt(i);
-  for (let i = doorEnd + 1; i < faceLen - 1; i += 2) placeAt(i);
+    if (
+      i === forced ||
+      apartmentRoll(bld, 0x5a11 + i * 9 + (side ? 1 : 0)) < MOTEL_AC_CHANCE
+    ) {
+      drawApartmentAcUnit(
+        ctx,
+        tileEdge.bottomLeft,
+        tileEdge.bottomRight,
+        0,
+        side,
+        MOTEL_AC_TOP,
+      );
+    }
+  }
 }
 
 function dinerEntranceFace(bld: BuildingFootprint): "SE" | "SW" | null {

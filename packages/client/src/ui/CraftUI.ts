@@ -18,6 +18,7 @@ import {
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import { claimPageOverlay } from "./pageOverlay";
 
 export type CraftUIHandlers = {
   onClose: () => void;
@@ -154,6 +155,7 @@ export class CraftUI {
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -213,6 +215,11 @@ export class CraftUI {
     this.station = "workbench";
     this.inventory = [];
     this.expandedRecipeId = null;
+  }
+
+  destroy() {
+    this.close();
+    this.overlay.remove();
   }
 
   private render() {

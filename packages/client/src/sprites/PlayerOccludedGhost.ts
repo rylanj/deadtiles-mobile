@@ -10,12 +10,8 @@ import {
 const GHOST_ALPHA = 0.42;
 
 /**
- * Mobile stand-in for PlayerOcclusionHighlight.
- *
- * The silhouette outline needs a BitmapMask plus per-frame tree mask images,
- * which contributed to GPU memory crashes on phones. This draws a faint copy of
- * the player above the occluder instead: same "you are behind this" read, one
- * extra sprite, no mask and no extra textures.
+ * Draws a faint copy of the local player above a building, tree, or wall that
+ * covers them. One extra sprite, no mask and no extra textures.
  */
 export class PlayerOccludedGhost {
   private ghost: Phaser.GameObjects.Sprite;

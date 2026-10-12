@@ -15,6 +15,7 @@ import {
   type PlayerQuestsState,
   type TutorialCompleteStepMessage,
   type TutorialFlagsState,
+  type TutorialTipDef,
   type TutorialTipId,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
@@ -404,6 +405,10 @@ export class OnboardingUI {
     return this.mobile && def.mobileBody ? def.mobileBody : def.body;
   }
 
+  private tipBodyFor(tip: TutorialTipDef): string {
+    return this.mobile && tip.mobileBody ? tip.mobileBody : tip.body;
+  }
+
   private flashAdvance() {
     const target = this.flags.minimized ? this.pill : this.tracker;
     target.classList.remove("tutorial--advanced");
@@ -505,7 +510,7 @@ export class OnboardingUI {
     const tip = TUTORIAL_TIPS[next];
     this.tipShowing = next;
     this.tipTitleEl.textContent = tip.title;
-    this.tipBodyEl.textContent = tip.body;
+    this.tipBodyEl.textContent = this.tipBodyFor(tip);
     this.tipEl.hidden = false;
     this.tipTimer = window.setTimeout(() => this.dismissTip(), TIP_SHOW_MS);
   }

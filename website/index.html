@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deadtiles</title>
+    <meta
+      name="description"
+      content="The world fell to the dead. Scavenge, trade, and choose a side in quarantined Ashen County. Play Deadtiles in the browser."
+    />
+    <meta name="theme-color" content="#07090a" />
+    <link rel="canonical" href="https://deadtiles.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Deadtiles. Survive the zombie apocalypse" />
+    <meta
+      property="og:description"
+      content="A shared procedural county. Stay fed, trade with survivors, and ship banknotes out as Deadmarks (DMRK). Play in the browser."
+    />
+    <meta property="og:url" content="https://deadtiles.com/" />
+    <meta property="og:image" content="https://deadtiles.com/media/ruin.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@Deadtiles" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="favicon.png" type="image/png" sizes="4096x4096" />
+    <link rel="apple-touch-icon" href="favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="preload" as="image" href="media/ruin.jpg" />
+    <style>
+      :root {
+        --bg: #07090a;
+        --bg-raise: #0c1011;
+        --line: rgba(161, 168, 156, 0.22);
+        --lime: #9fe830;
+        --lime-deep: #c6f56a;
+        --ink: #e7f0e4;
+        --muted: #b7c3b4;
+        --dim: #8d9a8b;
+        --red: #e07062;
+        --header: 72px;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: Rajdhani, "Segoe UI", sans-serif;
+        font-size: 1.125rem;
+        font-weight: 500;
+        line-height: 1.45;
+        text-rendering: optimizeLegibility;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 80;
+        opacity: 0.055;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      }
+
+      img {
+        max-width: 100%;
+        display: block;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--lime);
+        outline-offset: 3px;
+      }
+
+      .skip {
+        position: fixed;
+        left: 16px;
+        top: calc(var(--header) + 10px);
+        z-index: 200;
+        background: var(--lime);
+        color: #10140c;
+        padding: 8px 12px;
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        text-decoration: none;
+        clip-path: inset(50%);
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .skip:focus,
+      .skip:focus-visible {
+        clip-path: none;
+        width: auto;
+        height: auto;
+        overflow: visible;
+      }
+
+      .wrap {
+        width: min(1120px, calc(100% - 40px));
+        margin-inline: auto;
+      }
+
+      .wrap-wide {
+        width: min(1200px, calc(100% - 40px));
+        margin-inline: auto;
+      }
+
+      .display {
+        font-family: Oswald, sans-serif;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        line-height: 0.95;
+      }
+
+      .kicker {
+        margin: 0 0 14px;
+        font-family: Oswald, sans-serif;
+        font-size: 0.78rem;
+        font-weight: 500;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--lime);
+      }
+
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        height: var(--header);
+        padding: 0 20px;
+        background: rgba(7, 9, 10, 0.55);
+        border-bottom: 1px solid transparent;
+        backdrop-filter: blur(16px);
+      }
+
+      .site-header.is-stuck {
+        background: rgba(7, 9, 10, 0.92);
+        border-bottom-color: var(--line);
+      }
+
+      .wordmark {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+        font-family: Oswald, sans-serif;
+        font-weight: 400;
+        font-size: 1.15rem;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        text-decoration: none;
+        color: #f4f4f5;
+      }
+
+      .wordmark-mark {
+        width: 1.15em;
+        height: 1.15em;
+        flex: none;
+        display: block;
+      }
+
+      .tiles {
+        color: var(--lime);
+        text-shadow:
+          0 0 18px hsla(84, 80%, 55%, 0.55),
+          0 0 40px hsla(84, 80%, 45%, 0.28);
+      }
+
+      .flicker {
+        animation: flicker 5s infinite;
+      }
+
+      @keyframes flicker {
+        0%,
+        100% { opacity: 1; }
+        8% { opacity: 0.35; }
+        10% { opacity: 1; }
+        62% { opacity: 1; }
+        64% { opacity: 0.5; }
+        66% { opacity: 1; }
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .nav a {
+        text-decoration: none;
+        font-family: Oswald, sans-serif;
+        font-size: 0.82rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .nav a:hover {
+        color: var(--ink);
+      }
+
+      .nav a.btn,
+      .nav a.btn:hover {
+        color: #07090a;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 16px;
+      }
+
+      .icon-link {
+        display: grid;
+        place-items: center;
+        color: var(--dim);
+      }
+
+      .icon-link:hover {
+        color: var(--lime);
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 48px;
+        padding: 0 18px;
+        border: 1px solid transparent;
+        background: var(--lime);
+        color: #07090a;
+        font-family: Oswald, sans-serif;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background: var(--lime-deep);
+      }
+
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .btn-ghost {
+        background: transparent;
+        border-color: rgba(159, 232, 48, 0.55);
+        color: var(--lime);
+      }
+
+      .btn-ghost:hover {
+        background: rgba(159, 232, 48, 0.1);
+      }
+
+      .btn[disabled] {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .hero {
+        position: relative;
+        min-height: calc(100svh - var(--header));
+        display: flex;
+        align-items: flex-end;
+        overflow: hidden;
+        margin-top: calc(var(--header) * -1);
+        padding-top: var(--header);
+      }
+
+      .hero-media,
+      .hero-shade {
+        position: absolute;
+        inset: 0;
+      }
+
+      .hero-media {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center 35%;
+      }
+
+      .hero-shade {
+        background:
+          linear-gradient(to top, #07090a 0%, rgba(7, 9, 10, 0.72) 28%, rgba(7, 9, 10, 0.28) 58%, rgba(7, 9, 10, 0.55) 100%),
+          radial-gradient(ellipse at 50% 30%, transparent, rgba(7, 9, 10, 0.45));
+      }
+
+      .hero-copy {
+        position: relative;
+        z-index: 1;
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 0 0 36px;
+      }
+
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+        font-family: Oswald, sans-serif;
+        font-size: 0.75rem;
+        letter-spacing: 0.32em;
+        text-transform: uppercase;
+        color: var(--lime);
+      }
+
+      .live i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--lime);
+        box-shadow: 0 0 12px var(--lime);
+      }
+
+      .hero h1 {
+        margin: 0;
+        max-width: 11ch;
+        font-size: clamp(3.4rem, 8vw, 7.4rem);
+      }
+
+      .hero h1 span {
+        color: var(--lime);
+        text-shadow:
+          0 0 18px hsla(84, 80%, 55%, 0.55),
+          0 0 40px hsla(84, 80%, 45%, 0.35);
+      }
+
+      .lede {
+        max-width: 38rem;
+        margin: 22px 0 0;
+        color: #d5e0d2;
+        font-size: 1.2rem;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      .fine {
+        margin: 14px 0 0;
+        color: var(--dim);
+        font-size: 0.95rem;
+        letter-spacing: 0.04em;
+      }
+
+      .facts {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+        margin: 36px 0 0;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+      }
+
+      .facts strong {
+        display: block;
+        margin-bottom: 4px;
+        font-family: Oswald, sans-serif;
+        font-weight: 500;
+        font-size: 0.95rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .facts span {
+        color: var(--muted);
+        font-size: 0.98rem;
+      }
+
+      .marquee {
+        overflow: hidden;
+        background: var(--lime);
+        color: #10140c;
+        border-block: 1px solid rgba(0, 0, 0, 0.25);
+      }
+
+      .marquee-track {
+        display: flex;
+        width: max-content;
+        animation: marquee 42s linear infinite;
+      }
+
+      .marquee-group {
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        padding: 12px 14px;
+        font-family: Oswald, sans-serif;
+        font-size: 0.92rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .diamond {
+        width: 7px;
+        height: 7px;
+        background: #10140c;
+        transform: rotate(45deg);
+        flex: none;
+      }
+
+      @keyframes marquee {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
+
+      section {
+        scroll-margin-top: calc(var(--header) + 12px);
+      }
+
+      .block {
+        padding: 88px 0;
+      }
+
+      .split {
+        display: grid;
+        gap: 28px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: clamp(2.4rem, 5vw, 4.2rem);
+        max-width: 12ch;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 40px;
+        margin-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+
+      .steps article {
+        display: grid;
+        grid-template-columns: 52px 1fr;
+        gap: 12px;
+        padding: 16px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .steps b {
+        font-family: Oswald, sans-serif;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        color: var(--lime);
+      }
+
+      .steps h3 {
+        margin: 0 0 4px;
+        font-family: Oswald, sans-serif;
+        font-size: 1.15rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .steps p,
+      .card p,
+      .faction p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .scenes {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .scene {
+        position: relative;
+        min-height: 520px;
+        overflow: hidden;
+        display: flex;
+        align-items: flex-end;
+      }
+
+      .scene img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .scene img.is-zoomed {
+        transform: scale(1.65);
+        object-position: center 42%;
+      }
+
+      .scene .shade {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(to top, rgba(7, 9, 10, 0.92), rgba(7, 9, 10, 0.2) 52%, rgba(7, 9, 10, 0.28)),
+          rgba(36, 58, 22, 0.55);
+        mix-blend-mode: multiply;
+      }
+
+      .scene div.copy {
+        position: relative;
+        padding: 32px;
+        max-width: 28rem;
+      }
+
+      .scene h3 {
+        margin: 0;
+        font-size: clamp(2rem, 3vw, 2.7rem);
+      }
+
+      .scene p {
+        margin: 10px 0 0;
+        color: #d5e0d2;
+      }
+
+      .grid-3,
+      .grid-2 {
+        display: grid;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, 1fr);
+        margin-top: 40px;
+      }
+
+      .grid-2 {
+        grid-template-columns: 1.15fr 0.85fr;
+        margin-top: 36px;
+      }
+
+      .card,
+      .faction {
+        background: var(--bg-raise);
+        padding: 28px;
+      }
+
+      .card h3,
+      .faction h3 {
+        margin: 10px 0 8px;
+        font-family: Oswald, sans-serif;
+        font-size: 1.35rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .index {
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.16em;
+        color: var(--lime);
+        font-size: 0.8rem;
+      }
+
+      .faction.order .index {
+        color: var(--red);
+      }
+
+      .marks {
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+      }
+
+      .marks-copy,
+      .ledger {
+        background: var(--bg-raise);
+      }
+
+      .marks-logo {
+        display: block;
+        width: 100%;
+        height: auto;
+        margin: 0 0 18px;
+      }
+
+      .marks-copy,
+      .ledger {
+        padding: 32px 36px 40px;
+      }
+
+      .marks-copy {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .marks-copy .kicker {
+        margin: 0 0 14px;
+      }
+
+      .marks-copy h2 {
+        max-width: none;
+        font-size: clamp(2.6rem, 4.4vw, 3.8rem);
+      }
+
+      .marks-copy h2 span {
+        display: block;
+        color: var(--lime);
+      }
+
+      .marks-lede {
+        margin: 18px 0 0;
+        color: #d5e0d2;
+        font-size: 1.08rem;
+        line-height: 1.5;
+      }
+
+      .marks-rules {
+        width: 100%;
+        margin: 22px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .marks-rules li {
+        padding: 11px 0;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+      }
+
+      .marks-rules li:last-child {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .marks-copy .btn {
+        margin-top: 26px;
+      }
+
+      .marks-copy .fine {
+        margin: 12px 0 0;
+      }
+
+      .ledger {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .ledger h3 {
+        margin: 0 0 6px;
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 1rem;
+        font-weight: 500;
+      }
+
+      .ledger p {
+        margin: 0 0 16px;
+        color: var(--dim);
+        font-size: 0.95rem;
+      }
+
+      .ledger ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .ledger li {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .ledger li b {
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        color: var(--lime);
+      }
+
+      .enlist {
+        background:
+          linear-gradient(180deg, rgba(159, 232, 48, 0.06), transparent 40%),
+          var(--bg);
+        border-top: 1px solid var(--line);
+      }
+
+      .enlist-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 40px;
+        align-items: center;
+      }
+
+      form {
+        display: flex;
+        gap: 10px;
+      }
+
+      label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+      }
+
+      input[type="email"] {
+        flex: 1;
+        min-width: 0;
+        min-height: 48px;
+        padding: 0 14px;
+        border: 1px solid #3c4638;
+        background: #07090a;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      input[type="email"]::placeholder {
+        color: #6d7a6b;
+      }
+
+      input[type="email"]:focus {
+        border-color: var(--lime);
+        outline: none;
+      }
+
+      .form-note {
+        min-height: 1.4em;
+        margin: 10px 0 0;
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+      }
+
+      .form-note.ok {
+        color: var(--lime);
+      }
+
+      .form-note.bad {
+        color: #ff8d84;
+      }
+
+      .site-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+        flex-wrap: wrap;
+        padding: 28px 20px 36px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 0.95rem;
+      }
+
+      .site-footer .wordmark {
+        font-size: 1rem;
+      }
+
+      .foot-links {
+        display: flex;
+        gap: 18px;
+        align-items: center;
+      }
+
+      .foot-links a {
+        font-family: Oswald, sans-serif;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-decoration: none;
+        font-size: 0.82rem;
+      }
+
+      .foot-links a:hover {
+        color: var(--lime);
+      }
+
+      @media (max-width: 900px) {
+        .nav-links,
+        .icon-link {
+          display: none;
+        }
+
+        .scenes,
+        .grid-3,
+        .grid-2,
+        .marks,
+        .enlist-grid,
+        .facts,
+        .steps {
+          grid-template-columns: 1fr;
+        }
+
+        .scene {
+          min-height: 420px;
+        }
+
+        .block {
+          padding: 64px 0;
+        }
+
+        .marks-copy,
+        .ledger {
+          padding: 22px 22px 28px;
+        }
+
+        form {
+          flex-direction: column;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .wrap,
+        .wrap-wide,
+        .hero-copy {
+          width: min(1120px, calc(100% - 28px));
+        }
+
+        .site-header {
+          padding-inline: 14px;
+        }
+
+        .hero h1 {
+          font-size: clamp(2.8rem, 16vw, 4rem);
+        }
+
+        .lede {
+          font-size: 1.05rem;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        .flicker,
+        .marquee-track {
+          animation: none;
+        }
+
+        .marquee-track {
+          width: auto;
+          flex-wrap: wrap;
+        }
+
+        .marquee-group[aria-hidden="true"] {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#county">Skip to the county</a>
+    <header class="site-header">
+      <a class="wordmark" href="#top"><img class="wordmark-mark" src="mark.svg" alt="" width="22" height="22" /><span class="wordmark-text">DEAD<span class="tiles flicker">TILES</span></span></a>
+      <nav class="nav" aria-label="Primary">
+        <div class="nav-links">
+          <a href="#county">County</a>
+          <a href="#body">Survival</a>
+          <a href="#factions">Factions</a>
+          <a href="#deadmarks">Deadmarks</a>
+        </div>
+        <a class="icon-link" href="https://x.com/Deadtiles" target="_blank" rel="noopener noreferrer" aria-label="Deadtiles on X">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M18.9 2H22l-6.8 7.8L23.2 22h-6.6l-5.2-6.8L5.7 22H2.6l7.3-8.4L1 2h6.8l4.7 6.2L18.9 2zm-1.2 18h1.8L6.4 3.9H4.5L17.7 20z" />
+          </svg>
+        </a>
+        <a class="btn" href="https://play.deadtiles.com">Play</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-label="Introduction">
+        <img
+          class="hero-media"
+          src="media/ruin.jpg"
+          alt="A lone figure with a rifle stands on rubble in a ruined city under a green storm"
+          width="1344"
+          height="768"
+        />
+        <div class="hero-shade"></div>
+        <div class="hero-copy">
+          <p class="live"><i class="flicker"></i> Ashen County is open</p>
+          <h1 class="display">Survive the <span class="flicker">zombie</span> apocalypse</h1>
+          <p class="lede">
+            The world fell to the dead. A few places still hold out, and everyone else scavenges what is left.
+            You share this world with other players. Stay fed, watered, and warm. Not even the clothes you wear are safe.
+          </p>
+          <div class="hero-actions">
+            <a class="btn" href="https://play.deadtiles.com">Enter the county</a>
+            <a class="btn btn-ghost" href="#enlist">Enlist</a>
+          </div>
+          <p class="fine">Play in the browser. Sign in with Phantom or Solflare.</p>
+          <div class="facts">
+            <p><strong>One county</strong><span>Cities, towns, and the roads between them. No two settlements are the same.</span></p>
+            <p><strong>Other survivors</strong><span>The players and factions you interact with will remember how you treat them.</span></p>
+            <p><strong>Deadmarks</strong><span>Currency is still useful in Ashen County. Ship it to your wallet as Deadmarks (DMRK).</span></p>
+          </div>
+        </div>
+      </section>
+
+      <div class="marquee" aria-hidden="true">
+        <div class="marquee-track">
+          <div class="marquee-group">
+            <span>Scavenge for supplies</span><i class="diamond"></i>
+            <span>Survive the apocalypse</span><i class="diamond"></i>
+            <span>Stay fed and warm</span><i class="diamond"></i>
+            <span>Hold Birchport</span><i class="diamond"></i>
+            <span>Trade with survivors</span><i class="diamond"></i>
+            <span>Take the city blocks</span><i class="diamond"></i>
+            <span>Ship Deadmarks</span><i class="diamond"></i>
+            <span>Learn the county</span><i class="diamond"></i>
+          </div>
+          <div class="marquee-group" aria-hidden="true">
+            <span>Scavenge for supplies</span><i class="diamond"></i>
+            <span>Survive the apocalypse</span><i class="diamond"></i>
+            <span>Stay fed and warm</span><i class="diamond"></i>
+            <span>Hold Birchport</span><i class="diamond"></i>
+            <span>Trade with survivors</span><i class="diamond"></i>
+            <span>Take the city blocks</span><i class="diamond"></i>
+            <span>Ship Deadmarks</span><i class="diamond"></i>
+            <span>Learn the county</span><i class="diamond"></i>
+          </div>
+        </div>
+      </div>
+
+      <section class="block" id="county">
+        <div class="wrap split">
+          <div>
+            <p class="kicker">01 / The County</p>
+            <h2 class="display">Ashen County</h2>
+          </div>
+          <div class="steps">
+            <article>
+              <b>01</b>
+              <div>
+                <h3>Quarantine</h3>
+                <p>A landlocked county, currently shut in by the National Guard. There is no easy way in or out.</p>
+              </div>
+            </article>
+            <article>
+              <b>02</b>
+              <div>
+                <h3>Birchport</h3>
+                <p>The National Guard controls the town and has created a safe zone for civilians. They are trying to establish some semblance of order again.</p>
+              </div>
+            </article>
+            <article>
+              <b>03</b>
+              <div>
+                <h3>Factions</h3>
+                <p>Different factions are vying for power and control over the county. Choose which factions to align with, and what paths to follow.</p>
+              </div>
+            </article>
+            <article>
+              <b>04</b>
+              <div>
+                <h3>Rebuild</h3>
+                <p>Survivors can team up and build their own communities, or join existing ones.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <div class="scenes">
+        <article class="scene">
+          <img src="media/horde.png" alt="A horde of zombies crowding the street outside a brick building" width="892" height="724" />
+          <div class="shade"></div>
+          <div class="copy">
+            <h3 class="display">The horde never sleeps</h3>
+            <p>A bite can start an infection. So can raw meat. Antibiotics hold it down. Cities can carry far more of the dead than a rural road.</p>
+          </div>
+        </article>
+        <article class="scene">
+          <img class="is-zoomed" src="media/tiles.jpg" alt="An isometric town of houses, shops, and a hospital on a grid of streets" width="2407" height="985" />
+          <div class="shade"></div>
+          <div class="copy">
+            <h3 class="display">A world made of tiles</h3>
+            <p>Settlements are generated, not hand-placed copies of each other. Learn a block, then walk until the streets stop matching.</p>
+          </div>
+        </article>
+      </div>
+
+      <section class="block" id="body">
+        <div class="wrap">
+          <p class="kicker">02 / The body</p>
+          <h2 class="display">What keeps you alive</h2>
+          <div class="grid-3">
+            <article class="card">
+              <span class="index">Hunger</span>
+              <h3>Eat and drink</h3>
+              <p>You wake up short on both. If either bar hits zero, you start losing health.</p>
+            </article>
+            <article class="card">
+              <span class="index">Weather</span>
+              <h3>Stay warm</h3>
+              <p>Open air, rain, and wet clothes pull your temperature down. A fire and dry layers pull it back.</p>
+            </article>
+            <article class="card">
+              <span class="index">Infection</span>
+              <h3>Watch the bite</h3>
+              <p>Untreated infection climbs. A course of antibiotics is what turns it around.</p>
+            </article>
+            <article class="card">
+              <span class="index">Skills</span>
+              <h3>Work is the teacher</h3>
+              <p>Strength, endurance, dexterity, intelligence, and charisma. Scavenge, craft, cook, fight, and barter to raise them.</p>
+            </article>
+            <article class="card">
+              <span class="index">Hands</span>
+              <h3>Make it useful</h3>
+              <p>Lockpick a door, cook a meal, read a page, or put up a structure. The county pays people who can do the job.</p>
+            </article>
+            <article class="card">
+              <span class="index">Gear</span>
+              <h3>Don't get attached</h3>
+              <p>Not even the clothes on your body are safe from other survivors.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="block" id="factions" style="padding-top: 0">
+        <div class="wrap">
+          <p class="kicker">03 / Factions</p>
+          <h2 class="display">Three groups in the county</h2>
+          <div class="grid-3">
+            <article class="faction">
+              <span class="index">National Guard</span>
+              <h3>The posts</h3>
+              <p>They still have posts across the country. Birchport is the hub for Ashen County: barracks, hospital, and street patrols, with a few smaller outposts out in the county. They keep the roads and the town. The traders handle the goods.</p>
+            </article>
+            <article class="faction order">
+              <span class="index">Red Order</span>
+              <h3>The cities</h3>
+              <p>City crews in red armbands. They take blocks, clear the buildings, and put survivors to work holding them. The National Guard does not run checkpoints on their streets. They live off what they seize, including Ashen caravans.</p>
+            </article>
+            <article class="faction">
+              <span class="index">Ashen Traders</span>
+              <h3>The caravans</h3>
+              <p>A separate outfit from the Guard. They scavenge and buy from survivors, then move ammo, medicine, and food through the county. When a caravan is not passing, they keep stalls at National Guard posts, including the market in Birchport.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="block" id="deadmarks" style="padding-top: 0">
+        <div class="wrap marks">
+          <div class="marks-copy">
+            <p class="kicker">04 / Deadmarks</p>
+            <h2 class="display">Ship the notes <span>east</span></h2>
+            <p class="marks-lede">Banknotes spend in the county. Ship them to the wallet you signed in with, and one note becomes one Deadmark (DMRK).</p>
+            <ul class="marks-rules">
+              <li>The day's shipments are one shared pool.</li>
+              <li>Better standing with the Ashen Traders gets a larger share.</li>
+              <li>Nothing under 500 notes goes out.</li>
+            </ul>
+            <a class="btn" href="https://play.deadtiles.com">Sign in and play</a>
+            <p class="fine">Browser wallets: Phantom or Solflare. The Android app also signs in with Seed Vault.</p>
+          </div>
+          <aside class="ledger" aria-label="Daily wire by standing">
+            <img class="marks-logo" src="media/deadmark-logo.png" alt="Deadmark logo, a banknote crossed out in red" width="960" height="544" />
+            <h3>Daily cap</h3>
+            <p>Notes you can ship in one day. Hostile and exiled ship nothing.</p>
+            <ol>
+              <li><span>Wary</span><b>1,000</b></li>
+              <li><span>Neutral</span><b>2,500</b></li>
+              <li><span>Warm</span><b>6,000</b></li>
+              <li><span>Friendly</span><b>12,000</b></li>
+              <li><span>Allied</span><b>25,000</b></li>
+            </ol>
+          </aside>
+        </div>
+      </section>
+
+      <section class="block enlist" id="enlist">
+        <div class="wrap enlist-grid">
+          <div>
+            <p class="kicker">05 / Enlist</p>
+            <h2 class="display">Stay on the wire</h2>
+            <p class="lede">The county is already open. Leave an email if you want a note when the roads change.</p>
+          </div>
+          <div>
+            <form id="enlist-form">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required placeholder="survivor@gmail.com" />
+              <button class="btn" type="submit">Enlist</button>
+            </form>
+            <p class="form-note" id="form-note" role="status"></p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer wrap-wide">
+      <a class="wordmark" href="#top"><img class="wordmark-mark" src="favicon.svg" alt="" width="20" height="20" /><span class="wordmark-text">DEAD<span class="tiles">TILES</span></span></a>
+      <p>© <span id="year">2026</span> DeadTiles. Built on Solana. All ruins reserved.</p>
+      <div class="foot-links">
+        <a href="https://play.deadtiles.com">Play</a>
+        <a href="https://x.com/Deadtiles" target="_blank" rel="noopener noreferrer">X</a>
+      </div>
+    </footer>
+
+    <script>
+      const header = document.querySelector(".site-header");
+      const onScroll = () => header.classList.toggle("is-stuck", window.scrollY > 8);
+      onScroll();
+      window.addEventListener("scroll", onScroll, { passive: true });
+
+      const year = document.querySelector("#year");
+      if (year) year.textContent = String(new Date().getFullYear());
+
+      const form = document.querySelector("#enlist-form");
+      const note = document.querySelector("#form-note");
+      const email = document.querySelector("#email");
+      const button = form.querySelector("button");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const value = email.value.trim();
+        if (!value) return;
+        note.textContent = "";
+        note.className = "form-note";
+        button.disabled = true;
+        const original = button.textContent;
+        button.textContent = "Enlisting";
+        try {
+          const response = await fetch("https://play.deadtiles.com/api/enlist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: value }),
+          });
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch {
+            payload = null;
+          }
+          if (response.ok && payload?.ok) {
+            note.textContent = payload.already
+              ? "You're already on the list."
+              : "You're on the list. Stay alive, survivor.";
+            note.className = "form-note ok";
+            if (!payload.already) form.reset();
+          } else if (response.status === 400) {
+            note.textContent = payload?.error || "Enter a valid email.";
+            note.className = "form-note bad";
+          } else if (response.status === 429) {
+            note.textContent = payload?.error || "Too many tries. Wait a little, then enlist again.";
+            note.className = "form-note bad";
+          } else {
+            note.textContent = "Something went wrong. Try again.";
+            note.className = "form-note bad";
+          }
+        } catch {
+          note.textContent = "Could not reach the list. Try again in a moment.";
+          note.className = "form-note bad";
+        } finally {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      });
+    </script>
+  </body>
+</html>

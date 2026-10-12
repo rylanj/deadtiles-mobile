@@ -638,9 +638,9 @@ export const ASHEN_MILITIA_DOCTOR_DIALOG_LINES: readonly AshenMilitiaCaptainDial
       id: "jobs",
       player: "Need anything from outside?",
       npc: [
-        "Bandages, water, alcohol, peaches. Hot chips if you can spare a bag. I also need a one-time stock of antibiotics and rags. And there's something of my wife's I want back.",
-        "Daily: bandages, water, alcohol, peaches, and chips. Once: five antibiotic packs, ten rags, and a personal ask. I'll pay.",
-        "Yes. Ward stock once a day. A stock of antibiotics and rags before the next wave, just once. And a pair of earrings I should have kept closer.",
+        "Bandages, water, alcohol, peaches. Hot chips if you can spare a bag. I need antibiotics and rags put away before the next wave, and there's something of my wife's I want back.",
+        "The ward runs through bandages, water, alcohol, peaches, and chips. Come back tomorrow if those run short. Antibiotics and rags I only need stocked once. And a pair of earrings I should have kept closer.",
+        "Yes. Keep the ward fed and clean, and I'll pay you again tomorrow. The antibiotic cabinet and the rag bin I only need filled once. Then there are the earrings.",
       ],
     },
     {

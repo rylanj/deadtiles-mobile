@@ -7,7 +7,6 @@ import {
   ASHEN_TRADER_QUESTS,
   ASHEN_TRADERS_FACTION,
   isAshenMarketTraderId,
-  DEADMARK_MIN_WIRE,
   deadmarkWireClosedReason,
   type WireDeskPayload,
   GUARD_NPC_TRADER_GUARD,
@@ -41,6 +40,9 @@ import { createDialogCloseButton } from "./dialogCloseBtn";
 import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
+import { claimPageOverlay } from "./pageOverlay";
+import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import { PhoneTalkNav, TalkSheet, syncTalkSheet, type TalkPush } from "./talkSheet";
 
 export type AshenTraderDialogUIHandlers = {
   onClose: () => void;
@@ -116,6 +118,14 @@ export class AshenTraderDialogUI {
   private standingPillEl: HTMLElement;
   private speechListEl: HTMLElement;
   private responseEl: HTMLElement;
+  private layoutEl!: HTMLElement;
+  private playerBodyEl!: HTMLElement;
+  private npcBodyEl!: HTMLElement;
+  private avatarHome!: HTMLElement;
+  private titleHome!: HTMLElement;
+  private sheet!: TalkSheet;
+  private phoneNav = new PhoneTalkNav();
+  private unbindPhoneResize: () => void = () => {};
 
   constructor(private handlers: AshenTraderDialogUIHandlers) {
     this.overlay = document.createElement("div");
@@ -195,12 +205,30 @@ export class AshenTraderDialogUI {
 
     columns.append(playerPanel, npcPanel);
     layout.append(toolbar, columns);
-    this.overlay.appendChild(layout);
+    this.layoutEl = layout;
+    this.playerBodyEl = playerBody;
+    this.npcBodyEl = npcBody;
+    this.avatarHome = npcHeader;
+    this.titleHome = npcTitleRow;
+    this.sheet = new TalkSheet("ashen", () => this.handlers.onClose(), () => {
+      this.phoneNav.back();
+      this.render();
+    });
+    this.overlay.append(layout, this.sheet.root);
 
     this.overlay.addEventListener("click", (e) => {
+      if (usePhoneDialogSheet()) return;
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    this.unbindPhoneResize = bindPhoneDialogResize(
+      () => this.visible,
+      () => this.overlay.classList.contains("talk-sheet-mode"),
+      () => this.render(),
+      this.overlay,
+    );
+
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -218,6 +246,7 @@ export class AshenTraderDialogUI {
     this.denyReason = reason;
     this.expandedQuestId = taskId;
     this.activeLineId = "jobs";
+    this.phoneNav.reopen();
     this.render();
   }
 
@@ -263,6 +292,7 @@ export class AshenTraderDialogUI {
     this.activeLineId = null;
     this.scriptedLineId = null;
     this.scriptedReply = null;
+    this.phoneNav.resetForLine();
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("ashen-dialog-open");
@@ -273,6 +303,7 @@ export class AshenTraderDialogUI {
   close() {
     this.visible = false;
     this.overlay.hidden = true;
+    this.overlay.classList.remove("talk-sheet-mode");
     document.body.classList.remove("ashen-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
@@ -281,11 +312,20 @@ export class AshenTraderDialogUI {
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
+    this.phoneNav.resetForLine();
     this.wireDesk = null;
     this.wireNotice = "";
     this.wireBusy = false;
     this.wireAmountDraft = "";
     this.clearWireWait();
+  }
+
+  destroy() {
+    this.close();
+    this.unbindPhoneResize();
+    this.unbindPhoneResize = () => {};
+    this.sheet.dispose();
+    this.overlay.remove();
   }
 
   sync(opts: {
@@ -365,6 +405,41 @@ export class AshenTraderDialogUI {
   }
 
   private render() {
+    this.renderContents();
+    this.presentTalk();
+  }
+
+  private presentTalk() {
+    const push: TalkPush | null = !this.isMarketTrader()
+      ? null
+      : this.activeLineId === "jobs"
+        ? "jobs"
+        : this.activeLineId === "wire"
+          ? "wire"
+          : this.activeLineId === "deposit" && !this.safeDepositRented
+            ? "deposit"
+            : null;
+    syncTalkSheet({
+      overlay: this.overlay,
+      layoutEl: this.layoutEl,
+      speechListEl: this.speechListEl,
+      responseEl: this.responseEl,
+      playerBodyEl: this.playerBodyEl,
+      npcBodyEl: this.npcBodyEl,
+      npcAvatarEl: this.npcAvatarEl,
+      npcTitleEl: this.npcTitleEl,
+      standingEl: this.standingPillEl,
+      avatarHome: this.avatarHome,
+      titleHome: this.titleHome,
+      sheet: this.sheet,
+      nav: this.phoneNav,
+      push,
+      activeLineId: this.activeLineId,
+      rerender: () => this.render(),
+    });
+  }
+
+  private renderContents() {
     this.updateStandingPill();
     this.speechListEl.replaceChildren();
     for (const line of ASHEN_TRADER_DIALOG_LINES) {
@@ -397,6 +472,7 @@ export class AshenTraderDialogUI {
           : line.player;
       fillSpeechButton(btn, speech, iconId);
       btn.addEventListener("click", () => {
+        this.phoneNav.resetForLine();
         this.activeLineId = line.id;
         if (line.action === "wire" && this.isMarketTrader()) {
           this.wireDesk = null;
@@ -444,6 +520,7 @@ export class AshenTraderDialogUI {
       fillSpeechButton(btn, line.player);
       markSpeechQuest(btn);
       btn.addEventListener("click", () => {
+        this.phoneNav.resetForLine();
         this.activeLineId = line.id;
         this.scriptedLineId = line.id;
         this.scriptedReply = line.reply ?? "…";
@@ -496,10 +573,15 @@ export class AshenTraderDialogUI {
     }
   }
 
+  private wireFloor(desk: WireDeskPayload): number {
+    return desk.minWire;
+  }
+
   private wireBlockReason(desk: WireDeskPayload): string | null {
-    if (desk.configured && desk.max >= DEADMARK_MIN_WIRE) return null;
+    if (desk.configured && desk.max > 0) return null;
     return deadmarkWireClosedReason({
       configured: desk.configured,
+      outage: desk.outage,
       cap: desk.personalCap,
       notesInPack: desk.notesInPack,
       coastLeft: desk.coastLeft,
@@ -514,10 +596,10 @@ export class AshenTraderDialogUI {
     return penalty > 0 ? `${base} (+${penalty.toLocaleString("en-US")} penalty)` : base;
   }
 
-  private wireAmountHint(amount: number | null, max: number): string {
+  private wireAmountHint(amount: number | null, max: number, minWire: number): string {
     if (amount == null) return "";
-    if (amount < DEADMARK_MIN_WIRE) {
-      return `I don't wire fewer than ${DEADMARK_MIN_WIRE} notes.`;
+    if (amount < minWire) {
+      return `I don't wire fewer than ${minWire.toLocaleString("en-US")} notes.`;
     }
     if (amount > max) {
       return `The book can take ${max.toLocaleString("en-US")} right now.`;
@@ -535,6 +617,7 @@ export class AshenTraderDialogUI {
   private appendWirePanel() {
     const section = document.createElement("div");
     section.className = "ashen-wire";
+    section.dataset.talkSheet = "wire";
     const desk = this.wireDesk;
 
     const addRow = (label: string, value: string) => {
@@ -571,7 +654,8 @@ export class AshenTraderDialogUI {
       ? `${desk.destination.slice(0, 4)}...${desk.destination.slice(-4)}`
       : desk.destination);
     addRow("Rate", "1 note = 1 mark");
-    addRow("Smallest wire", `${DEADMARK_MIN_WIRE.toLocaleString("en-US")} notes`);
+    const floor = this.wireFloor(desk);
+    addRow("Smallest wire", `${floor.toLocaleString("en-US")} notes`);
     const penalty = desk.penaltyDue ?? 0;
     if (penalty > 0) {
       addRow("Coast penalty", `${penalty.toLocaleString("en-US")} notes, once`);
@@ -601,18 +685,20 @@ export class AshenTraderDialogUI {
       !this.wireBusy &&
       blocked == null &&
       amount != null &&
-      amount >= DEADMARK_MIN_WIRE &&
+      amount >= floor &&
       amount <= desk.max;
     if (blocked && !this.wireBusy) {
       const line = document.createElement("div");
       line.className = "ashen-wire-note";
+      line.dataset.wireBlocked = "1";
       line.textContent = blocked;
       section.appendChild(line);
     } else if (!blocked) {
       const hint = document.createElement("div");
       hint.className = "ashen-wire-note";
+      hint.dataset.wireHint = "1";
       const showHint = (amount: number | null) => {
-        hint.textContent = this.wireAmountHint(amount, desk.max);
+        hint.textContent = this.wireAmountHint(amount, desk.max, floor);
         hint.hidden = hint.textContent.length === 0;
       };
       const amountRow = document.createElement("div");
@@ -621,19 +707,21 @@ export class AshenTraderDialogUI {
       input.className = "ashen-wire-amount";
       input.inputMode = "numeric";
       input.autocomplete = "off";
-      input.placeholder = `${DEADMARK_MIN_WIRE} or more`;
+      input.placeholder = floor < desk.max ? `${floor} or more` : `${floor}`;
       input.value = this.wireAmountDraft;
       input.disabled = this.wireBusy;
       input.addEventListener("input", () => {
         this.wireAmountDraft = input.value.replace(/\D/g, "").slice(0, 6);
         if (input.value !== this.wireAmountDraft) input.value = this.wireAmountDraft;
-        const ship = section.querySelector<HTMLButtonElement>("[data-wire-ship]");
+        const ship =
+          section.querySelector<HTMLButtonElement>("[data-wire-ship]") ??
+          this.overlay.querySelector<HTMLButtonElement>("[data-wire-ship]");
         const next = this.readWireAmount();
         showHint(next);
         if (ship && this.wireDesk) {
           const fits =
             next != null &&
-            next >= DEADMARK_MIN_WIRE &&
+            next >= this.wireFloor(this.wireDesk) &&
             next <= this.wireDesk.max;
           ship.disabled = this.wireBusy || !fits;
           ship.textContent = this.shipLabel(fits ? next : null, this.wireDesk.penaltyDue ?? 0);
@@ -667,7 +755,7 @@ export class AshenTraderDialogUI {
           !this.npcId ||
           !this.wireDesk ||
           notes == null ||
-          notes < DEADMARK_MIN_WIRE ||
+          notes < this.wireFloor(this.wireDesk) ||
           notes > this.wireDesk.max
         ) {
           return;
@@ -689,6 +777,7 @@ export class AshenTraderDialogUI {
     const canPay = banknotes >= SAFE_DEPOSIT_COST;
     const section = document.createElement("div");
     section.className = "craft-recipe craft-recipe--expanded";
+    section.dataset.talkSheet = "deposit";
     if (canPay) section.classList.add("craft-recipe--ready");
 
     const details = document.createElement("div");
@@ -734,6 +823,7 @@ export class AshenTraderDialogUI {
     const quests = parseQuestsJson(this.questsJson);
     const list = document.createElement("div");
     list.className = "craft-recipe-list red-dialog-task-list";
+    list.dataset.talkSheet = "jobs";
     for (const def of ASHEN_TRADER_QUESTS) {
       if (!isQuestListed(quests, def)) continue;
       list.appendChild(this.buildQuestSection(def));

@@ -138,11 +138,11 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
   search_coleman: {
     id: "search_coleman",
     chapter: "patrol",
-    title: "Search Coleman's house",
+    title: "Coleman's house",
     body:
-      "Sergeant Coleman's house is marked on your map in Birchport. Search the furniture. You will not be told which piece matters. Bring what you find back to Davis.",
+      "Sergeant Coleman's house is marked on your map in Birchport. Look through the drawers, the beds, and the cupboards. He left something behind. Bring what you find back to Davis.",
     mobileBody:
-      "Sergeant Coleman's house is marked on your map in Birchport. Tap furniture to search it. You will not be told which piece matters. Bring what you find back to Davis.",
+      "Sergeant Coleman's house is marked on your map in Birchport. Tap the drawers, beds, and cupboards until you find what he left. Bring it back to Davis.",
   },
   finish: {
     id: "finish",
@@ -183,6 +183,7 @@ export const TUTORIAL_TIP_IDS = [
   "gunshot",
   "theft_warning",
   "weapon_broke",
+  "melee",
   "firearm",
   "locked_door",
   "other_survivor",
@@ -203,6 +204,8 @@ export type TutorialTipDef = {
   id: TutorialTipId;
   title: string;
   body: string;
+  /** Replaces `body` on touch devices. */
+  mobileBody?: string;
 };
 
 export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
@@ -296,6 +299,14 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
     title: "Weapon broke",
     body: "That weapon wore out. A broken melee weapon is useless until you find or make another. Guns do not wear out.",
   },
+  melee: {
+    id: "melee",
+    title: "Melee",
+    body:
+      "Click a target in range to hit them. Or hold CTRL to ready up, then click to swing in any direction.",
+    mobileBody:
+      "Tap a target in range to hit them. Or tap the aim button to ready up, then tap to swing in any direction.",
+  },
   firearm: {
     id: "firearm",
     title: "Firearm",
@@ -367,6 +378,7 @@ export const CONTROLS_DESKTOP: readonly ControlsLegendRow[] = [
   { key: "Tab", action: "Inventory" },
   { key: "1 / 2", action: "Equip hotbar weapon" },
   { key: "0", action: "Put weapon away" },
+  { key: "Click target", action: "Melee hit in range" },
   { key: "CTRL + Click", action: "Aim and attack" },
   { key: "R", action: "Reload" },
   { key: "M", action: "Map" },
@@ -385,6 +397,7 @@ export const CONTROLS_MOBILE: readonly ControlsLegendRow[] = [
   { key: "Tap a person or object", action: "Talk, search, interact" },
   { key: "Backpack button", action: "Inventory" },
   { key: "Hotbar", action: "Equip weapon" },
+  { key: "Tap target", action: "Melee hit in range" },
   { key: "Aim button + Tap", action: "Aim and attack" },
   { key: "Reload button", action: "Reload" },
   { key: "Map button", action: "Map" },
@@ -425,6 +438,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
     title: "Combat and noise",
     paragraphs: [
       "Equip a weapon from your hotbar, aim, and attack toward the cursor. Shots stop at the first body or solid cover in the way.",
+      "With a melee weapon, click a target in range to hit them (tap on a phone). Hold CTRL, or tap the aim button, to ready up, then click or tap to swing in any direction.",
       "Gunshots are loud. Walkers far away hear them and come to look. Melee is quiet, but melee weapons wear out with use.",
       "Walkers move faster at night. Never fight a group in the open if you can use a doorway.",
     ],

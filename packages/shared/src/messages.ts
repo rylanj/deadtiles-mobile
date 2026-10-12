@@ -31,6 +31,16 @@ export type MoveToMessage = {
   queue?: boolean;
 };
 
+/**
+ * Held WASD / thumbstick. World-space direction, not a tile goal.
+ * A zero vector stops. The server integrates this; it does not pathfind.
+ */
+export type SteerMessage = {
+  dirX: number;
+  dirY: number;
+  sprint?: boolean;
+};
+
 export type AttackMessage = {
   targetId: string;
 };
@@ -423,6 +433,7 @@ export type PrefabCancelMessage = {
 
 export type ClientMessage =
   | { type: "moveTo"; payload: MoveToMessage }
+  | { type: "steer"; payload: SteerMessage }
   | { type: "attack"; payload: AttackMessage }
   | { type: "fire"; payload: FireMessage }
   | { type: "aim"; payload: AimMessage }
@@ -580,6 +591,18 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
           sprint: p.sprint === true,
           stopOnly: p.stopOnly === true,
           queue: p.queue === true,
+        },
+      };
+    }
+    case "steer": {
+      if (!isFiniteNum(p.dirX) || !isFiniteNum(p.dirY)) return null;
+      if (Math.abs(p.dirX) > 2 || Math.abs(p.dirY) > 2) return null;
+      return {
+        type,
+        payload: {
+          dirX: p.dirX,
+          dirY: p.dirY,
+          sprint: p.sprint === true,
         },
       };
     }

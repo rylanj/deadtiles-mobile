@@ -62,6 +62,8 @@ export class FactionAttackWarningUI {
   }
 
   destroy() {
+    this.visible = false;
+    this.overlay.hidden = true;
     document.body.classList.remove("faction-attack-warning-open");
     this.overlay.remove();
   }

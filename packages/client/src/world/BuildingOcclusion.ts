@@ -198,34 +198,6 @@ export class BuildingOcclusionMask {
     return true;
   }
 
-  /** Player sprite outline — buildings, trees, and player walls. */
-  applyForPlayerOutline(tileX: number, tileY: number, sortDepth: number): boolean {
-    this.clearSpriteMasks();
-    const buildings = getOccludingBuildingsForPlayerOutline(tileX, tileY, sortDepth);
-    const trees = getOccludingTreesForPlayerOutline(tileX, tileY, sortDepth);
-    this.maskGraphics.clear();
-    const walls = stampPlayerWallsOnMask(
-      this.maskGraphics,
-      tileX,
-      tileY,
-      sortDepth,
-      true,
-    );
-    if (buildings.length === 0 && trees.length === 0 && !walls) return false;
-
-    for (const bld of buildings) {
-      drawBuildingCuboidMask(this.maskGraphics, bld);
-    }
-    for (const tree of trees) {
-      const img = createTreeMaskImage(this.scene, tree);
-      // Mask source only — must not appear in the normal display list.
-      img.setVisible(true);
-      this.maskContainer.add(img);
-      this.spriteMaskImages.push(img);
-    }
-    return true;
-  }
-
   clear() {
     this.clearSpriteMasks();
     this.maskGraphics.clear();

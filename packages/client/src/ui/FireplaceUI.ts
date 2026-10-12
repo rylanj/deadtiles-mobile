@@ -16,6 +16,7 @@ import {
 import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import { claimPageOverlay } from "./pageOverlay";
 import {
   bindSlotPointerDnD,
   cancelAllSlotDrags,
@@ -243,6 +244,7 @@ export class FireplaceUI {
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -291,6 +293,11 @@ export class FireplaceUI {
     this.lastTap = null;
     cancelAllSlotDrags();
     this.stopCookTimer();
+  }
+
+  destroy() {
+    this.close();
+    this.overlay.remove();
   }
 
   private applyState(state: FireplaceUIState) {

@@ -283,8 +283,8 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
       "That's Kevin, at the Birchport market. He ships notes east.",
     ],
     npcMarket: [
-      `The coast buys the paper. One note becomes one mark, wired to the wallet already on your ledger. They can only handle so many shipments in a day, so once that limit is spent the wire is closed until they open a new book tomorrow. Your standing with us decides how much of the day's shipments they'll take from you. First come, first served, and I won't put fewer than ${DEADMARK_MIN_WIRE} notes on the truck.`,
-      `I can ship them east. The coast wires the marks back, one for one, to the wallet on your ledger. There's only so much wire they can run at a time, and that daily limit is shared. When it's gone, nobody else gets through until tomorrow. Better standing gets a larger share, the book is first come, first served, and the smallest I'll send is ${DEADMARK_MIN_WIRE} notes.`,
+      `The coast buys the paper. One note becomes one mark, wired to the wallet already on your ledger. They can only handle so many shipments in a day, so once that limit is spent the wire is closed until they open a new book tomorrow. Your standing with us decides how much of the day's shipments they'll take from you. First come, first served, and I won't put fewer than ${DEADMARK_MIN_WIRE} notes on the truck, unless that's all you have left today.`,
+      `I can ship them east. The coast wires the marks back, one for one, to the wallet on your ledger. There's only so much wire they can run at a time, and that daily limit is shared. When it's gone, nobody else gets through until tomorrow. Better standing gets a larger share, the book is first come, first served, and the smallest I'll send is ${DEADMARK_MIN_WIRE} notes, or whatever is left today if that's less.`,
     ],
     npcGuard: [
       "That's Kevin's book. Talk to the man with the ledger.",

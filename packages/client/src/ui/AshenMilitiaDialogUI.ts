@@ -62,6 +62,9 @@ import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } 
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
+import { claimPageOverlay } from "./pageOverlay";
+import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import { PhoneTalkNav, TalkSheet, syncTalkSheet, type TalkPush } from "./talkSheet";
 
 export type AshenMilitiaDialogUIHandlers = {
   onClose: () => void;
@@ -171,6 +174,14 @@ export class AshenMilitiaDialogUI {
   private standingPillEl: HTMLElement;
   private speechListEl: HTMLElement;
   private responseEl: HTMLElement;
+  private layoutEl!: HTMLElement;
+  private playerBodyEl!: HTMLElement;
+  private npcBodyEl!: HTMLElement;
+  private avatarHome!: HTMLElement;
+  private titleHome!: HTMLElement;
+  private sheet!: TalkSheet;
+  private phoneNav = new PhoneTalkNav();
+  private unbindPhoneResize: () => void = () => {};
 
   constructor(private handlers: AshenMilitiaDialogUIHandlers) {
     this.overlay = document.createElement("div");
@@ -250,12 +261,30 @@ export class AshenMilitiaDialogUI {
 
     columns.append(playerPanel, npcPanel);
     layout.append(toolbar, columns);
-    this.overlay.appendChild(layout);
+    this.layoutEl = layout;
+    this.playerBodyEl = playerBody;
+    this.npcBodyEl = npcBody;
+    this.avatarHome = npcHeader;
+    this.titleHome = npcTitleRow;
+    this.sheet = new TalkSheet("ashen", () => this.handlers.onClose(), () => {
+      this.phoneNav.back();
+      this.render();
+    });
+    this.overlay.append(layout, this.sheet.root);
 
     this.overlay.addEventListener("click", (e) => {
+      if (usePhoneDialogSheet()) return;
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    this.unbindPhoneResize = bindPhoneDialogResize(
+      () => this.visible,
+      () => this.overlay.classList.contains("talk-sheet-mode"),
+      () => this.render(),
+      this.overlay,
+    );
+
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -273,6 +302,7 @@ export class AshenMilitiaDialogUI {
     this.denyReason = reason;
     this.expandedTaskId = taskId;
     this.activeLineId = "jobs";
+    this.phoneNav.reopen();
     this.render();
   }
 
@@ -335,6 +365,7 @@ export class AshenMilitiaDialogUI {
     this.scriptedLineId = null;
     this.scriptedReply = null;
     this.expandedTaskId = null;
+    this.phoneNav.resetForLine();
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("ashen-dialog-open");
@@ -373,12 +404,14 @@ export class AshenMilitiaDialogUI {
   close() {
     this.visible = false;
     this.overlay.hidden = true;
+    this.overlay.classList.remove("talk-sheet-mode");
     document.body.classList.remove("ashen-dialog-open");
     this.npcId = "";
     this.activeLineId = null;
     this.scriptedLineId = null;
     this.scriptedReply = null;
     this.expandedTaskId = null;
+    this.phoneNav.resetForLine();
     this.isCaptain = false;
     this.isDoctor = false;
     this.isColeman = false;
@@ -387,6 +420,14 @@ export class AshenMilitiaDialogUI {
     this.taskCompletions = {};
     this.questsJson = "";
     this.tutorialDone = false;
+  }
+
+  destroy() {
+    this.close();
+    this.unbindPhoneResize();
+    this.unbindPhoneResize = () => {};
+    this.sheet.dispose();
+    this.overlay.remove();
   }
 
   private parseTaskCompletions(json: string | undefined): Record<string, number> {
@@ -485,6 +526,38 @@ export class AshenMilitiaDialogUI {
   }
 
   private render() {
+    this.renderContents();
+    this.presentTalk();
+  }
+
+  private presentTalk() {
+    const push: TalkPush | null =
+      this.isDoctor && this.activeLineId === "heal"
+        ? "heal"
+        : (this.isCaptain || this.isDoctor) && this.activeLineId === "jobs"
+          ? "jobs"
+          : null;
+    syncTalkSheet({
+      overlay: this.overlay,
+      layoutEl: this.layoutEl,
+      speechListEl: this.speechListEl,
+      responseEl: this.responseEl,
+      playerBodyEl: this.playerBodyEl,
+      npcBodyEl: this.npcBodyEl,
+      npcAvatarEl: this.npcAvatarEl,
+      npcTitleEl: this.npcTitleEl,
+      standingEl: this.standingPillEl,
+      avatarHome: this.avatarHome,
+      titleHome: this.titleHome,
+      sheet: this.sheet,
+      nav: this.phoneNav,
+      push,
+      activeLineId: this.activeLineId,
+      rerender: () => this.render(),
+    });
+  }
+
+  private renderContents() {
     this.updateStandingPill();
     const lines = this.dialogLines();
     this.speechListEl.replaceChildren();
@@ -505,6 +578,7 @@ export class AshenMilitiaDialogUI {
       fillSpeechButton(btn, line.player, iconId);
       if (this.isQuestChat(line.id)) markSpeechQuest(btn);
       btn.addEventListener("click", () => {
+        this.phoneNav.resetForLine();
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
         const scripted = this.storyReplyText(line.id);
@@ -589,6 +663,7 @@ export class AshenMilitiaDialogUI {
     if (this.isDoctor && active.id === "heal") {
       const list = document.createElement("div");
       list.className = "craft-recipe-list red-dialog-task-list";
+      list.dataset.talkSheet = "heal";
       list.appendChild(this.buildHealSection());
       this.responseEl.appendChild(list);
     }
@@ -603,6 +678,7 @@ export class AshenMilitiaDialogUI {
       const quests = parseQuestsJson(this.questsJson);
       const list = document.createElement("div");
       list.className = "craft-recipe-list red-dialog-task-list";
+      list.dataset.talkSheet = "jobs";
       for (const task of tasks) {
         const def = getQuestDefinition(task.id);
         if (def && !isQuestListed(quests, def)) continue;
@@ -639,6 +715,7 @@ export class AshenMilitiaDialogUI {
     if (defs.length === 0) return;
     const list = document.createElement("div");
     list.className = "craft-recipe-list red-dialog-task-list";
+    list.dataset.talkSheet = "story";
     for (const def of defs) list.appendChild(this.buildStorySection(def));
     this.responseEl.appendChild(list);
   }

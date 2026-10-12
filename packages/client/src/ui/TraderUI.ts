@@ -36,6 +36,8 @@ import { appendItemIcon, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
+import { claimPageOverlay } from "./pageOverlay";
+import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
 
 export type TraderUIHandlers = {
   onConfirm: (
@@ -99,6 +101,25 @@ export class TraderUI {
   private buyOffers = new Map<number, TradeOfferBuyLine>();
   /** True after Confirm until the next tradeSync (prevents double-submit). */
   private confirmPending = false;
+  private layoutEl!: HTMLElement;
+  private phoneOn = false;
+  private phoneTab: "player" | "trader" = "player";
+  private phoneItemOpen = false;
+  private phoneReviewOpen = false;
+  private phoneDraftQty = 1;
+  private phoneDraftKey = "";
+  private unbindPhoneResize: () => void = () => {};
+  private phoneRoot!: HTMLElement;
+  private phoneStandingEl!: HTMLElement;
+  private phoneYouNotes!: HTMLElement;
+  private phoneThemNotes!: HTMLElement;
+  private phonePackTab!: HTMLButtonElement;
+  private phoneStockTab!: HTMLButtonElement;
+  private phoneGridEl!: HTMLElement;
+  private phoneStripEl!: HTMLElement;
+  private phoneStripText!: HTMLElement;
+  private phoneItemEl!: HTMLElement;
+  private phoneReviewEl!: HTMLElement;
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -129,6 +150,7 @@ export class TraderUI {
 
     const layout = document.createElement("div");
     layout.className = "trader-layout";
+    this.layoutEl = layout;
 
     const toolbar = document.createElement("div");
     toolbar.className = "trader-toolbar";
@@ -249,12 +271,22 @@ export class TraderUI {
     );
 
     layout.append(toolbar, columns, this.footerEl);
-    this.overlay.appendChild(layout);
+    this.buildPhoneSheet();
+    this.overlay.append(layout, this.phoneRoot);
 
     this.overlay.addEventListener("click", (e) => {
+      if (usePhoneDialogSheet()) return;
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
+    this.unbindPhoneResize = bindPhoneDialogResize(
+      () => this.visible,
+      () => this.overlay.classList.contains("trader-sheet-mode"),
+      () => this.render(),
+      this.overlay,
+    );
+
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
     this.updateActionButtons();
   }
@@ -299,6 +331,11 @@ export class TraderUI {
     this.selection = null;
     this.lastOfferClick = null;
     this.confirmPending = false;
+    this.phoneTab = "player";
+    this.phoneItemOpen = false;
+    this.phoneReviewOpen = false;
+    this.phoneDraftQty = 1;
+    this.phoneDraftKey = "";
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("trader-open");
@@ -324,6 +361,9 @@ export class TraderUI {
       // Successful Confirm — wipe the offer so leftover badges don't stick.
       this.clearOffer();
       this.selection = null;
+      this.phoneItemOpen = false;
+      this.phoneReviewOpen = false;
+      this.phoneDraftKey = "";
       this.render();
       return;
     }
@@ -395,12 +435,23 @@ export class TraderUI {
   close() {
     this.visible = false;
     this.overlay.hidden = true;
+    this.overlay.classList.remove("trader-sheet-mode");
     document.body.classList.remove("trader-open");
     this.traderId = "";
     this.selection = null;
     this.lastOfferClick = null;
+    this.phoneItemOpen = false;
+    this.phoneReviewOpen = false;
+    this.phoneDraftKey = "";
     this.clearOffer();
     this.footerEl.hidden = true;
+  }
+
+  destroy() {
+    this.close();
+    this.unbindPhoneResize();
+    this.unbindPhoneResize = () => {};
+    this.overlay.remove();
   }
 
   private clearOffer() {
@@ -413,6 +464,9 @@ export class TraderUI {
   private resetOffer() {
     this.clearOffer();
     this.selection = null;
+    this.phoneItemOpen = false;
+    this.phoneReviewOpen = false;
+    this.phoneDraftKey = "";
     this.render();
   }
 
@@ -452,69 +506,21 @@ export class TraderUI {
   }
 
   private render() {
+    this.phoneOn = usePhoneDialogSheet();
+    this.overlay.classList.toggle("trader-sheet-mode", this.phoneOn);
+    this.layoutEl.hidden = this.phoneOn;
+    this.phoneRoot.hidden = !this.phoneOn;
+    if (this.phoneOn) {
+      this.renderPhone();
+      return;
+    }
+    this.phoneKeepGridScroll = true;
+
     this.playerNotesEl.textContent = formatNotes(this.playerBanknotes);
     this.traderNotesEl.textContent = formatNotes(this.traderBanknotes);
     this.updateStandingPill();
-
-    this.playerGridEl.replaceChildren();
-    let playerCount = 0;
-    for (let i = 0; i < this.playerInventory.length; i++) {
-      const slot = this.playerInventory[i];
-      if (!slot || slot.id === "banknote") continue;
-      const def = getItemDefinition(slot.id);
-      if (!def) continue;
-      playerCount++;
-      const offered = this.offeredSellQty(i);
-      this.playerGridEl.appendChild(
-        this.makeCell({
-          side: "player",
-          slotIndex: i,
-          id: slot.id,
-          quantity: slot.quantity,
-          offered,
-          category: def.category,
-          selected:
-            this.selection?.side === "player" &&
-            this.selection.slotIndex === i,
-        }),
-      );
-    }
-    if (playerCount === 0) {
-      const empty = document.createElement("div");
-      empty.className = "trader-empty";
-      empty.textContent = "Nothing to sell";
-      this.playerGridEl.appendChild(empty);
-    }
-
-    this.traderGridEl.replaceChildren();
-    let traderCount = 0;
-    for (let i = 0; i < this.stock.length; i++) {
-      const entry = this.stock[i]!;
-      const def = getItemDefinition(entry.id);
-      if (!def) continue;
-      traderCount++;
-      const offered = this.offeredBuyQty(i);
-      this.traderGridEl.appendChild(
-        this.makeCell({
-          side: "trader",
-          stockIndex: i,
-          id: entry.id,
-          quantity: entry.quantity,
-          offered,
-          category: def.category,
-          selected:
-            this.selection?.side === "trader" &&
-            this.selection.stockIndex === i,
-        }),
-      );
-    }
-    if (traderCount === 0) {
-      const empty = document.createElement("div");
-      empty.className = "trader-empty";
-      empty.textContent = "Sold out";
-      this.traderGridEl.appendChild(empty);
-    }
-
+    this.fillGrid(this.playerGridEl, "player", false);
+    this.fillGrid(this.traderGridEl, "trader", false);
     this.updateDetail();
     this.updateSettlement();
     this.updateActionButtons();
@@ -522,9 +528,70 @@ export class TraderUI {
 
   private updateStandingPill() {
     const standing = ashenStanding(this.ashenReputation);
-    this.standingPillEl.textContent = ashenStandingLabel(standing);
-    this.standingPillEl.className = `trader-standing-pill trader-standing-pill--${standing}`;
-    this.standingPillEl.title = `${ASHEN_TRADERS_FACTION}: ${Number(this.ashenReputation.toFixed(1))}`;
+    const label = ashenStandingLabel(standing);
+    const title = `${ASHEN_TRADERS_FACTION}: ${Number(this.ashenReputation.toFixed(1))}`;
+    for (const el of [this.standingPillEl, this.phoneStandingEl]) {
+      el.textContent = label;
+      el.className = `trader-standing-pill trader-standing-pill--${standing}`;
+      el.title = title;
+    }
+  }
+
+  private fillGrid(
+    grid: HTMLElement,
+    side: "player" | "trader",
+    phone: boolean,
+  ): void {
+    grid.replaceChildren();
+    let count = 0;
+    if (side === "player") {
+      for (let i = 0; i < this.playerInventory.length; i++) {
+        const slot = this.playerInventory[i];
+        if (!slot || slot.id === "banknote") continue;
+        const def = getItemDefinition(slot.id);
+        if (!def) continue;
+        count++;
+        grid.appendChild(
+          this.makeCell({
+            side: "player",
+            slotIndex: i,
+            id: slot.id,
+            quantity: slot.quantity,
+            offered: this.offeredSellQty(i),
+            category: def.category,
+            selected:
+              this.selection?.side === "player" && this.selection.slotIndex === i,
+            phone,
+          }),
+        );
+      }
+    } else {
+      for (let i = 0; i < this.stock.length; i++) {
+        const entry = this.stock[i]!;
+        const def = getItemDefinition(entry.id);
+        if (!def) continue;
+        count++;
+        grid.appendChild(
+          this.makeCell({
+            side: "trader",
+            stockIndex: i,
+            id: entry.id,
+            quantity: entry.quantity,
+            offered: this.offeredBuyQty(i),
+            category: def.category,
+            selected:
+              this.selection?.side === "trader" && this.selection.stockIndex === i,
+            phone,
+          }),
+        );
+      }
+    }
+    if (count === 0) {
+      const empty = document.createElement("div");
+      empty.className = "trader-empty";
+      empty.textContent = side === "player" ? "Nothing to sell" : "Sold out";
+      grid.appendChild(empty);
+    }
   }
 
   private makeCell(opts: {
@@ -536,6 +603,7 @@ export class TraderUI {
     offered: number;
     category: string;
     selected: boolean;
+    phone?: boolean;
   }) {
     const cell = document.createElement("div");
     cell.className = "inventory-cell inventory-cell--filled trader-cell";
@@ -609,6 +677,21 @@ export class TraderUI {
         };
       }
     };
+    if (opts.phone) {
+      cell.addEventListener("click", () => {
+        selectCell();
+        this.phoneReviewOpen = false;
+        this.phoneItemOpen = true;
+        this.render();
+      });
+      cell.addEventListener("keydown", (event) => {
+        if (event.target !== cell) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        cell.click();
+      });
+      return cell;
+    }
     cell.addEventListener("click", () => {
       selectCell();
       const key =
@@ -799,28 +882,8 @@ export class TraderUI {
       return;
     }
 
-    const sells = [...this.sellOffers.values()];
-    const buys = [...this.buyOffers.values()];
-    const { sellTotal, buyTotal, net } = tradeOfferTotals(
-      sells,
-      buys,
-      this.ashenReputation,
-      this.barterT,
-    );
-    const cash = tradeOfferCashSettlement(
-      net,
-      this.traderBanknotes,
-      this.playerBanknotes,
-    );
-    const blockReason = this.confirmBlockReason(
-      cash.playerCanAfford,
-      sells,
-      buys,
-    );
-    const repGain =
-      buyTotal * ASHEN_REP_PER_DOLLAR_GIVEN +
-      sellTotal * ASHEN_REP_PER_DOLLAR_TAKEN +
-      cash.shortfall * ASHEN_REP_PER_DOLLAR_TAKEN;
+    const facts = this.offerFacts();
+    const { net, cash, blockReason, repGain } = facts;
 
     this.settlementEl.hidden = false;
     this.settlementEl.replaceChildren();
@@ -991,6 +1054,551 @@ export class TraderUI {
     const buys = [...this.buyOffers.values()];
     this.confirmPending = true;
     this.updateSettlement();
+    if (this.phoneOn) this.renderPhone();
     this.handlers.onConfirm(sells, buys);
+  }
+
+  private offerFacts() {
+    const sells = [...this.sellOffers.values()];
+    const buys = [...this.buyOffers.values()];
+    const totals = tradeOfferTotals(
+      sells,
+      buys,
+      this.ashenReputation,
+      this.barterT,
+    );
+    const cash = tradeOfferCashSettlement(
+      totals.net,
+      this.traderBanknotes,
+      this.playerBanknotes,
+    );
+    return {
+      sells,
+      buys,
+      ...totals,
+      cash,
+      blockReason: this.confirmBlockReason(cash.playerCanAfford, sells, buys),
+      repGain:
+        totals.buyTotal * ASHEN_REP_PER_DOLLAR_GIVEN +
+        totals.sellTotal * ASHEN_REP_PER_DOLLAR_TAKEN +
+        cash.shortfall * ASHEN_REP_PER_DOLLAR_TAKEN,
+    };
+  }
+
+  private buildPhoneSheet(): void {
+    this.phoneRoot = document.createElement("div");
+    this.phoneRoot.className = "trader-sheet";
+    this.phoneRoot.hidden = true;
+
+    const header = document.createElement("div");
+    header.className = "trader-sheet-header";
+    const avatar = document.createElement("img");
+    avatar.className = "trader-avatar";
+    avatar.src = TRADER_AVATAR;
+    avatar.alt = "Trader";
+    const nameCol = document.createElement("div");
+    nameCol.className = "trader-sheet-name";
+    const title = document.createElement("h2");
+    title.className = "inventory-title";
+    title.textContent = ASHEN_TRADERS_FACTION;
+    this.phoneStandingEl = document.createElement("div");
+    this.phoneStandingEl.className = "trader-standing-pill trader-standing-pill--neutral";
+    this.phoneStandingEl.textContent = "Neutral";
+    nameCol.append(title, this.phoneStandingEl);
+    const wallets = document.createElement("div");
+    wallets.className = "trader-sheet-wallets";
+    this.phoneYouNotes = document.createElement("span");
+    this.phoneThemNotes = document.createElement("span");
+    wallets.append(
+      this.walletPill("You", this.phoneYouNotes),
+      this.walletPill("Them", this.phoneThemNotes),
+    );
+    header.append(
+      avatar,
+      nameCol,
+      wallets,
+      createDialogCloseButton(() => this.handlers.onClose()),
+    );
+
+    const stage = document.createElement("div");
+    stage.className = "trader-sheet-stage";
+    const browse = document.createElement("div");
+    browse.className = "trader-sheet-browse";
+    const tabs = document.createElement("div");
+    tabs.className = "trader-sheet-tabs";
+    tabs.setAttribute("role", "tablist");
+    this.phonePackTab = this.phoneTabButton("Your pack", "player");
+    this.phoneStockTab = this.phoneTabButton("Their stock", "trader");
+    tabs.append(this.phonePackTab, this.phoneStockTab);
+    const gridWrap = document.createElement("div");
+    gridWrap.className = "trader-sheet-grid-wrap";
+    this.phoneGridEl = document.createElement("div");
+    this.phoneGridEl.className = "trader-sheet-grid";
+    gridWrap.append(this.phoneGridEl);
+    this.phoneStripEl = document.createElement("div");
+    this.phoneStripEl.className = "trader-sheet-strip";
+    this.phoneStripEl.hidden = true;
+    this.phoneStripText = document.createElement("span");
+    this.phoneStripText.className = "trader-sheet-strip-text";
+    const reviewBtn = document.createElement("button");
+    reviewBtn.type = "button";
+    reviewBtn.className = "trader-sheet-review-btn";
+    reviewBtn.textContent = "Review";
+    reviewBtn.addEventListener("click", () => {
+      this.phoneReviewOpen = true;
+      this.phoneItemOpen = false;
+      this.render();
+    });
+    this.phoneStripEl.append(this.phoneStripText, reviewBtn);
+    browse.append(tabs, gridWrap, this.phoneStripEl);
+    this.phoneItemEl = document.createElement("div");
+    this.phoneItemEl.className = "trader-sheet-item";
+    this.phoneItemEl.hidden = true;
+    stage.append(browse, this.phoneItemEl);
+    this.phoneReviewEl = document.createElement("div");
+    this.phoneReviewEl.className = "trader-sheet-review";
+    this.phoneReviewEl.hidden = true;
+    this.phoneRoot.append(header, stage, this.phoneReviewEl);
+  }
+
+  private walletPill(label: string, amount: HTMLElement): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "trader-sheet-wallet";
+    const kicker = document.createElement("span");
+    kicker.className = "trader-sheet-wallet-label";
+    kicker.textContent = label;
+    amount.className = "trader-notes-pill";
+    wrap.append(kicker, amount);
+    return wrap;
+  }
+
+  private phoneTabButton(
+    label: string,
+    tab: "player" | "trader",
+  ): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "trader-sheet-tab";
+    btn.textContent = label;
+    btn.setAttribute("role", "tab");
+    btn.addEventListener("click", () => this.setPhoneTab(tab));
+    return btn;
+  }
+
+  private setPhoneTab(tab: "player" | "trader"): void {
+    if (this.phoneTab === tab) return;
+    this.phoneTab = tab;
+    this.phoneItemOpen = false;
+    this.selection = null;
+    this.phoneDraftKey = "";
+    this.phoneKeepGridScroll = false;
+    this.render();
+  }
+
+  private phoneKeepGridScroll = true;
+
+  private renderPhone(): void {
+    this.phoneYouNotes.textContent = formatNotes(this.playerBanknotes);
+    this.phoneThemNotes.textContent = formatNotes(this.traderBanknotes);
+    this.updateStandingPill();
+    const packOn = this.phoneTab === "player";
+    this.phonePackTab.classList.toggle("trader-sheet-tab--on", packOn);
+    this.phoneStockTab.classList.toggle("trader-sheet-tab--on", !packOn);
+    this.phonePackTab.setAttribute("aria-selected", packOn ? "true" : "false");
+    this.phoneStockTab.setAttribute("aria-selected", packOn ? "false" : "true");
+
+    const wrap = this.phoneGridEl.parentElement;
+    const scroll = this.phoneKeepGridScroll ? (wrap?.scrollTop ?? 0) : 0;
+    this.phoneKeepGridScroll = true;
+    this.fillGrid(this.phoneGridEl, this.phoneTab, true);
+    if (wrap) wrap.scrollTop = scroll;
+
+    if (this.phoneReviewOpen && !this.hasOffer()) this.phoneReviewOpen = false;
+    const showReview = this.phoneReviewOpen && this.hasOffer();
+    const showItem = this.phoneItemSheetVisible() && !showReview;
+    this.phoneReviewEl.hidden = !showReview;
+    this.phoneItemEl.hidden = !showItem;
+    this.phoneRoot.classList.toggle("trader-sheet--review", showReview);
+    this.phoneRoot.classList.toggle("trader-sheet--item", showItem);
+    if (showItem) this.fillItemSheet();
+
+    const showStrip = this.hasOffer() && !showReview;
+    this.phoneStripEl.hidden = !showStrip;
+    if (showStrip) this.phoneStripText.textContent = this.offerStripText();
+    if (showReview) this.fillReview();
+    this.updateSettlement();
+  }
+
+  private phoneItemSheetVisible(): boolean {
+    if (!this.phoneItemOpen || !this.selection) return false;
+    return this.selection.side === this.phoneTab;
+  }
+
+  private offerStripText(): string {
+    const facts = this.offerFacts();
+    let count = 0;
+    for (const line of facts.sells) count += line.quantity;
+    for (const line of facts.buys) count += line.quantity;
+    const itemWord = count === 1 ? "item" : "items";
+    let cash = "Even trade";
+    if (facts.net > 0) cash = `You receive ${formatNotes(facts.cash.playerReceives)}`;
+    else if (facts.net < 0) cash = `You pay ${formatNotes(facts.cash.playerPays)}`;
+    return `Offer · ${count} ${itemWord} · ${cash}`;
+  }
+
+  private syncPhoneDraft(): void {
+    const selection = this.selection;
+    if (!selection) return;
+    const key =
+      selection.side === "player"
+        ? `p:${selection.slotIndex}:${selection.id}`
+        : `t:${selection.stockIndex}:${selection.id}`;
+    if (key !== this.phoneDraftKey) {
+      this.phoneDraftKey = key;
+      const offered =
+        selection.side === "player"
+          ? this.offeredSellQty(selection.slotIndex)
+          : this.offeredBuyQty(selection.stockIndex);
+      const lock =
+        selection.side === "player"
+          ? this.playerOfferLock(selection.slotIndex, selection.id)
+          : "";
+      this.phoneDraftQty = lock
+        ? 0
+        : offered > 0
+          ? offered
+          : Math.min(1, selection.quantity);
+    }
+    this.phoneDraftQty = Math.max(0, Math.min(selection.quantity, this.phoneDraftQty));
+  }
+
+  private setOfferQuantity(quantity: number): void {
+    const selection = this.selection;
+    if (!selection || this.confirmPending) return;
+    const qty = Math.max(0, Math.min(selection.quantity, Math.floor(quantity)));
+    if (selection.side === "player") {
+      if (qty > 0 && this.playerOfferLock(selection.slotIndex, selection.id)) return;
+      if (qty <= 0) this.sellOffers.delete(selection.slotIndex);
+      else {
+        this.sellOffers.set(selection.slotIndex, {
+          slotIndex: selection.slotIndex,
+          itemId: selection.id,
+          quantity: qty,
+        });
+      }
+    } else if (qty <= 0) {
+      this.buyOffers.delete(selection.stockIndex);
+    } else {
+      this.buyOffers.set(selection.stockIndex, {
+        stockIndex: selection.stockIndex,
+        itemId: selection.id,
+        quantity: qty,
+      });
+    }
+    this.render();
+  }
+
+  private draftButton(
+    label: string,
+    aria: string,
+    disabled: boolean,
+    onClick: () => void,
+  ): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      label === "−" || label === "+" ? "trader-sheet-step" : "trader-sheet-chip";
+    btn.textContent = label;
+    btn.setAttribute("aria-label", aria);
+    btn.disabled = disabled;
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      onClick();
+    });
+    return btn;
+  }
+
+  private fillItemSheet(): void {
+    const selection = this.selection;
+    if (!selection) return;
+    this.syncPhoneDraft();
+    const def = getItemDefinition(selection.id);
+    const name = def?.name ?? selection.id;
+    const equipped =
+      selection.side === "player" &&
+      this.isEquippedSellSlot(selection.slotIndex, selection.id);
+    const effect = wornGearEffectHint(selection.id);
+    const lock =
+      selection.side === "player"
+        ? this.playerOfferLock(selection.slotIndex, selection.id)
+        : "";
+    const each =
+      selection.side === "player"
+        ? traderBuyPrice(selection.id, this.ashenReputation, this.barterT)
+        : traderSellPrice(selection.id, this.ashenReputation, this.barterT);
+    const offered =
+      selection.side === "player"
+        ? this.offeredSellQty(selection.slotIndex)
+        : this.offeredBuyQty(selection.stockIndex);
+
+    this.phoneItemEl.replaceChildren();
+    const body = document.createElement("div");
+    body.className = "trader-sheet-item-body";
+    const top = document.createElement("div");
+    top.className = "trader-sheet-item-top";
+    const title = document.createElement("h3");
+    title.className = "trader-sheet-item-name";
+    title.textContent = equipped ? `${name} · Equipped` : name;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "dialog-close-btn";
+    close.textContent = "Close";
+    close.addEventListener("click", () => {
+      this.phoneItemOpen = false;
+      this.selection = null;
+      this.phoneDraftKey = "";
+      this.render();
+    });
+    top.append(title, close);
+    const price = document.createElement("div");
+    price.className = "trader-sheet-item-price";
+    price.textContent =
+      selection.side === "player"
+        ? `Sells for ${formatNotes(each)} each`
+        : `Costs ${formatNotes(each)} each`;
+    body.append(top, price);
+    if (effect) {
+      const effectEl = document.createElement("div");
+      effectEl.className = "trader-sheet-item-effect";
+      effectEl.textContent = effect;
+      body.append(effectEl);
+    }
+    if (lock) {
+      const lockEl = document.createElement("div");
+      lockEl.className = "trader-sheet-lock";
+      lockEl.textContent = lock;
+      body.append(lockEl);
+    }
+
+    const controls = document.createElement("div");
+    controls.className = "trader-sheet-controls";
+    const stepper = document.createElement("div");
+    stepper.className = "trader-sheet-stepper";
+    const minus = this.draftButton(
+      "−",
+      "Less",
+      !!lock || this.phoneDraftQty <= 0 || this.confirmPending,
+      () => {
+        this.phoneDraftQty = Math.max(0, this.phoneDraftQty - 1);
+        this.render();
+      },
+    );
+    const qty = document.createElement("span");
+    qty.className = "trader-sheet-qty";
+    qty.textContent = String(this.phoneDraftQty);
+    const plus = this.draftButton(
+      "+",
+      "More",
+      !!lock || this.phoneDraftQty >= selection.quantity || this.confirmPending,
+      () => {
+        this.phoneDraftQty = Math.min(selection.quantity, this.phoneDraftQty + 1);
+        this.render();
+      },
+    );
+    stepper.append(minus, qty, plus);
+    const chips = document.createElement("div");
+    chips.className = "trader-sheet-chips";
+    chips.append(
+      this.draftButton(
+        "5",
+        "Set 5",
+        !!lock || selection.quantity < 5 || this.confirmPending,
+        () => {
+          this.phoneDraftQty = Math.min(5, selection.quantity);
+          this.render();
+        },
+      ),
+      this.draftButton(
+        "10",
+        "Set 10",
+        !!lock || selection.quantity < 10 || this.confirmPending,
+        () => {
+          this.phoneDraftQty = Math.min(10, selection.quantity);
+          this.render();
+        },
+      ),
+      this.draftButton(
+        "All",
+        "All",
+        !!lock || selection.quantity < 1 || this.confirmPending,
+        () => {
+          this.phoneDraftQty = selection.quantity;
+          this.render();
+        },
+      ),
+    );
+    controls.append(stepper, chips);
+
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "trader-confirm-btn trader-sheet-add";
+    if (lock) {
+      action.disabled = true;
+      action.textContent = "Cannot trade";
+    } else if (this.phoneDraftQty <= 0) {
+      action.textContent = "Remove from offer";
+      action.disabled = offered <= 0 || this.confirmPending;
+    } else if (this.phoneDraftQty === offered) {
+      action.textContent = "In the offer";
+      action.disabled = true;
+    } else {
+      action.textContent = offered > 0 ? "Update offer" : "Add to offer";
+      action.disabled = this.confirmPending;
+    }
+    action.addEventListener("click", () => {
+      if (action.disabled) return;
+      this.setOfferQuantity(this.phoneDraftQty);
+    });
+    this.phoneItemEl.append(body, controls, action);
+  }
+
+  private fillReview(): void {
+    const facts = this.offerFacts();
+    this.phoneReviewEl.replaceChildren();
+    const header = document.createElement("div");
+    header.className = "trader-sheet-header trader-sheet-review-header";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "dialog-close-btn";
+    back.textContent = "Back";
+    back.disabled = this.confirmPending;
+    back.addEventListener("click", () => {
+      if (this.confirmPending) return;
+      this.phoneReviewOpen = false;
+      this.render();
+    });
+    const title = document.createElement("h2");
+    title.className = "trader-sheet-review-title";
+    title.textContent = "Offer";
+    header.append(back, title, createDialogCloseButton(() => this.handlers.onClose()));
+
+    const body = document.createElement("div");
+    body.className = "trader-sheet-review-body";
+    this.appendOfferRows(
+      body,
+      "You sell",
+      facts.sells.map((line) => ({
+        itemId: line.itemId,
+        quantity: line.quantity,
+        price: traderBuyPrice(line.itemId, this.ashenReputation, this.barterT) * line.quantity,
+        remove: () => {
+          this.sellOffers.delete(line.slotIndex);
+          if (!this.hasOffer()) this.phoneReviewOpen = false;
+          this.render();
+        },
+      })),
+    );
+    this.appendOfferRows(
+      body,
+      "You buy",
+      facts.buys.map((line) => ({
+        itemId: line.itemId,
+        quantity: line.quantity,
+        price: traderSellPrice(line.itemId, this.ashenReputation, this.barterT) * line.quantity,
+        remove: () => {
+          this.buyOffers.delete(line.stockIndex);
+          if (!this.hasOffer()) this.phoneReviewOpen = false;
+          this.render();
+        },
+      })),
+    );
+
+    const summary = document.createElement("div");
+    summary.className = "trader-sheet-summary";
+    const addLine = (text: string, className: string) => {
+      const line = document.createElement("div");
+      line.className = className;
+      line.textContent = text;
+      summary.append(line);
+    };
+    if (facts.sellTotal > 0) addLine(`You sell ${formatNotes(facts.sellTotal)}`, "trader-sheet-summary-line");
+    if (facts.buyTotal > 0) addLine(`You buy ${formatNotes(facts.buyTotal)}`, "trader-sheet-summary-line");
+    if (facts.net === 0) {
+      addLine("Even trade. No cash changes hands", "trader-sheet-summary-cash");
+    } else if (facts.net > 0) {
+      addLine(`You receive ${formatNotes(facts.cash.playerReceives)}`, "trader-sheet-summary-cash");
+    } else {
+      addLine(`You pay ${formatNotes(facts.cash.playerPays)}`, "trader-sheet-summary-cash");
+    }
+    if (facts.repGain > 0) {
+      const shown =
+        Number.isInteger(facts.repGain) ||
+        Math.abs(facts.repGain - Math.round(facts.repGain)) < 1e-9
+          ? String(Math.round(facts.repGain))
+          : facts.repGain.toFixed(1);
+      addLine(`+${shown} reputation`, "trader-sheet-summary-rep");
+    }
+    if (facts.cash.shortfall > 0 && facts.net > 0) {
+      addLine(
+        `Trader is short ${formatNotes(facts.cash.shortfall)}. You still get the cash they have.`,
+        "trader-sheet-note",
+      );
+    }
+    if (facts.blockReason) addLine(facts.blockReason, "trader-sheet-lock");
+    body.append(summary);
+
+    const bar = document.createElement("div");
+    bar.className = "trader-sheet-review-bar";
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "trader-clear-offer-btn";
+    clear.textContent = "Clear";
+    clear.disabled = this.confirmPending;
+    clear.addEventListener("click", () => this.resetOffer());
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "trader-confirm-btn";
+    confirm.textContent = this.confirmPending ? "Confirming…" : "Confirm";
+    confirm.disabled = facts.blockReason.length > 0;
+    confirm.addEventListener("click", () => this.confirmOffer());
+    bar.append(clear, confirm);
+    this.phoneReviewEl.append(header, body, bar);
+  }
+
+  private appendOfferRows(
+    parent: HTMLElement,
+    heading: string,
+    lines: {
+      itemId: string;
+      quantity: number;
+      price: number;
+      remove: () => void;
+    }[],
+  ): void {
+    if (lines.length === 0) return;
+    const label = document.createElement("div");
+    label.className = "trader-sheet-kicker";
+    label.textContent = heading;
+    parent.append(label);
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.className = "trader-sheet-line";
+      appendItemIcon(row, line.itemId, "trader-sheet-line-icon");
+      const name = document.createElement("div");
+      name.className = "trader-sheet-line-name";
+      const def = getItemDefinition(line.itemId);
+      name.textContent = `${def?.name ?? line.itemId} ×${line.quantity}`;
+      const price = document.createElement("div");
+      price.className = "trader-sheet-line-price";
+      price.textContent = formatNotes(line.price);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "trader-sheet-remove";
+      remove.textContent = "Remove";
+      remove.disabled = this.confirmPending;
+      remove.addEventListener("click", line.remove);
+      row.append(name, price, remove);
+      parent.append(row);
+    }
   }
 }

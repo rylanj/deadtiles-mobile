@@ -267,13 +267,33 @@ export async function fetchPlayerPreview(
   });
 }
 
+function joinOptions(sessionToken: string) {
+  return { sessionToken };
+}
+
+function isWorldStartingOrFull(err: unknown): boolean {
+  const detail = err instanceof Error ? err.message : String(err);
+  return detail === WORLD_FULL_MESSAGE || detail.includes(WORLD_FULL_MESSAGE);
+}
+
 export async function connectToWorld(sessionToken: string) {
   const client = new Client(serverUrl());
   let room: Room<WorldRoomState>;
   try {
-    room = await client.joinOrCreate<WorldRoomState>(WORLD_ROOM_NAME, {
-      sessionToken,
-    });
+    try {
+      room = await client.joinOrCreate<WorldRoomState>(
+        WORLD_ROOM_NAME,
+        joinOptions(sessionToken),
+      );
+    } catch (err) {
+      // A second join while the world is still being created gets the full
+      // message even though a seat is about to exist. Try once more.
+      if (!isWorldStartingOrFull(err)) throw err;
+      room = await client.joinOrCreate<WorldRoomState>(
+        WORLD_ROOM_NAME,
+        joinOptions(sessionToken),
+      );
+    }
   } catch (err) {
     // Colyseus MatchMakeError.message is the ServerError text from onCreate.
     const detail = err instanceof Error ? err.message : String(err);

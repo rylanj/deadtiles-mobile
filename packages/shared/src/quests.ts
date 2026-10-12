@@ -229,7 +229,7 @@ export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
   id: "ashen_patrol_dogtags",
   title: "National Guard Dog Tags",
   description:
-    "National Guard patrols have been a problem. Bring Red Order one set of dog tags. Once a day.",
+    "National Guard patrols have been a problem. Bring the Red Order one set of dog tags. They will pay for another set tomorrow.",
   faction: "redOrder",
   giver: "redOrder",
   dialogLineId: "jobs",
@@ -258,99 +258,99 @@ export const QUEST_ASHEN_PATROL_DOGTAGS: QuestDefinition = {
 export const QUEST_ASHEN_MILITIA_LIVE: readonly QuestDefinition[] = [
   questFromMilitiaTask(ASHEN_MILITIA_AMMO_TASK, {
     description:
-      "Captain Davis needs 7.62 for Birchport patrols. Accept the job, then turn the ammo in at the barracks. Once a day.",
+      "The Birchport patrols are burning through 7.62. Bring a case to the barracks. Davis will take another tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_POCKET_ROUNDS_TASK, {
     description:
-      "Sidearms are running dry. Accept with Davis, then bring 20 rounds of 9mm to the barracks. Once a day.",
+      "Sidearms are running dry. Bring 20 rounds of 9mm to the barracks. Davis will take another box tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_CIGARETTES_TASK, {
     description:
-      "Cigarettes for the barracks board. Accept with Davis, then bring them in. Once a day.",
+      "The barracks board is out of cigarettes. Bring them in. Davis will take another lot tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_LIGHTER_TASK, {
     description:
-      "Lighters for field kits. Accept with Davis, then hand one over.",
+      "Field kits are going out with nothing to light them. Bring Davis a lighter. He will take another tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_SPLIT_KIT_TASK, {
     description:
-      "Patrol bags are splitting. Accept with Davis, then bring two rolls of duct tape. Once a day.",
+      "Patrol bags are splitting at the seams. Bring Davis two rolls of duct tape. He will take another pair tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_MEDICAL_TASK, {
     description:
-      "Doctor Clark is short on bandages for the ward. Accept the job, then turn them in at the hospital. Once a day.",
+      "The ward is short on bandages. Bring them to Clark at the hospital. He will take another bundle tomorrow.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_WATER_TASK, {
     description:
-      "Drinking water for Clark's patients. Accept the job, then drop the bottles at the ward. Once a day.",
+      "Clark's patients are down to the last bottles. Leave drinking water at the ward. He will take another case tomorrow.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_CLEAN_HANDS_TASK, {
     description:
-      "Clark needs alcohol for wounds, not for drinking. Accept the job, then turn two bottles in at the ward. Once a day.",
+      "Clark needs alcohol for wounds, not for drinking. Bring two bottles to the ward. He will take another pair tomorrow.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_RAG_BIN_TASK, {
     description:
-      "The ward boils rags when the bandages run out. Accept with Clark, then bring ten. One time.",
+      "When the bandages run out, the ward boils rags. Bring Clark ten. That fills the bin, and he will not ask again.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
     repeatable: false,
   }),
   questFromMilitiaTask(ASHEN_MILITIA_SOMETHING_SOFT_TASK, {
     description:
-      "Some patients will not eat chips. Accept with Clark, then bring two cans of peaches. Once a day.",
+      "Some of the patients will not touch chips. Bring Clark two cans of peaches. He will take another pair tomorrow.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_BEFORE_IT_TURNS_TASK, {
     description:
-      "Clark wants five packets of antibiotics stocked before the next wave of infections. Accept the job, then turn them in. One time.",
+      "Clark wants five packets of antibiotics put away before the next wave of infections. Bring them to the ward. After that, the cabinet is his.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
     repeatable: false,
   }),
   questFromMilitiaTask(ASHEN_MILITIA_SPICY_FINGERS_TASK, {
     description:
-      "Clark's snack run. Accept first. Hot chips only, and he will take one bag a day.",
+      "Clark keeps a bag of hot chips for the long shifts. Hot chips only. Bring one to the ward, and another tomorrow if you have it.",
     giver: "ashenDoctor",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_NIGHT_WATCH_FUEL_TASK, {
     description:
-      "Street braziers burn through wood after dark. Accept with Davis, then bring eight pieces to the barracks. One load a day.",
+      "The street braziers burn through the night. Bring Davis eight pieces of wood. He will take another load tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_BARGATE_SCRAP_TASK, {
     description:
-      "The chain-link by the bargate is tired. Accept with Davis, then turn in ten scrap metal at the barracks.",
+      "The chain-link by the bargate is coming apart. Bring Davis ten pieces of scrap. He will take another load tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_COLD_TINS_TASK, {
     description:
-      "The mess wants beans, not another speech. Accept with Davis, then bring four cans. Once a day.",
+      "The mess wants beans, not another speech. Bring Davis four cans. He will take another case tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
   questFromMilitiaTask(ASHEN_MILITIA_HOT_PLATE_TASK, {
     description:
-      "Davis wants coyote off a fire for the mess. Accept first. Cooked meat only. Burnt will not turn in. Once a day.",
+      "Davis wants coyote off a fire for the mess. Cooked only. He will not take it burnt. Bring it to the barracks, and he will take another plate tomorrow.",
     giver: "ashenCaptain",
     faction: "ashenMilitia",
   }),
@@ -373,7 +373,7 @@ export const QUEST_FIRST_SWEEP: QuestDefinition = {
   id: QUEST_ID_FIRST_SWEEP,
   title: ASHEN_MILITIA_FIRST_SWEEP_TASK.label,
   description:
-    "Davis wants a house just outside Birchport cleared so patrols can use it. Accept the job and he lends you a worn hammer. Clear every walker inside, then report back. He takes the hammer back when you do.",
+    "Davis wants a house just outside Birchport cleared so a patrol can use it. He will lend you a worn hammer. Clear every walker inside, then come back. He takes the hammer when you do.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -399,7 +399,7 @@ export const QUEST_QUIET_STRETCH: QuestDefinition = {
   id: QUEST_ID_QUIET_STRETCH,
   title: ASHEN_MILITIA_QUIET_STRETCH_TASK.label,
   description:
-    "Walkers are still coming out of a building in Birchport. Accept with Davis, clear that building, then report back. Ask him again if you want another address.",
+    "Walkers are still coming out of a building in Birchport. Clear it, then tell Davis. Ask him again tomorrow if you want another address.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -427,7 +427,7 @@ export const QUEST_MISSING_PAIR: QuestDefinition = {
   id: QUEST_ID_MISSING_PAIR,
   title: ASHEN_MILITIA_MISSING_PAIR_TASK.label,
   description:
-    "Two troopers missed radio at a motel south of town. Accept with Davis, go in, confirm it is empty or clear it, then report back. If they did not make it, he will add a box of 7.62 from their kit.",
+    "Two troopers missed radio at a motel south of town. Go in. If it is empty, say so. If it is not, clear it, then tell Davis. If they did not make it, he will add a box of 7.62 from their kit.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -490,7 +490,7 @@ export const QUEST_AISLE_CHECK: QuestDefinition = {
   id: QUEST_ID_AISLE_CHECK,
   title: ASHEN_MILITIA_AISLE_CHECK_TASK.label,
   description:
-    "Davis wants a supermarket outside Birchport scouted for a supply run. Accept the job, search three shelves, then report what you found. You do not have to clear it. Once a day.",
+    "Davis wants a supermarket outside Birchport looked over before a supply run. Check three shelves and tell him what is left. You do not have to clear the building. He will send you to another tomorrow.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -518,7 +518,7 @@ export const QUEST_BIG_TRACK: QuestDefinition = {
   id: QUEST_ID_BIG_TRACK,
   title: ASHEN_MILITIA_BIG_TRACK_TASK.label,
   description:
-    "A bear has been using a road outside Birchport. Accept with Davis, kill it, then report back. You keep the meat. One time.",
+    "A bear has been using a road outside Birchport. Kill it and tell Davis it is down. The meat is yours. He will not ask you to hunt another.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -545,7 +545,7 @@ export const QUEST_THIN_THE_PACK: QuestDefinition = {
   id: QUEST_ID_THIN_THE_PACK,
   title: ASHEN_MILITIA_THIN_THE_PACK_TASK.label,
   description:
-    "Coyotes have been hitting the roads outside Birchport. Davis will not pay for a kill inside town. Three, then turn in at the barracks. Once a day.",
+    "Coyotes have been hitting the roads outside Birchport. Davis will not pay for a kill inside town. Bring him three, then come back to the barracks. He will take another three tomorrow.",
   faction: "ashenMilitia",
   giver: "ashenCaptain",
   dialogLineId: "jobs",
@@ -574,7 +574,7 @@ export const QUEST_DONT_HOCK_THEM: QuestDefinition = {
   id: QUEST_ID_DONT_HOCK_THEM,
   title: ASHEN_MILITIA_DONT_HOCK_THEM_TASK.label,
   description:
-    "Clark bought his wife gold earrings for their anniversary. She died in the outbreak. He thinks that pair is still in a house outside town. Search the furniture. Once they are in your pack, bring them back to him.",
+    "Clark bought his wife gold earrings for their anniversary. She died in the outbreak. He thinks the pair is still in a house outside town, in a drawer or a box he cannot name. Look through the rooms. When you have them, bring them back to him.",
   faction: "ashenMilitia",
   giver: "ashenDoctor",
   dialogLineId: "jobs",
@@ -608,7 +608,7 @@ export const QUEST_SEIZED: QuestDefinition = {
   id: QUEST_ID_SEIZED,
   title: RED_ORDER_SEIZED_TASK.label,
   description:
-    "The Red Order wants a police station in another city. Accept the job, clear the walkers, then report back. You keep what you find. One time.",
+    "The Red Order wants a police station in another city. Clear the walkers and tell them the station is empty. Whatever you find in there is yours. They will not send you back.",
   faction: "redOrder",
   giver: "redOrder",
   dialogLineId: "jobs",
@@ -635,7 +635,7 @@ export const QUEST_FLOOR_SPACE: QuestDefinition = {
   id: QUEST_ID_FLOOR_SPACE,
   title: RED_ORDER_FLOOR_SPACE_TASK.label,
   description:
-    "Walkers are denned in a warehouse the Red Order wants. Accept the job, clear it, then report back. Once a day.",
+    "Walkers are denned in a warehouse the Red Order wants. Clear it and tell them the floor is empty. They will point you at another tomorrow.",
   faction: "redOrder",
   giver: "redOrder",
   dialogLineId: "jobs",
@@ -687,7 +687,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_FLANK_LOAD,
     title: "Flank Load",
     description:
-      "Trader guards on the roads are light on buckshot. Accept with Kevin, then bring eight shells to the Birchport market. Once a day.",
+      "The guards on the roads are light on buckshot. Bring Kevin eight shells at the Birchport market. He will take another box tomorrow.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -714,7 +714,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_ROAD_TINS,
     title: "Road Tins",
     description:
-      "Travelling traders eat between towns. Accept with Kevin, then bring four cans of tuna to the market. Once a day.",
+      "Traders eat between towns. Bring Kevin four cans of tuna at the market. He will take another case tomorrow.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -741,7 +741,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_CRATE_LIDS,
     title: "Crate Lids",
     description:
-      "The market's storage crates are splitting. Accept with Kevin, then bring eight screws and four wood. Once a day.",
+      "The market's storage crates are splitting. Bring Kevin eight screws and four pieces of wood. He will take another load tomorrow.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -776,7 +776,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_STILL_ON_THE_SHELF,
     title: "Still on the Shelf",
     description:
-      "Kevin wants a supermarket counted before he sends a buyer. Search three shelves and two fridges, then tell him what is left. You keep what you pocket. One time.",
+      "Kevin wants a supermarket counted before he sends a buyer. Look through three shelves and two fridges, then tell him what is left. Whatever you pocket is yours. He will not ask you to count that store again.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -804,7 +804,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_FLOOR_MODEL,
     title: "Floor Model",
     description:
-      "Kevin wants a department store counted before he sends a buyer. Search four shelves and two clothing racks, then tell him what is left. You keep what you pocket. One time.",
+      "Kevin wants a department store counted before he sends a buyer. Look through four shelves and two clothing racks, then tell him what is left. Whatever you pocket is yours. He will not ask you to count that store again.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -832,7 +832,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_SCALING_UP,
     title: "Scaling Up",
     description:
-      "Kevin wants a warehouse the caravans can actually use. Accept the job, clear the walkers from the marked building, then report back. One time.",
+      "Kevin wants a warehouse the caravans can actually use. Clear the walkers and tell him the floor is empty. He will not send you back to that one.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -855,7 +855,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_SHORT_CRATE,
     title: "Short Crate",
     description:
-      "The last caravan into Birchport was short a crate. The crew set the manifest down so they could argue about who had to carry the heavy one, then left without it. It is in a building in another city. Bring Kevin the page before he invents the numbers.",
+      "The last caravan into Birchport was short a crate. The crew set the manifest down to argue about who had to carry the heavy one, then walked off without it. It is still in a building in another city. Look through the rooms and bring Kevin the page before he invents the numbers.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -886,7 +886,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_LEFT_ON_THE_DESK,
     title: "Left on the Desk",
     description:
-      "A National Guard patrol will not radio a supply order. The Red Order and bandits listen. They left the list in the manager's office of a department store in another city. Find it in the office furniture and bring it to Kevin. One time.",
+      "A National Guard patrol will not radio a supply order. The Red Order and bandits listen. They left the list somewhere in the manager's office of a department store in another city. Look through the office and bring the page to Kevin.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -917,7 +917,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_X_MARKS,
     title: "X Marks the Spot",
     description:
-      "A trading caravan stopped answering the radio. Kevin has the last building they called from, in another city. Find what happened to them and bring back any note they left.",
+      "A trading caravan stopped answering the radio. Kevin has the last building they called from, in another city. Find out what happened. If they left a note, bring it back.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -948,7 +948,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_BOTH_ENDS,
     title: "Both Ends",
     description:
-      "Kevin will not call a route open until someone has walked both ends. Clear the marked warehouse, then search three shelves in the supermarket in the other city. You keep what you pocket. One time.",
+      "Kevin will not call a route open until someone has walked both ends. Clear the marked warehouse, then look through three shelves in the supermarket in the other city. Whatever you pocket is yours. He will not ask you to walk that route again.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -977,7 +977,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_PAID_AHEAD,
     title: "Paid Ahead",
     description:
-      "Kevin wants to see every piece of a pistol before the stall tries to make one. Accept the job, then bring a frame, a slide, a small spring, and a trigger. One time.",
+      "Kevin wants to see every piece of a pistol before the stall tries to make one. Bring him a frame, a slide, a small spring, and a trigger. After that, the stall can work from the pattern.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -1025,7 +1025,7 @@ export const ASHEN_TRADER_QUESTS: readonly QuestDefinition[] = [
     id: QUEST_ID_BOTH_BARRELS,
     title: "Both Barrels",
     description:
-      "Kevin wants to see every piece of a shotgun before the stall tries to make one. Accept the job, then bring a receiver, a barrel, a stock, a large spring, and a trigger. One time.",
+      "Kevin wants to see every piece of a shotgun before the stall tries to make one. Bring him a receiver, a barrel, a stock, a large spring, and a trigger. After that, the stall can work from the pattern.",
     faction: "ashenTraders",
     giver: "ashenTrader",
     dialogLineId: "jobs",
@@ -1179,7 +1179,7 @@ export const QUEST_CUT_CLOTH: QuestDefinition = questFromMilitiaTask(
   RED_ORDER_CUT_CLOTH_TASK,
   {
     description:
-      "Red Order cuts armbands out of rags. Accept the job, then bring six. Once a day.",
+      "The Red Order cuts armbands out of rags. Bring them six. They will take another bundle tomorrow.",
     giver: "redOrder",
     faction: "redOrder",
   },
@@ -1189,7 +1189,7 @@ export const QUEST_MELT_POT: QuestDefinition = questFromMilitiaTask(
   RED_ORDER_MELT_POT_TASK,
   {
     description:
-      "They melt jewelry from empty houses. Accept the job, then bring one gold ring. Once a day.",
+      "They melt jewelry out of empty houses. Bring them one gold ring. They will take another tomorrow.",
     giver: "redOrder",
     faction: "redOrder",
   },

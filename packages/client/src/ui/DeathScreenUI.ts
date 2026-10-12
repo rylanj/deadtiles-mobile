@@ -66,6 +66,8 @@ export class DeathScreenUI {
   }
 
   destroy() {
+    this.visible = false;
+    this.overlay.hidden = true;
     document.body.classList.remove("death-screen-open");
     this.overlay.remove();
   }

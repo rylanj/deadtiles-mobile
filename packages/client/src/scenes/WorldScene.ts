@@ -194,7 +194,7 @@ import {
   TILE_HEIGHT,
   FURNITURE_RENDER_HEIGHT_PX,
   settlementsInTileRegion,
-  directionFromScreenInput,
+  screenInputToWorldDelta,
   directionFromWorldDelta,
   getStructureBuildCosts,
   playerStructureId,
@@ -387,6 +387,7 @@ import { PlayerMarketUI } from "../ui/PlayerMarketUI";
 import { RedOrderDialogUI } from "../ui/RedOrderDialogUI";
 import { AshenTraderDialogUI } from "../ui/AshenTraderDialogUI";
 import { AshenMilitiaDialogUI } from "../ui/AshenMilitiaDialogUI";
+import { clearWorldPageUi } from "../ui/pageOverlay";
 import { WeaponHotbar } from "../ui/WeaponHotbar";
 import { LootPopup } from "../ui/LootPopup";
 import { FactionAttackWarningUI } from "../ui/FactionAttackWarningUI";
@@ -415,7 +416,6 @@ import type {
   TutorialEventMessage,
   TutorialTipId,
 } from "@zombie/shared";
-import { PlayerOcclusionHighlight } from "../sprites/PlayerOcclusionHighlight";
 import { PlayerOccludedGhost } from "../sprites/PlayerOccludedGhost";
 import {
   nearestManhattanTile,
@@ -920,8 +920,16 @@ export class WorldScene extends Phaser.Scene {
     E: Phaser.Input.Keyboard.Key;
     R: Phaser.Input.Keyboard.Key;
   };
-  /** True while WASD/arrows are driving movement (release → stop). */
-  private keyboardMoveActive = false;
+  /** True while a steer packet is live (release sends a zero direction). */
+  private steerActive = false;
+  private lastSteerSentAt = 0;
+  private lastSteerX = 0;
+  private lastSteerY = 0;
+  private lastSteerSprint = false;
+  /** Fastest steer send while the direction is changing. */
+  private static readonly STEER_SEND_MIN_MS = 50;
+  /** Refresh while held so a dropped packet cannot stick the walk on. */
+  private static readonly STEER_HEARTBEAT_MS = 200;
   /**
    * Set when the player uses stairs. Held movement must not continue into the
    * street door on the new floor. Clears once every move key is released.
@@ -933,15 +941,6 @@ export class WorldScene extends Phaser.Scene {
    * (already downstairs) walks them out.
    */
   private interiorLevelLatch: number | null = null;
-  private lastKeyboardMoveSentAt = 0;
-  private lastKeyboardMoveTargetKey = "";
-  /** Last locked 8-way facing while keyboard-moving (-1 = none). */
-  private lastKeyboardFacing = -1;
-  private lastKeyboardGoalTX = 0;
-  private lastKeyboardGoalTY = 0;
-  /** Last sprint flag sent with keyboard moveTo. */
-  private lastKeyboardSprint = false;
-  private static readonly KEYBOARD_MOVE_RESEND_MS = 100;
   /**
    * Render-interpolation smoothing for all players, local included. The local
    * player deliberately does NOT get client-side forward prediction of new,
@@ -1043,8 +1042,7 @@ export class WorldScene extends Phaser.Scene {
   private factionAttackWarningsShown = new Set<
     "ashen" | "ashenMilitia" | "redOrder"
   >();
-  private playerOcclusionHighlight?: PlayerOcclusionHighlight;
-  /** Mobile replacement for the outline (no BitmapMask). */
+  /** Faint copy of the local player, drawn above buildings, trees, and walls. */
   private playerOccludedGhost?: PlayerOccludedGhost;
   private entityActionLabels?: EntityActionLabelManager;
   private tabKey?: Phaser.Input.Keyboard.Key;
@@ -1903,6 +1901,7 @@ export class WorldScene extends Phaser.Scene {
       iconLocalY: number;
       blockHeight: number;
       expiresAt: number;
+      text: string;
     }
   >();
   private static readonly RADIO_BUBBLE_PREFIX = "[Radio] ";
@@ -1943,6 +1942,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   async create() {
+    // Previous join's dialogs live on document.body. Drop them before building
+    // a new set, including when shutdown did not finish.
+    this.dismissWorldPageUi();
     this.events.off(
       Phaser.Scenes.Events.RENDER,
       this.placeChatBubbleIcons,
@@ -2165,13 +2167,7 @@ export class WorldScene extends Phaser.Scene {
       },
     });
     this.setupStructureBuildHud();
-    // Bitmap-mask player outline is too heavy for mobile GPUs (tab OOM reload),
-    // so phones get the mask-free ghost copy instead of no feedback at all.
-    if (IS_MOBILE) {
-      this.playerOccludedGhost = new PlayerOccludedGhost(this);
-    } else {
-      this.playerOcclusionHighlight = new PlayerOcclusionHighlight(this);
-    }
+    this.playerOccludedGhost = new PlayerOccludedGhost(this);
     this.entityActionLabels = new EntityActionLabelManager(this);
     this.setupChatBar();
     this.setupMobileHud();
@@ -2472,6 +2468,9 @@ export class WorldScene extends Phaser.Scene {
         if (typeof msg?.flagsJson === "string") {
           this.onboardingUI?.applyFlagsJson(msg.flagsJson);
           this.syncAshenMilitiaDialogState();
+          // Join pushes inventory before these flags exist, so a weapon
+          // already in hand has to be checked again once tips can show.
+          this.notifyMeleeEquipTip();
         }
       });
 
@@ -3027,6 +3026,7 @@ export class WorldScene extends Phaser.Scene {
     this.updateCellarHover();
     this.updateBuildModeHover();
     perf?.lap("otherHover");
+    if (this.isMoveInputHeld()) this.releaseSteerPursuits();
     this.updateCombatPursuit();
     this.updateInteractPursuit();
     this.updateLootPursuit();
@@ -3096,6 +3096,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   shutdown() {
+    this.dismissWorldPageUi();
     document.removeEventListener("keydown", this.onFieldKeyDown);
     document.removeEventListener("keyup", this.onFieldKeyUp);
     this.events.off(
@@ -3197,14 +3198,14 @@ export class WorldScene extends Phaser.Scene {
     this.inventoryUI?.destroy();
     this.journalUI?.destroy();
     this.containerLootUI?.destroy();
-    this.craftUI?.close();
+    this.craftUI?.destroy();
     this.craftUI = undefined;
-    this.traderUI?.close();
+    this.traderUI?.destroy();
     this.playerMarketUI?.destroy();
     this.playerMarketUI = undefined;
-    this.redOrderDialogUI?.close();
-    this.ashenTraderDialogUI?.close();
-    this.ashenMilitiaDialogUI?.close();
+    this.redOrderDialogUI?.destroy();
+    this.ashenTraderDialogUI?.destroy();
+    this.ashenMilitiaDialogUI?.destroy();
     this.traderUI = undefined;
     this.redOrderDialogUI = undefined;
     this.ashenTraderDialogUI = undefined;
@@ -3224,7 +3225,6 @@ export class WorldScene extends Phaser.Scene {
     this.deathScreenUI = undefined;
     this.onboardingUI?.destroy();
     this.onboardingUI = undefined;
-    this.playerOcclusionHighlight?.destroy();
     this.playerOccludedGhost?.destroy();
     this.playerOccludedGhost = undefined;
     this.clearShotTraces();
@@ -3266,9 +3266,9 @@ export class WorldScene extends Phaser.Scene {
     this.clearTreeChopTarget();
     this.clearGraveInspectTarget();
     this.clearBarracksBargateAnim();
-    this.fireplaceUI?.close();
-    this.prefabDepositUI?.close();
-    this.deconstructUI?.close();
+    this.fireplaceUI?.destroy();
+    this.prefabDepositUI?.destroy();
+    this.deconstructUI?.destroy();
     this.doorCodeUI?.destroy();
     this.structureBuildHudEl?.remove();
     this.structureBuildHudEl = undefined;
@@ -3295,6 +3295,63 @@ export class WorldScene extends Phaser.Scene {
     this.closeChatBar();
     for (const bubble of this.chatBubbles.values()) this.destroyChatBubble(bubble);
     this.chatBubbles.clear();
+  }
+
+  /**
+   * HTML dialogs outlive the Phaser scene. Remove them before anything else in
+   * shutdown can throw, and again on the next join so a stuck panel cannot
+   * cover the new session.
+   */
+  private dismissWorldPageUi() {
+    const drop = (run: () => void) => {
+      try {
+        run();
+      } catch {
+        /* page is already going away */
+      }
+    };
+    drop(() => this.inventoryUI?.destroy());
+    drop(() => this.journalUI?.destroy());
+    drop(() => this.containerLootUI?.destroy());
+    drop(() => this.craftUI?.destroy());
+    drop(() => this.fireplaceUI?.destroy());
+    drop(() => this.prefabDepositUI?.destroy());
+    drop(() => this.deconstructUI?.destroy());
+    drop(() => this.traderUI?.destroy());
+    drop(() => this.playerMarketUI?.destroy());
+    drop(() => this.redOrderDialogUI?.destroy());
+    drop(() => this.ashenTraderDialogUI?.destroy());
+    drop(() => this.ashenMilitiaDialogUI?.destroy());
+    drop(() => this.mapOverlayUI?.destroy());
+    drop(() => this.weaponHotbar?.destroy());
+    drop(() => this.damageOverlay?.destroy());
+    drop(() => this.lootPopup?.destroy());
+    drop(() => this.factionAttackWarningUI?.destroy());
+    drop(() => this.deathScreenUI?.destroy());
+    drop(() => this.onboardingUI?.destroy());
+    drop(() => this.doorCodeUI?.destroy());
+    this.inventoryUI = undefined;
+    this.journalUI = undefined;
+    this.containerLootUI = undefined;
+    this.craftUI = undefined;
+    this.fireplaceUI = undefined;
+    this.prefabDepositUI = undefined;
+    this.deconstructUI = undefined;
+    this.traderUI = undefined;
+    this.playerMarketUI = undefined;
+    this.redOrderDialogUI = undefined;
+    this.ashenTraderDialogUI = undefined;
+    this.ashenMilitiaDialogUI = undefined;
+    this.mapOverlayUI = undefined;
+    this.weaponHotbar = undefined;
+    this.damageOverlay = undefined;
+    this.lootPopup = undefined;
+    this.factionAttackWarningUI = undefined;
+    this.deathScreenUI = undefined;
+    this.onboardingUI = undefined;
+    this.doorCodeUI = undefined;
+    drop(() => clearWorldPageUi());
+    this.chatOpen = false;
   }
 
   /** Drop cached sprites from a prior WorldScene boot (Phaser reuses the instance). */
@@ -3456,7 +3513,7 @@ export class WorldScene extends Phaser.Scene {
     this.refreshMobileActionButtons();
   }
 
-  /** Bottom-left thumb stick. Feeds the same 8-way walk path as WASD. */
+  /** Bottom-left thumb stick. Same direct steer as WASD, any angle. */
   private setupMoveStick() {
     if (!IS_MOBILE || this.moveStickEl) return;
 
@@ -3543,7 +3600,7 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** 8-way screen vector from the thumb stick. Zero inside the dead zone. */
+  /** Analog screen vector from the thumb stick. Zero inside the dead zone. */
   private readMoveStickVector(): { screenDx: number; screenDy: number } {
     if (this.moveStickPointerId === null) {
       return { screenDx: 0, screenDy: 0 };
@@ -3552,19 +3609,7 @@ export class WorldScene extends Phaser.Scene {
     if (mag < WorldScene.MOVE_STICK_DEADZONE) {
       return { screenDx: 0, screenDy: 0 };
     }
-    const sector = Math.round(Math.atan2(this.moveStickY, this.moveStickX) / (Math.PI / 4));
-    const steps: ReadonlyArray<readonly [number, number]> = [
-      [1, 0],
-      [1, 1],
-      [0, 1],
-      [-1, 1],
-      [-1, 0],
-      [-1, -1],
-      [0, -1],
-      [1, -1],
-    ];
-    const step = steps[((sector % 8) + 8) % 8] ?? [0, 0];
-    return { screenDx: step[0], screenDy: step[1] };
+    return { screenDx: this.moveStickX, screenDy: this.moveStickY };
   }
 
   /** Mobile stand-in for holding CTRL. Melee shows the weapon icon instead of a crosshair. */
@@ -4035,6 +4080,11 @@ export class WorldScene extends Phaser.Scene {
     iconSrc: string | null,
   ) {
     const existing = this.chatBubbles.get(senderId);
+    if (existing?.text === text) {
+      existing.expiresAt = Date.now() + WorldScene.CHAT_BUBBLE_MS;
+      existing.root.setAlpha(1);
+      return;
+    }
     if (existing) {
       this.destroyChatBubble(existing);
       this.chatBubbles.delete(senderId);
@@ -4080,6 +4130,7 @@ export class WorldScene extends Phaser.Scene {
       iconLocalY: 0,
       blockHeight: 0,
       expiresAt: Date.now() + WorldScene.CHAT_BUBBLE_MS,
+      text,
     };
     this.layoutChatBubble(bubble);
     this.chatBubbles.set(senderId, bubble);
@@ -5145,6 +5196,7 @@ export class WorldScene extends Phaser.Scene {
     if (syncedInventory.some((slot) => slot && isFirearmItemId(slot.id))) {
       this.notifyTip("firearm");
     }
+    this.notifyMeleeEquipTip();
     if (getEntryWetness(syncedInventory[msg.equippedClothingSlot]) >= 0.4) {
       this.notifyTip("wet");
     }
@@ -5470,7 +5522,6 @@ export class WorldScene extends Phaser.Scene {
           this.exteriorSoftPurgeActive = true;
         }
         this.tileManager.highlightBuilding(null, null);
-        this.playerOcclusionHighlight?.hide();
         this.playerOccludedGhost?.hide();
         this.clearCombatTarget();
         this.clearInteractTarget();
@@ -9992,8 +10043,7 @@ export class WorldScene extends Phaser.Scene {
       const bounds = sprite.getBounds();
       if (!bounds.contains(worldPt.x, worldPt.y)) return;
       // Desktop: ignore transparent PNG padding so hover/click follows the
-      // silhouette (same alpha idea as the behind-cover outline). Mobile keeps
-      // the cheap AABB — pixel samples are too heavy there.
+      // silhouette. Mobile keeps the cheap AABB — pixel samples are too heavy there.
       if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(sprite, worldPt.x, worldPt.y)) {
         return;
       }
@@ -11155,6 +11205,11 @@ export class WorldScene extends Phaser.Scene {
     this.onboardingUI?.notifyTip(tipId);
   }
 
+  /** First time a melee weapon is in hand: click-to-hit, or ready and swing. */
+  private notifyMeleeEquipTip() {
+    if (this.localEquippedIsMelee()) this.notifyTip("melee");
+  }
+
   private getEntityData(id: string, kind: CombatEntityKind) {
     const sprite = this.spriteMapForKind(kind).get(id);
     if (!sprite) return null;
@@ -11961,42 +12016,90 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
-  /** World tile step for each 8-way facing (matches screenInputToWorldDelta). */
-  private static readonly KEYBOARD_TILE_STEP: ReadonlyArray<{
-    dx: number;
-    dy: number;
-  }> = [
-    { dx: -1, dy: -1 }, // N
-    { dx: 0, dy: -1 }, // NE
-    { dx: 1, dy: -1 }, // E
-    { dx: 1, dy: 0 }, // SE
-    { dx: 1, dy: 1 }, // S
-    { dx: 0, dy: 1 }, // SW
-    { dx: -1, dy: 1 }, // W
-    { dx: -1, dy: 0 }, // NW
-  ];
+  /** True while WASD, arrows, or the thumb stick are asking to move. */
+  private isMoveInputHeld(): boolean {
+    if (!this.keys || !this.cursors) return false;
+    const { screenDx, screenDy } = this.readKeyboardMoveVector();
+    return screenDx !== 0 || screenDy !== 0;
+  }
+
+  /** Click-to-move pursuits fight a held direction, so drop them. */
+  private releaseSteerPursuits() {
+    this.clearCombatTarget();
+    this.clearInteractTarget();
+    this.clearLootTarget();
+    this.clearDoorTarget();
+    this.clearFireplaceTarget();
+    this.clearTreeChopTarget();
+    this.clearGraveInspectTarget();
+    this.clearPrefabTarget();
+  }
 
   /**
-   * WASD / arrow movement driven only by keys currently held.
-   * Release all move keys → stop immediately. Change combo → retarget that facing.
+   * Send the current steer, or a zero vector to stop.
+   * Straight holds refresh slowly. Turns and sprint changes send sooner.
+   */
+  private sendSteer(dx: number, dy: number, sprint: boolean) {
+    if (!this.room) return;
+    const stopping = dx === 0 && dy === 0;
+    if (stopping) {
+      if (!this.steerActive) return;
+      this.steerActive = false;
+      this.lastSteerX = 0;
+      this.lastSteerY = 0;
+      this.lastSteerSprint = false;
+      this.lastSteerSentAt = Date.now();
+      this.room.send("action", {
+        type: "steer",
+        payload: { dirX: 0, dirY: 0, sprint: false },
+      } satisfies ClientMessage);
+      const sprite = this.playerSprites.get(this.sessionId);
+      const server = sprite?.getData("server") as
+        | { anim?: string; animFrame?: number }
+        | undefined;
+      if (sprite && server) {
+        sprite.setData("server", { ...server, anim: "idle", animFrame: 0 });
+        sprite.setData("moveSpeed", 0);
+        sprite.setData("visualKey", "");
+        sprite.setData("velX", 0);
+        sprite.setData("velY", 0);
+      }
+      return;
+    }
+
+    const now = Date.now();
+    const starting = !this.steerActive;
+    const sprintChanged = sprint !== this.lastSteerSprint;
+    const dot = dx * this.lastSteerX + dy * this.lastSteerY;
+    const turned = dot < 0.996;
+    const heartbeat = now - this.lastSteerSentAt >= WorldScene.STEER_HEARTBEAT_MS;
+    if (!starting && !sprintChanged && !turned && !heartbeat) return;
+    if (
+      !starting &&
+      !sprintChanged &&
+      turned &&
+      now - this.lastSteerSentAt < WorldScene.STEER_SEND_MIN_MS
+    ) {
+      return;
+    }
+
+    this.steerActive = true;
+    this.lastSteerX = dx;
+    this.lastSteerY = dy;
+    this.lastSteerSprint = sprint;
+    this.lastSteerSentAt = now;
+    this.room.send("action", {
+      type: "steer",
+      payload: { dirX: dx, dirY: dy, sprint },
+    } satisfies ClientMessage);
+  }
+
+  /**
+   * WASD, arrows, and the thumb stick steer from the live position.
+   * Release stops at once. Clicks still use pathfinding.
    */
   private handleKeyboardMovement() {
     if (!this.room || !this.keys || !this.cursors) return;
-
-    const resetMoveState = () => {
-      this.keyboardMoveActive = false;
-      this.lastKeyboardMoveTargetKey = "";
-      this.lastKeyboardFacing = -1;
-      this.lastKeyboardSprint = false;
-      this.lastKeyboardGoalTX = 0;
-      this.lastKeyboardGoalTY = 0;
-    };
-
-    const stopKeyboardMove = () => {
-      const wasActive = this.keyboardMoveActive || this.lastKeyboardFacing >= 0;
-      resetMoveState();
-      if (wasActive) this.stopPlayerMovement();
-    };
 
     // Melee aim locks movement (WASD, arrows, and the thumb stick).
     const blocked =
@@ -12017,198 +12120,30 @@ export class WorldScene extends Phaser.Scene {
       this.cursors.down.reset();
       this.cursors.shift.reset();
       this.shiftKey?.reset();
-      stopKeyboardMove();
+      this.sendSteer(0, 0, false);
       return;
     }
 
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me?.alive) {
-      resetMoveState();
+      this.sendSteer(0, 0, false);
       return;
     }
 
     const { screenDx, screenDy } = this.readKeyboardMoveVector();
     if (screenDx === 0 && screenDy === 0) {
       this.pauseMoveAfterStairs = false;
-      stopKeyboardMove();
+      this.sendSteer(0, 0, false);
       return;
     }
     if (this.pauseMoveAfterStairs) {
-      stopKeyboardMove();
+      this.sendSteer(0, 0, false);
       return;
     }
 
-    const facing = directionFromScreenInput(screenDx, screenDy);
-    const step = WorldScene.KEYBOARD_TILE_STEP[facing]!;
-    const stepX = step.dx;
-    const stepY = step.dy;
+    const world = screenInputToWorldDelta(screenDx, screenDy);
     const sprint = this.isSprintKeyDown() && (me.stamina ?? 0) > 0;
-    const now = Date.now();
-
-    const facingChanged = facing !== this.lastKeyboardFacing;
-    const sprintChanged = sprint !== this.lastKeyboardSprint;
-
-    const baseTX = Math.floor(me.x);
-    const baseTY = Math.floor(me.y);
-
-    // How far along the current facing until our last goal (≤0 = at/past it).
-    const remainingToGoal = this.keyboardMoveActive
-      ? (this.lastKeyboardGoalTX + 0.5 - me.x) * stepX +
-        (this.lastKeyboardGoalTY + 0.5 - me.y) * stepY
-      : 0;
-
-    // Fresh command when starting, turning, toggling sprint, or finishing the tile.
-    const needSend =
-      !this.keyboardMoveActive ||
-      facingChanged ||
-      sprintChanged ||
-      remainingToGoal < 0.75;
-
-    if (!needSend) return;
-
-    let goal: { x: number; y: number } | null = null;
-    let goalTX = baseTX + stepX;
-    let goalTY = baseTY + stepY;
-
-    if (me.inInterior) {
-      // Project straight to the room boundary along the held direction and
-      // hand it to the server exactly like a click would be — the server's
-      // own A* (interiorWalkable + findPath in handleMoveTo) then routes
-      // around any furniture/walls in between. A short 1–2 tile "ahead" probe
-      // can never reach a nook that requires walking *around* an obstacle
-      // first (e.g. a gap tucked behind the far side of a bed); sending a
-      // real far-away target and trusting server pathfinding gives WASD the
-      // same reach as click-to-move. Releasing the keys still sends an
-      // explicit stop, so this never "runs away" further than intended.
-      const { iW, iH } = interiorDimensions(me.buildingX, me.buildingY);
-      const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
-
-      let farTX = stepX > 0 ? iW - 1 : stepX < 0 ? 0 : baseTX;
-      let farTY = stepY > 0 ? iH - 1 : stepY < 0 ? 0 : baseTY;
-      // The doorway strip sits one tile past the floor grid. Extend onto it
-      // when heading toward the door so WASD can still walk out the exit.
-      // Upper floors have no street door.
-      const onGroundFloor = this.effectiveInteriorLevel(me) === 0;
-      if (
-        onGroundFloor &&
-        exit.face === "SE" &&
-        stepX > 0 &&
-        farTY >= exit.alongMin &&
-        farTY <= exit.alongMax
-      ) {
-        farTX = exit.outsideX;
-      } else if (
-        onGroundFloor &&
-        exit.face === "SW" &&
-        stepY > 0 &&
-        farTX >= exit.alongMin &&
-        farTX <= exit.alongMax
-      ) {
-        farTY = exit.outsideY;
-      }
-
-      goalTX = farTX;
-      goalTY = farTY;
-      goal = { x: farTX + 0.5, y: farTY + 0.5 };
-    } else {
-      // Note: unlike a click, WASD never auto-routes into a building's
-      // doorway when it bumps a wall tile — it should just stop at the wall.
-      // Routing to the entrance is reserved for explicit clicks (see
-      // handleWorldClick).
-      const resolveGoal = (
-        tx: number,
-        ty: number,
-      ): { x: number; y: number } | null => {
-        if (!isWallTile(tx, ty) && !this.isOverworldMovementBlocked(tx, ty)) {
-          return { x: tx + 0.5, y: ty + 0.5 };
-        }
-        return null;
-      };
-
-      // Always step from the tile we occupy along keys held RIGHT NOW.
-      // Keep paths short (1–2 tiles) so releasing keys stops quickly.
-      const preferAhead =
-        facingChanged || sprintChanged || !this.keyboardMoveActive ? 1 : 2;
-
-      for (let ahead = preferAhead; ahead >= 1; ahead--) {
-        const tx = baseTX + stepX * ahead;
-        const ty = baseTY + stepY * ahead;
-        let clear = true;
-        for (let i = 1; i < ahead; i++) {
-          const ix = baseTX + stepX * i;
-          const iy = baseTY + stepY * i;
-          if (isWallTile(ix, iy) || this.isOverworldMovementBlocked(ix, iy)) {
-            clear = false;
-            break;
-          }
-        }
-        if (!clear) continue;
-        const candidate = resolveGoal(tx, ty);
-        if (candidate) {
-          goal = candidate;
-          goalTX = Math.floor(candidate.x);
-          goalTY = Math.floor(candidate.y);
-          break;
-        }
-      }
-
-      // Sprint toggle with nowhere new to step — re-issue current goal.
-      if (!goal && sprintChanged && this.keyboardMoveActive) {
-        goalTX = this.lastKeyboardGoalTX;
-        goalTY = this.lastKeyboardGoalTY;
-        goal = { x: goalTX + 0.5, y: goalTY + 0.5 };
-      }
-
-      // The tile directly ahead is an outdoor blocker (tree, fence, corner,
-      // but not a building — those stop at the wall, see above) — approach
-      // it the same way a click does instead of just refusing to move.
-      if (!goal) {
-        const blockTX = baseTX + stepX;
-        const blockTY = baseTY + stepY;
-        const outdoorBlocker =
-          (isWallTile(blockTX, blockTY) && !getBuildingAt(blockTX, blockTY)) ||
-          this.isOverworldMovementBlocked(blockTX, blockTY);
-        if (outdoorBlocker) {
-          const approach = blockedTileApproachGoal(
-            me.x,
-            me.y,
-            blockTX,
-            blockTY,
-            (tx, ty) => this.overworldMoveWalkable(tx, ty),
-          );
-          if (approach) {
-            goal = approach;
-            goalTX = Math.floor(approach.x);
-            goalTY = Math.floor(approach.y);
-          }
-        }
-      }
-    }
-    if (!goal) return;
-
-    const targetKey = `${goalTX},${goalTY},${sprint ? 1 : 0},${facing}`;
-    if (
-      !facingChanged &&
-      !sprintChanged &&
-      targetKey === this.lastKeyboardMoveTargetKey &&
-      now - this.lastKeyboardMoveSentAt < WorldScene.KEYBOARD_MOVE_RESEND_MS
-    ) {
-      return;
-    }
-
-    if (!this.keyboardMoveActive) {
-      this.clearCombatTarget();
-      this.clearInteractTarget();
-      this.clearLootTarget();
-    }
-    this.keyboardMoveActive = true;
-    this.lastKeyboardFacing = facing;
-    this.lastKeyboardMoveTargetKey = targetKey;
-    this.lastKeyboardMoveSentAt = now;
-    this.lastKeyboardGoalTX = goalTX;
-    this.lastKeyboardGoalTY = goalTY;
-    this.lastKeyboardSprint = sprint;
-    this.sendMoveToCoords(goal.x, goal.y, sprint, false);
+    this.sendSteer(world.x, world.y, sprint);
   }
 
   /** Screen-space move vector from WASD, arrows, or the mobile thumb stick. */
@@ -14478,6 +14413,7 @@ export class WorldScene extends Phaser.Scene {
     this.intentionalLeave = true;
     this.worldJoinGeneration++;
     this.worldRevealReady = false;
+    this.dismissWorldPageUi();
     resetEntityAssetLoader(this);
     this.clearEntitySpriteMaps();
     const kickReason = typeof reason === "string" ? reason.trim() : "";
@@ -15189,7 +15125,8 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * Velocity for a guard snapshot so the sprite glides between slow outer steps.
-   * A door, a floor change, or a jump of several tiles snaps instead of sliding.
+   * A door, a floor change, a jump of several tiles, or any non-walk pose
+   * (sit, stand, idle) snaps instead of sliding.
    */
   private noteGuardMotion(
     sprite: EntitySprite,
@@ -15229,17 +15166,21 @@ export class WorldScene extends Phaser.Scene {
       sprite.setData("velY", 0);
       return;
     }
+    // Sit and stand move about one tile onto or off a blocked chair. That is
+    // not a walk: the following patches often repeat the same pose, so a
+    // glide velocity would stick and pull the sprite off the seat.
+    if (next.anim !== "walk") {
+      sprite.setData("renderX", next.x);
+      sprite.setData("renderY", next.y);
+      sprite.setData("snapX", next.x);
+      sprite.setData("snapY", next.y);
+      sprite.setData("snapAt", performance.now());
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+      return;
+    }
     if (prev.x === next.x && prev.y === next.y) {
       // A facing or health patch must not cancel a glide that is still walking.
-      if (next.anim !== "walk") {
-        sprite.setData("renderX", next.x);
-        sprite.setData("renderY", next.y);
-        sprite.setData("snapX", next.x);
-        sprite.setData("snapY", next.y);
-        sprite.setData("snapAt", performance.now());
-        sprite.setData("velX", 0);
-        sprite.setData("velY", 0);
-      }
       return;
     }
     const now = performance.now();
@@ -15324,6 +15265,23 @@ export class WorldScene extends Phaser.Scene {
     serverX: number,
     serverY: number,
   ): { x: number; y: number } {
+    const data = sprite.getData("server") as
+      | { inInterior?: boolean; anim?: string }
+      | undefined;
+    // A sit pose is a snap onto the chair. Glide velocity from that one-tile
+    // hop is never cleared (the meal sends no further patches), so the body
+    // would coast several tiles off the seat for the whole sit.
+    if (isGuardSitAnim(data?.anim)) {
+      sprite.setData("velX", 0);
+      sprite.setData("velY", 0);
+      sprite.setData("snapX", serverX);
+      sprite.setData("snapY", serverY);
+      sprite.setData("snapAt", performance.now());
+      sprite.setData("renderX", serverX);
+      sprite.setData("renderY", serverY);
+      return { x: serverX, y: serverY };
+    }
+
     const snapX = (sprite.getData("snapX") as number | undefined) ?? serverX;
     const snapY = (sprite.getData("snapY") as number | undefined) ?? serverY;
     const velX = (sprite.getData("velX") as number | undefined) ?? 0;
@@ -15338,10 +15296,6 @@ export class WorldScene extends Phaser.Scene {
     let y = snapY + velY * elapsed;
     x += (serverX - x) * ZOMBIE_RENDER_LERP;
     y += (serverY - y) * ZOMBIE_RENDER_LERP;
-
-    const data = sprite.getData("server") as
-      | { inInterior?: boolean }
-      | undefined;
     if (!data?.inInterior) {
       const clamped = this.clampRenderAwayFromOverworldStructures(x, y);
       x = clamped.x;
@@ -16641,15 +16595,8 @@ export class WorldScene extends Phaser.Scene {
 
     if (entityId === this.sessionId && kind === "player") {
       if (data.inInterior) {
-        this.playerOcclusionHighlight?.hide();
         this.playerOccludedGhost?.hide();
       } else {
-        this.playerOcclusionHighlight?.update(
-          sprite,
-          Math.floor(renderPos.x),
-          Math.floor(renderPos.y),
-          depth,
-        );
         this.playerOccludedGhost?.update(
           sprite,
           Math.floor(renderPos.x),

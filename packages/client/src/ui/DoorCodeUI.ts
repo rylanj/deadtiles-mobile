@@ -1,4 +1,5 @@
 import { resetDialogScroll } from "./dialogScroll";
+import { claimPageOverlay } from "./pageOverlay";
 
 export type DoorCodeUIMode = "enter" | "set";
 
@@ -88,6 +89,7 @@ export class DoorCodeUI {
     this.overlay.addEventListener("mousedown", (e) => {
       if (e.target === this.overlay) this.close();
     });
+    claimPageOverlay(this.overlay.id);
     document.body.appendChild(this.overlay);
   }
 
@@ -146,6 +148,9 @@ export class DoorCodeUI {
   }
 
   destroy() {
+    this.visible = false;
+    this.overlay.hidden = true;
+    this.input.blur();
     this.overlay.remove();
   }
 }
