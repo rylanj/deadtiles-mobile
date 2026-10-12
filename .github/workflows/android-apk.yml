@@ -35,6 +35,8 @@ jobs:
         run: npm run apk:sync
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # Baked into the APK. A local .env must not reach this build.
+          VITE_SERVER_URL: https://play.deadtiles.com
 
       - name: Install the signing key
         env:
