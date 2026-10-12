@@ -29,6 +29,12 @@ Open http://localhost:5173. The page talks to https://play.deadtiles.com.
 
 ## Android APK
 
+Download the current build:
+
+https://github.com/rylanj/deadtiles-mobile/releases/download/apk/deadtiles.apk
+
+GitHub rebuilds that file whenever `main` changes. It is signed with the debug key the live county already trusts, so Phantom can verify the install.
+
 The phone app is a Capacitor shell that bundles the Vite client. Do not set `server.url` in `capacitor.config.ts` (that would load a website).
 
 1. Install [Android Studio](https://developer.android.com/studio) (JDK + Android SDK).
