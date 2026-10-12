@@ -7,6 +7,9 @@ import {
   ASHEN_TRADER_QUESTS,
   ASHEN_TRADERS_FACTION,
   isAshenMarketTraderId,
+  DEADMARK_MIN_WIRE,
+  deadmarkWireClosedReason,
+  type WireDeskPayload,
   GUARD_NPC_TRADER_GUARD,
   GUARD_NPC_TRADER_MAN,
   ashenStanding,
@@ -49,6 +52,10 @@ export type AshenTraderDialogUIHandlers = {
   onRequestDeposit: (traderId: string) => void;
   /** Player is paying the one-time safe deposit fee. */
   onPayDeposit: (traderId: string) => void;
+  /** Kevin checks what the coast will still wire today. */
+  onRequestWire: (traderId: string) => void;
+  /** Ship this many notes. The server refuses if the book moved. */
+  onConfirmWire: (traderId: string, notes: number) => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
   onChooseLine?: (lineId: string) => void;
@@ -95,6 +102,11 @@ export class AshenTraderDialogUI {
   private expandedQuestId: string | null = null;
   private denyQuestId = "";
   private denyReason = "";
+  private wireDesk: WireDeskPayload | null = null;
+  private wireNotice = "";
+  private wireBusy = false;
+  private wireAmountDraft = "";
+  private wireWaitTimer: number | null = null;
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -240,6 +252,11 @@ export class AshenTraderDialogUI {
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
+    this.wireDesk = null;
+    this.wireNotice = "";
+    this.wireBusy = false;
+    this.wireAmountDraft = "";
+    this.clearWireWait();
     this.playerTitleEl.textContent = opts.playerName?.trim() || "You";
     this.playerAvatarEl.src = playerAvatarSrc(opts.clothingSkin);
     this.ashenReputation = opts.ashenReputation ?? ASHEN_REP_START;
@@ -264,6 +281,11 @@ export class AshenTraderDialogUI {
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
+    this.wireDesk = null;
+    this.wireNotice = "";
+    this.wireBusy = false;
+    this.wireAmountDraft = "";
+    this.clearWireWait();
   }
 
   sync(opts: {
@@ -278,6 +300,41 @@ export class AshenTraderDialogUI {
     if (opts.ashenReputation != null) this.ashenReputation = opts.ashenReputation;
     if (opts.extraPockets != null) this.extraPockets = opts.extraPockets;
     this.render();
+  }
+
+  applyWire(
+    payload: WireDeskPayload,
+    result?: { ok: boolean; pending: boolean; reason: string },
+  ) {
+    if (!this.visible || !this.isMarketTrader()) return;
+    this.wireDesk = payload;
+    if (payload.inventoryJson) this.inventoryJson = payload.inventoryJson;
+    this.wireBusy = false;
+    this.clearWireWait();
+    if (result) this.wireNotice = result.reason;
+    else if (
+      this.wireNotice === "Checking today's book." ||
+      this.wireNotice === "Counting the notes."
+    ) {
+      this.wireNotice = "";
+    }
+    if (this.activeLineId === "wire") this.render();
+  }
+
+  private clearWireWait() {
+    if (this.wireWaitTimer == null) return;
+    window.clearTimeout(this.wireWaitTimer);
+    this.wireWaitTimer = null;
+  }
+
+  private armWireWait() {
+    this.clearWireWait();
+    this.wireWaitTimer = window.setTimeout(() => {
+      if (!this.wireBusy) return;
+      this.wireBusy = false;
+      this.wireNotice = "No answer yet. If the notes left your pack, the wire is still on the book.";
+      if (this.visible && this.activeLineId === "wire") this.render();
+    }, 35_000);
   }
 
   private isTraderMan() {
@@ -312,7 +369,7 @@ export class AshenTraderDialogUI {
     this.speechListEl.replaceChildren();
     for (const line of ASHEN_TRADER_DIALOG_LINES) {
       if (
-        (line.action === "board" || line.action === "deposit") &&
+        (line.action === "board" || line.action === "deposit" || line.action === "wire") &&
         !this.isMarketTrader()
       ) {
         continue;
@@ -327,7 +384,7 @@ export class AshenTraderDialogUI {
       const iconId =
         this.isTraderMan() && line.action === "trade"
           ? "backpack"
-          : this.isTraderMan() && line.action === "board"
+          : this.isTraderMan() && (line.action === "board" || line.action === "wire")
             ? "banknote"
             : this.isTraderMan() && line.action === "deposit"
               ? "safe"
@@ -341,6 +398,12 @@ export class AshenTraderDialogUI {
       fillSpeechButton(btn, speech, iconId);
       btn.addEventListener("click", () => {
         this.activeLineId = line.id;
+        if (line.action === "wire" && this.isMarketTrader()) {
+          this.wireDesk = null;
+          this.wireNotice = "Checking today's book.";
+          this.wireBusy = false;
+          this.clearWireWait();
+        }
         this.render();
         if (line.action === "trade" && this.isTraderMan() && this.npcId) {
           // Close talk first, then open the shop against this TraderMan.
@@ -362,6 +425,9 @@ export class AshenTraderDialogUI {
           const traderId = this.npcId;
           this.handlers.onClose();
           this.handlers.onRequestDeposit(traderId);
+        }
+        if (line.action === "wire" && this.isMarketTrader() && this.npcId) {
+          this.handlers.onRequestWire(this.npcId);
         }
       });
       this.speechListEl.appendChild(btn);
@@ -425,6 +491,197 @@ export class AshenTraderDialogUI {
     ) {
       this.appendSafeDepositOffer();
     }
+    if (this.isMarketTrader() && active.id === "wire") {
+      this.appendWirePanel();
+    }
+  }
+
+  private wireBlockReason(desk: WireDeskPayload): string | null {
+    if (desk.configured && desk.max >= DEADMARK_MIN_WIRE) return null;
+    return deadmarkWireClosedReason({
+      configured: desk.configured,
+      cap: desk.personalCap,
+      notesInPack: desk.notesInPack,
+      coastLeft: desk.coastLeft,
+      personalLeft: desk.personalLeft,
+      penaltyDue: desk.penaltyDue ?? 0,
+    });
+  }
+
+  private shipLabel(notes: number | null, penalty: number): string {
+    if (notes == null) return "Ship notes";
+    const base = `Ship ${notes.toLocaleString("en-US")} notes`;
+    return penalty > 0 ? `${base} (+${penalty.toLocaleString("en-US")} penalty)` : base;
+  }
+
+  private wireAmountHint(amount: number | null, max: number): string {
+    if (amount == null) return "";
+    if (amount < DEADMARK_MIN_WIRE) {
+      return `I don't wire fewer than ${DEADMARK_MIN_WIRE} notes.`;
+    }
+    if (amount > max) {
+      return `The book can take ${max.toLocaleString("en-US")} right now.`;
+    }
+    return "";
+  }
+
+  private readWireAmount(): number | null {
+    if (!/^[0-9]+$/.test(this.wireAmountDraft)) return null;
+    const notes = Number(this.wireAmountDraft);
+    if (!Number.isSafeInteger(notes) || notes < 1) return null;
+    return notes;
+  }
+
+  private appendWirePanel() {
+    const section = document.createElement("div");
+    section.className = "ashen-wire";
+    const desk = this.wireDesk;
+
+    const addRow = (label: string, value: string) => {
+      const row = document.createElement("div");
+      row.className = "ashen-wire-row";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const amount = document.createElement("span");
+      amount.textContent = value;
+      row.append(name, amount);
+      section.appendChild(row);
+    };
+
+    if (!desk) {
+      const waiting = document.createElement("div");
+      waiting.className = "ashen-wire-note";
+      waiting.textContent = this.wireNotice || "Checking today's book.";
+      section.appendChild(waiting);
+      this.responseEl.appendChild(section);
+      return;
+    }
+
+    addRow("Standing", desk.standing);
+    addRow("Notes in your pack", desk.notesInPack.toLocaleString("en-US"));
+    addRow(
+      "Your wire left today",
+      `${desk.personalLeft.toLocaleString("en-US")} of ${desk.personalCap.toLocaleString("en-US")}`,
+    );
+    addRow(
+      "Coast still buying",
+      `${desk.coastLeft.toLocaleString("en-US")} of ${desk.coastCap.toLocaleString("en-US")}`,
+    );
+    addRow("Marks go to", desk.destination.length > 12
+      ? `${desk.destination.slice(0, 4)}...${desk.destination.slice(-4)}`
+      : desk.destination);
+    addRow("Rate", "1 note = 1 mark");
+    addRow("Smallest wire", `${DEADMARK_MIN_WIRE.toLocaleString("en-US")} notes`);
+    const penalty = desk.penaltyDue ?? 0;
+    if (penalty > 0) {
+      addRow("Coast penalty", `${penalty.toLocaleString("en-US")} notes, once`);
+      const owed = document.createElement("div");
+      owed.className = "ashen-wire-note";
+      owed.textContent =
+        "You closed the account the coast paid for and kept the deposit. The penalty comes out with your next wire.";
+      section.appendChild(owed);
+    }
+
+    if (desk.pendingNotes > 0) {
+      const pending = document.createElement("div");
+      pending.className = "ashen-wire-note";
+      pending.textContent = `A wire for ${desk.pendingNotes.toLocaleString("en-US")} notes is still on the book.`;
+      section.appendChild(pending);
+    }
+    if (this.wireNotice) {
+      const notice = document.createElement("div");
+      notice.className = "ashen-wire-note";
+      notice.textContent = this.wireNotice;
+      section.appendChild(notice);
+    }
+
+    const blocked = this.wireBlockReason(desk);
+    const amount = this.readWireAmount();
+    const canShip =
+      !this.wireBusy &&
+      blocked == null &&
+      amount != null &&
+      amount >= DEADMARK_MIN_WIRE &&
+      amount <= desk.max;
+    if (blocked && !this.wireBusy) {
+      const line = document.createElement("div");
+      line.className = "ashen-wire-note";
+      line.textContent = blocked;
+      section.appendChild(line);
+    } else if (!blocked) {
+      const hint = document.createElement("div");
+      hint.className = "ashen-wire-note";
+      const showHint = (amount: number | null) => {
+        hint.textContent = this.wireAmountHint(amount, desk.max);
+        hint.hidden = hint.textContent.length === 0;
+      };
+      const amountRow = document.createElement("div");
+      amountRow.className = "ashen-wire-amount-row";
+      const input = document.createElement("input");
+      input.className = "ashen-wire-amount";
+      input.inputMode = "numeric";
+      input.autocomplete = "off";
+      input.placeholder = `${DEADMARK_MIN_WIRE} or more`;
+      input.value = this.wireAmountDraft;
+      input.disabled = this.wireBusy;
+      input.addEventListener("input", () => {
+        this.wireAmountDraft = input.value.replace(/\D/g, "").slice(0, 6);
+        if (input.value !== this.wireAmountDraft) input.value = this.wireAmountDraft;
+        const ship = section.querySelector<HTMLButtonElement>("[data-wire-ship]");
+        const next = this.readWireAmount();
+        showHint(next);
+        if (ship && this.wireDesk) {
+          const fits =
+            next != null &&
+            next >= DEADMARK_MIN_WIRE &&
+            next <= this.wireDesk.max;
+          ship.disabled = this.wireBusy || !fits;
+          ship.textContent = this.shipLabel(fits ? next : null, this.wireDesk.penaltyDue ?? 0);
+        }
+      });
+      const maxBtn = document.createElement("button");
+      maxBtn.type = "button";
+      maxBtn.className = "ashen-wire-max";
+      maxBtn.textContent = "Max";
+      maxBtn.disabled = this.wireBusy || desk.max < 1;
+      maxBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.wireAmountDraft = String(desk.max);
+        this.render();
+      });
+      amountRow.append(input, maxBtn);
+      section.appendChild(amountRow);
+      showHint(amount);
+      section.appendChild(hint);
+
+      const ship = document.createElement("button");
+      ship.type = "button";
+      ship.className = "red-dialog-complete-btn";
+      ship.dataset.wireShip = "1";
+      ship.disabled = !canShip;
+      ship.textContent = this.shipLabel(canShip ? amount : null, penalty);
+      ship.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const notes = this.readWireAmount();
+        if (
+          !this.npcId ||
+          !this.wireDesk ||
+          notes == null ||
+          notes < DEADMARK_MIN_WIRE ||
+          notes > this.wireDesk.max
+        ) {
+          return;
+        }
+        this.wireBusy = true;
+        this.wireNotice = "Counting the notes.";
+        this.render();
+        this.armWireWait();
+        this.handlers.onConfirmWire(this.npcId, notes);
+      });
+      section.appendChild(ship);
+    }
+
+    this.responseEl.appendChild(section);
   }
 
   private appendSafeDepositOffer() {

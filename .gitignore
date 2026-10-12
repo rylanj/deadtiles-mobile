@@ -146,6 +146,10 @@ vite.config.ts.timestamp-*
 .DS_Store
 scripts/maps/
 packages/server/data/.auth_secret
+packages/server/data/*.db
+packages/server/data/*.db-shm
+packages/server/data/*.db-wal
+packages/server/data/backup-*/
 
 # Cursor
 .cursor/

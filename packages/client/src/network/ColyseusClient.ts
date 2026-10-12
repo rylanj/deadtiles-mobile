@@ -8,6 +8,7 @@ import {
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
+  type WireDeskPayload,
 } from "@zombie/shared";
 import {
   connectSolanaWallet,
@@ -1030,6 +1031,15 @@ export type MarketBoardEvent = {
   payload: MarketStatePayload;
 };
 
+export type WireDeskEvent = {
+  type: "wireQuote" | "wireResult";
+  payload: WireDeskPayload & {
+    ok?: boolean;
+    pending?: boolean;
+    reason?: string;
+  };
+};
+
 export type ServerEvent =
   | LootEvent
   | ContainerOpenEvent
@@ -1042,6 +1052,7 @@ export type ServerEvent =
   | DialogTaskCompleteEvent
   | DialogSpokenEvent
   | DialogHealCompleteEvent
+  | WireDeskEvent
   | SafeDepositCloseEvent
   | QuestSyncEvent
   | SkillSyncEvent

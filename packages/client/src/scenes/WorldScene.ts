@@ -2106,6 +2106,8 @@ export class WorldScene extends Phaser.Scene {
       onRequestBoard: (traderId) => this.requestMarketOpen(traderId),
       onRequestDeposit: (traderId) => this.requestSafeDepositOpen(traderId),
       onPayDeposit: (traderId) => this.requestSafeDepositPay(traderId),
+      onRequestWire: (traderId) => this.sendWireQuote(traderId),
+      onConfirmWire: (traderId, notes) => this.sendWireConfirm(traderId, notes),
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.ashenTraderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenTraderCompleteTask(taskId),
@@ -2586,6 +2588,14 @@ export class WorldScene extends Phaser.Scene {
           }
         } else if (msg.type === "dialogOpen") {
           this.openNpcDialog(msg.payload);
+        } else if (msg.type === "wireQuote") {
+          this.ashenTraderDialogUI?.applyWire(msg.payload);
+        } else if (msg.type === "wireResult") {
+          this.ashenTraderDialogUI?.applyWire(msg.payload, {
+            ok: msg.payload.ok === true,
+            pending: msg.payload.pending === true,
+            reason: msg.payload.reason ?? "",
+          });
         } else if (msg.type === "questSync") {
           this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "skillSync") {
@@ -18017,6 +18027,21 @@ export class WorldScene extends Phaser.Scene {
     const message: ClientMessage = {
       type: "dialogChoose",
       payload: { npcId, lineId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendWireQuote(traderId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = { type: "wireQuote", payload: { traderId } };
+    this.room.send("action", message);
+  }
+
+  private sendWireConfirm(traderId: string, notes: number) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "wireConfirm",
+      payload: { traderId, notes },
     };
     this.room.send("action", message);
   }

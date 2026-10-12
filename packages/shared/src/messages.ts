@@ -1,4 +1,10 @@
 import { isStructureBuildKind, type StructureBuildKind } from "./buildCosts.js";
+import {
+  DEADMARK_MAX_WIRE,
+  DEADMARK_MIN_WIRE,
+  type WireDeskPayload,
+  type WireResultPayload,
+} from "./deadmark.js";
 import { parseMapMarkers, type MapMarker } from "./mapMarkers.js";
 import { MARKET_PRICE_MAX } from "./playerMarket.js";
 import { COOK_SLOT_COUNT, isRawMeat } from "./cooking.js";
@@ -135,6 +141,16 @@ export type TradeOfferBuyLineMessage = {
   stockIndex: number;
   itemId: string;
   quantity: number;
+};
+
+/** Ask Kevin what the coast will still wire today. */
+export type WireQuoteMessage = {
+  traderId: string;
+};
+
+export type WireConfirmMessage = {
+  traderId: string;
+  notes: number;
 };
 
 /** Confirm a pending multi-line trade offer (net cash settlement). */
@@ -438,6 +454,8 @@ export type ClientMessage =
   | { type: "tradeOpen"; payload: TradeOpenMessage }
   | { type: "tradeConfirm"; payload: TradeConfirmMessage }
   | { type: "tradeClose" }
+  | { type: "wireQuote"; payload: WireQuoteMessage }
+  | { type: "wireConfirm"; payload: WireConfirmMessage }
   | { type: "marketOpen"; payload: MarketOpenMessage }
   | { type: "marketList"; payload: MarketListMessage }
   | { type: "marketBuy"; payload: MarketListingIdMessage }
@@ -738,6 +756,17 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
         type,
         payload: { traderId: p.traderId, listingId: p.listingId },
       };
+    }
+    case "wireQuote": {
+      if (!isIdString(p.traderId)) return null;
+      return { type, payload: { traderId: p.traderId } };
+    }
+    case "wireConfirm": {
+      if (!isIdString(p.traderId)) return null;
+      // The handler refuses amounts under the minimum with a reason, so an
+      // older client with a lower minimum still gets an answer.
+      if (!isIntInRange(p.notes, 1, DEADMARK_MAX_WIRE)) return null;
+      return { type, payload: { traderId: p.traderId, notes: p.notes } };
     }
     case "tradeConfirm": {
       if (!isIdString(p.traderId)) return null;
@@ -1087,6 +1116,14 @@ export type ServerMessage =
         lineId: string;
         text: string;
       };
+    }
+  | {
+      type: "wireQuote";
+      payload: WireDeskPayload;
+    }
+  | {
+      type: "wireResult";
+      payload: WireResultPayload;
     }
   | {
       type: "dialogHealComplete";

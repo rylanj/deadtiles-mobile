@@ -1919,6 +1919,57 @@
         text-transform: uppercase;
         color: #c89898;
       }
+      .ashen-wire {
+        margin-top: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .ashen-wire-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font: 13px/1.35 system-ui, sans-serif;
+        color: #e6d4d4;
+      }
+      .ashen-wire-row span:last-child {
+        color: #f2e6c8;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+      .ashen-wire-amount-row {
+        display: flex;
+        gap: 8px;
+      }
+      .ashen-wire-amount {
+        flex: 1;
+        min-width: 0;
+        box-sizing: border-box;
+        background: #1a1212;
+        color: #f2e6c8;
+        border: 1px solid rgba(180, 80, 80, 0.45);
+        border-radius: 4px;
+        padding: 8px 10px;
+        font: 16px/1.2 system-ui, sans-serif;
+      }
+      .ashen-wire-max {
+        background: transparent;
+        color: #e6d4d4;
+        border: 1px solid rgba(180, 80, 80, 0.45);
+        border-radius: 4px;
+        padding: 8px 12px;
+        font: 600 13px/1 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .ashen-wire-note {
+        font: 13px/1.4 system-ui, sans-serif;
+        color: #d7c4a4;
+      }
+      .ashen-wire .red-dialog-complete-btn:disabled,
+      .ashen-wire-max:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
       .red-dialog-task-row {
         display: flex;
         flex-wrap: wrap;
