@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Inset past the round-mask safe circle so the frame corners stay whole. -->
+    <path
+        android:fillColor="#9FE830"
+        android:fillType="evenOdd"
+        android:pathData="M33,33H75V75H33Z M36.82,36.82H71.18V71.18H36.82Z" />
+    <path
+        android:fillColor="#9FE830"
+        android:pathData="M48.27,48.27H59.73V59.73H48.27Z" />
+</vector>

@@ -6,10 +6,16 @@ import { configureFenceTextures, loadFenceAssets } from "../sprites/FenceAssets"
 import { configurePropTextures, loadPropAssets } from "../sprites/PropAssets";
 import { configureInteriorAnimations } from "../sprites/InteriorAssets";
 import { loadCombatAssets } from "../sprites/CombatAssets";
-import { bakeIsoGroundTextures, groundTextureIsLoaded } from "../world/TileTextures";
-import { AudioManager } from "../audio/AudioManager";
-import { prepareBirchportMapChart } from "@zombie/shared";
 import {
+  bakeIsoGroundTextureAt,
+  groundTextureIsLoaded,
+  isoGroundTextureCount,
+} from "../world/TileTextures";
+import { AudioManager } from "../audio/AudioManager";
+import { stepBirchportBootChart } from "@zombie/shared";
+import { isWorldJoinActive, markBootAssetsReady } from "../gameLoadState";
+import {
+  noteAssetLoadStarted,
   setBootLoadingProgress,
   setBootLoadingStatus,
 } from "../ui/bootLoading";
@@ -78,12 +84,19 @@ function createFallbackTile(scene: Phaser.Scene, key: string, color: number) {
 
 
 
+type BootPhase = "bake" | "setup" | "rebake" | "chart" | "charting" | "done";
+
 export class BootScene extends Phaser.Scene {
+  private bootPhase: BootPhase = "bake";
+  private bakeIndex = 0;
+  private bootTimer = 0;
+
   constructor() {
     super("BootScene");
   }
 
   preload() {
+    noteAssetLoadStarted();
     setBootLoadingStatus("Loading assets…");
     this.load.on("progress", (value: number) => {
       setBootLoadingProgress(value);
@@ -100,14 +113,73 @@ export class BootScene extends Phaser.Scene {
     // Furniture is deliberately absent here: it is only visible inside
     // interiors and loads on first building enter (see ensureFurnitureAssets).
     loadCombatAssets(this);
-    // Optional SFX — missing files stay silent (see public/assets/audio/README.md).
+    // Optional SFX. Missing files stay silent (see public/assets/audio/README.md).
     AudioManager.get().preload(this);
   }
 
   create() {
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.clearTimeout(this.bootTimer);
+    });
+    // setTimeout, not Phaser's clock. On mobile the game loop can stall after
+    // the last asset lands, which left the loader on Preparing 100%.
+    this.bootTimer = window.setTimeout(() => this.stepBoot(), 0);
+  }
+
+  /** One small piece of boot work, then yield so the phone can paint. */
+  private stepBoot() {
+    this.bootTimer = 0;
+    if (!this.sys.isActive() || this.bootPhase === "done") return;
+    this.wakeGameLoop();
+    let finished = false;
+    try {
+      if (this.bootPhase === "bake" || this.bootPhase === "rebake") {
+        setBootLoadingStatus("Preparing world…");
+        bakeIsoGroundTextureAt(this, this.bakeIndex);
+        this.bakeIndex++;
+        if (this.bakeIndex >= isoGroundTextureCount()) {
+          this.bakeIndex = 0;
+          this.bootPhase = this.bootPhase === "bake" ? "setup" : "chart";
+        }
+      } else if (this.bootPhase === "setup") {
+        this.installFallbacks();
+        this.bootPhase = "rebake";
+      } else if (this.bootPhase === "chart") {
+        // Paint the new status before the chart buffer is allocated.
+        setBootLoadingStatus("Charting Birchport");
+        this.bootPhase = "charting";
+      } else if (this.bootPhase === "charting") {
+        if (stepBirchportBootChart(12)) {
+          this.finishBoot();
+          finished = true;
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      // A failed texture or chart must not trap the player on the loader.
+      if (this.bootPhase === "bake") {
+        try {
+          this.installFallbacks();
+        } catch (fallbackErr) {
+          console.error(fallbackErr);
+        }
+      }
+      this.finishBoot();
+      return;
+    }
+    if (!finished && this.sys.isActive()) {
+      this.bootTimer = window.setTimeout(() => this.stepBoot(), 0);
+    }
+  }
+
+  private wakeGameLoop() {
+    const loop = this.game.loop;
+    if (!loop.running) loop.wake();
+  }
+
+  private installFallbacks() {
     markBootEntityPacksReady(this);
     AudioManager.get().bind(this);
-    bakeIsoGroundTextures(this);
     configureBuildingTextures(this);
     configureFenceTextures(this);
     configurePropTextures(this);
@@ -170,17 +242,27 @@ export class BootScene extends Phaser.Scene {
       createFallbackTile(this, "tile-carpet-beige", 0xbeac8c);
     }
 
-    // Re-bake after fallbacks so source cache + display textures exist.
-    bakeIsoGroundTextures(this);
-
     // Furniture placeholders are deliberately NOT created here. Furniture art is
     // lazy now, so a boot-time placeholder under the same key would satisfy every
     // "is this loaded?" check and permanently hide the real art once it arrives.
     // Call sites already degrade gracefully while the pack is in flight.
+  }
 
-    setBootLoadingStatus("Charting Birchport");
-    prepareBirchportMapChart();
-
-    this.scene.start("MainMenuScene");
+  private finishBoot() {
+    if (this.bootPhase === "done") {
+      markBootAssetsReady();
+      return;
+    }
+    this.bootPhase = "done";
+    try {
+      if (document.body.classList.contains("main-menu-open") && !isWorldJoinActive()) {
+        AudioManager.get().playMenu();
+      }
+      // Stay alive for menu audio, but don't redraw a full canvas under the menu.
+      this.scene.setVisible(false);
+    } catch (err) {
+      console.error(err);
+    }
+    markBootAssetsReady();
   }
 }

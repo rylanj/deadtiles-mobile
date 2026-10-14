@@ -10,6 +10,7 @@
  */
 
 import type Phaser from "phaser";
+import { getSharedAudioContext } from "./audioContext";
 import {
   GUNSHOT_VARIANT_COUNT,
   cartesianToIso,
@@ -338,21 +339,7 @@ function emptyRainPlaylist(): RainPlaylist {
 }
 
 let singleton: AudioManager | null = null;
-let sharedAudioContext: AudioContext | null = null;
 let unlockHooked = false;
-
-function createSharedAudioContext(): AudioContext {
-  if (sharedAudioContext) return sharedAudioContext;
-  const Ctor =
-    window.AudioContext ||
-    (
-      window as unknown as {
-        webkitAudioContext: typeof AudioContext;
-      }
-    ).webkitAudioContext;
-  sharedAudioContext = new Ctor();
-  return sharedAudioContext;
-}
 
 export class AudioManager {
   private scene: Phaser.Scene | null = null;
@@ -407,7 +394,7 @@ export class AudioManager {
    * turn so the menu bed can start without a later click on the canvas.
    */
   static arm(): AudioContext {
-    const ctx = createSharedAudioContext();
+    const ctx = getSharedAudioContext();
     AudioManager.get().installUnlockHook();
     if (ctx.state === "suspended" || ctx.state === "interrupted") {
       void ctx.resume();
@@ -1722,7 +1709,7 @@ export class AudioManager {
   private installUnlockHook() {
     if (unlockHooked) return;
     unlockHooked = true;
-    createSharedAudioContext();
+    getSharedAudioContext();
     const resume = () => this.unlockAudio();
     const opts: AddEventListenerOptions = { capture: true };
     document.addEventListener("pointerdown", resume, opts);
@@ -1764,7 +1751,7 @@ export class AudioManager {
 
   private audioContext(): AudioContext | null {
     const sound = this.scene?.sound as { context?: AudioContext } | undefined;
-    return sound?.context ?? sharedAudioContext;
+    return sound?.context ?? getSharedAudioContext();
   }
 
   private audioContextBlocked(): boolean {

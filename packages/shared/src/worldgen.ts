@@ -5439,6 +5439,7 @@ let birchportMapChartCursor = 0;
 let birchportMapChartRev = 0;
 let birchportMapChartFocusX = Number.NaN;
 let birchportMapChartFocusY = Number.NaN;
+let birchportBootChartDone = false;
 
 function mapChartCellNear(
   cell: MapChartCell,
@@ -5475,10 +5476,11 @@ export function birchportMapChartPending(): number {
 }
 
 /**
- * Raster of Birchport and the land around it. The full buffer exists immediately.
- * Only the boot radius is painted here. {@link stepBirchportMapChart} fills the rest.
+ * Allocate the chart and the cell queue. Does not paint towns. Painting the
+ * spawn area in one turn freezes phones, so boot slices it with
+ * {@link stepBirchportBootChart}.
  */
-export function prepareBirchportMapChart(): BirchportMapChart {
+function ensureBirchportMapChart(): BirchportMapChart {
   if (birchportMapChartCache) return birchportMapChartCache;
 
   const hub = getPlayerSpawnHub();
@@ -5514,15 +5516,50 @@ export function prepareBirchportMapChart(): BirchportMapChart {
   });
   birchportMapChartQueue = cells;
   birchportMapChartCursor = 0;
+  birchportBootChartDone = false;
+  return birchportMapChartCache;
+}
 
-  while (birchportMapChartCursor < birchportMapChartQueue.length) {
+/**
+ * Paint towns around Birchport for up to `budgetMs`. Returns true when that
+ * spawn area is done. One town can be slow on a phone, so callers should
+ * yield between calls instead of looping until true on the same turn.
+ */
+export function stepBirchportBootChart(budgetMs: number): boolean {
+  ensureBirchportMapChart();
+  if (birchportBootChartDone) return true;
+  const hub = getPlayerSpawnHub();
+  const deadline = Date.now() + Math.max(1, budgetMs);
+  let painted = 0;
+  while (birchportMapChartCursor < birchportMapChartQueue.length && Date.now() < deadline) {
     const cell = birchportMapChartQueue[birchportMapChartCursor]!;
-    if (!mapChartCellNear(cell, hx, hy, BIRCHPORT_MAP_BOOT_RADIUS)) break;
+    if (!mapChartCellNear(cell, hub.x, hub.y, BIRCHPORT_MAP_BOOT_RADIUS)) {
+      birchportBootChartDone = true;
+      if (painted > 0) birchportMapChartRev++;
+      return true;
+    }
     paintBirchportMapChartCell(cell.cx, cell.cy);
     birchportMapChartCursor++;
+    painted++;
   }
-  birchportMapChartRev++;
-  return birchportMapChartCache;
+  if (painted > 0) birchportMapChartRev++;
+  if (birchportMapChartCursor >= birchportMapChartQueue.length) {
+    birchportBootChartDone = true;
+  }
+  return birchportBootChartDone;
+}
+
+/**
+ * Raster of Birchport and the land around it. The full buffer exists immediately.
+ * The spawn-area towns are painted here. {@link stepBirchportMapChart} fills the rest.
+ */
+export function prepareBirchportMapChart(): BirchportMapChart {
+  const chart = ensureBirchportMapChart();
+  let guard = 0;
+  while (!stepBirchportBootChart(32) && guard++ < 100000) {
+    /* direct callers need the spawn area before they read the buffer */
+  }
+  return chart;
 }
 
 /** Chart buffer. Prepares the Birchport boot area on first use. */
@@ -5539,7 +5576,7 @@ export function stepBirchportMapChart(
   focusX?: number,
   focusY?: number,
 ): boolean {
-  prepareBirchportMapChart();
+  ensureBirchportMapChart();
   if (
     typeof focusX === "number" &&
     typeof focusY === "number" &&

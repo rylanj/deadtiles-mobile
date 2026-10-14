@@ -4567,9 +4567,11 @@
       body:not(.game-ready) #world-clock {
         visibility: hidden;
       }
-      /* Keep the Phaser canvas blank until nearby NPC packs are ready. */
+      /* Keep the Phaser canvas blank until nearby NPC packs are ready.
+         opacity, not visibility: a hidden canvas never finishes WebGL setup
+         on mobile, so boot sits on Preparing forever. */
       body:not(.game-ready) #game {
-        visibility: hidden;
+        opacity: 0;
         pointer-events: none;
       }
 
@@ -4577,7 +4579,7 @@
       #boot-loading {
         position: fixed;
         inset: 0;
-        z-index: 200;
+        z-index: 220;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -4592,6 +4594,9 @@
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
+      }
+      #boot-loading.boot-loading--instant {
+        transition: none;
       }
       /* Join gate — same look, shown again when entering the world room */
       #world-entering {
@@ -6035,7 +6040,7 @@
     </style>
   </head>
   <body>
-    <div id="boot-loading" aria-live="polite" aria-busy="true">
+    <div id="boot-loading" class="boot-loading--done boot-loading--instant" aria-live="polite" aria-busy="false">
       <div class="boot-loading-inner">
         <div class="boot-loading-brand"><img class="brand-mark" src="/brand/deadtiles-mark.svg" alt="" width="32" height="32" /><span class="boot-loading-brand-text">DEAD<span class="brand-tiles">TILES</span></span></div>
         <div class="boot-loading-spinner" aria-hidden="true"></div>

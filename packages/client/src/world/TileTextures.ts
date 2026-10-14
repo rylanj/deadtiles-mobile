@@ -494,40 +494,56 @@ export function removeGroundChunkTexture(
   }
 }
 
+function bakeOneIsoGroundTexture(scene: Phaser.Scene, key: string) {
+  const art = resolveImageSource(scene, key);
+  if (!art) return;
+  const src = art.src;
+  const srcW = art.width;
+  const srcH = art.height;
+
+  cacheGroundSourceFromImage(key, src, srcW, srcH);
+  const cached = groundSourceByKey.get(key)!;
+
+  const sourceKey = `${key}${GROUND_SOURCE_SUFFIX}`;
+  if (!scene.textures.exists(sourceKey)) {
+    scene.textures.addCanvas(
+      sourceKey,
+      copyImageSourceToCanvas(cached.canvas, srcW, srcH),
+    );
+    scene.textures.get(sourceKey).setFilter(Phaser.Textures.FilterMode.LINEAR);
+  }
+
+  cacheDisplayDiamond(key, cached.canvas, srcW, srcH);
+  ensureDisplayGroundTexture(scene, key);
+
+  if (isSquareSource(srcW, srcH)) {
+    scene.textures.remove(key);
+  } else {
+    const baked = bakeDiamondCanvas(cached.canvas, srcW, srcH, key);
+    // Boot calls bake twice (before/after fallbacks). Replace in place so
+    // Phaser does not warn "Texture key already in use".
+    if (scene.textures.exists(key)) scene.textures.remove(key);
+    scene.textures.addCanvas(key, baked);
+    scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+  }
+}
+
 export function bakeIsoGroundTextures(scene: Phaser.Scene) {
   for (const key of GROUND_TEXTURE_KEYS) {
-    const art = resolveImageSource(scene, key);
-    if (!art) continue;
-    const src = art.src;
-    const srcW = art.width;
-    const srcH = art.height;
-
-    cacheGroundSourceFromImage(key, src, srcW, srcH);
-    const cached = groundSourceByKey.get(key)!;
-
-    const sourceKey = `${key}${GROUND_SOURCE_SUFFIX}`;
-    if (!scene.textures.exists(sourceKey)) {
-      scene.textures.addCanvas(
-        sourceKey,
-        copyImageSourceToCanvas(cached.canvas, srcW, srcH),
-      );
-      scene.textures.get(sourceKey).setFilter(Phaser.Textures.FilterMode.LINEAR);
-    }
-
-    cacheDisplayDiamond(key, cached.canvas, srcW, srcH);
-    ensureDisplayGroundTexture(scene, key);
-
-    if (isSquareSource(srcW, srcH)) {
-      scene.textures.remove(key);
-    } else {
-      const baked = bakeDiamondCanvas(cached.canvas, srcW, srcH, key);
-      // Boot calls bake twice (before/after fallbacks). Replace in place so
-      // Phaser does not warn "Texture key already in use".
-      if (scene.textures.exists(key)) scene.textures.remove(key);
-      scene.textures.addCanvas(key, baked);
-      scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
-    }
+    bakeOneIsoGroundTexture(scene, key);
   }
+}
+
+/** How many ground materials boot bakes. One per turn so phones can paint. */
+export function isoGroundTextureCount(): number {
+  return GROUND_TEXTURE_KEYS.length;
+}
+
+/** Bake a single ground material. Index is into the boot list. */
+export function bakeIsoGroundTextureAt(scene: Phaser.Scene, index: number) {
+  const key = GROUND_TEXTURE_KEYS[index];
+  if (!key) return;
+  bakeOneIsoGroundTexture(scene, key);
 }
 
 function isSquareSource(srcW: number, srcH: number) {
