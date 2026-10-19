@@ -1,0 +1,12 @@
+$schema: https://api.gitbook.com/gitbook-docs.yaml
+site:
+  title: Deadtiles
+  structure:
+    - type: space
+      key: handbook
+      title: Handbook
+      path: handbook
+      default: true
+      content:
+        directory: ./docs
+        language: en
