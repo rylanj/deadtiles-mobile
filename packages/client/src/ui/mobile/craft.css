@@ -69,11 +69,17 @@ body.is-mobile #craft-overlay.ms-host {
   margin: 10px 2px 0;
 }
 
+.ms-craft-prog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .ms-craft-prog-line {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 10px;
+  margin: 0;
   font: 700 15px/1 system-ui, sans-serif;
   color: var(--ms-strong);
 }
@@ -83,6 +89,7 @@ body.is-mobile #craft-overlay.ms-host {
   color: var(--ms-muted);
 }
 .ms-craft-prog .ms-meter {
+  margin: 0;
   height: 10px;
   border-radius: 5px;
 }

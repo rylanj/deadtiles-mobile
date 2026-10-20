@@ -308,6 +308,8 @@ export class CraftUI {
     const ruined = (result.ruined ?? []).map((part) => part.name).filter((name) => name.length > 0);
     if (ruined.length > 0 && this.ms) {
       showSheetMessage(this.ms.snackSlot, `Ruined: ${ruined.join(", ")}.`, "warn", 4200);
+    } else if (this.ms) {
+      showSheetMessage(this.ms.snackSlot, "");
     }
     this.render();
   }
@@ -770,29 +772,27 @@ export class CraftUI {
       if (!this.recraftId) this.stopTick();
       return;
     }
+    const now = Date.now();
     const progress = this.handlers.getCraftProgress?.() ?? null;
     if (progress?.confirmed) run.sawServer = true;
+    if (!run.sawServer && now - run.sentAt > 3000) {
+      this.run = null;
+      this.stopTick();
+      this.handlers.onAbandon?.();
+      if (this.ms) {
+        const out = this.fireIsOut();
+        showSheetMessage(
+          this.ms.snackSlot,
+          out ? "The fire is out." : "That didn't start.",
+          "warn",
+        );
+      }
+      this.render();
+      return;
+    }
     if (progress) {
       run.quietSince = 0;
       if (!this.patchCraftProgress()) this.renderMobile();
-      return;
-    }
-    const now = Date.now();
-    if (!run.sawServer) {
-      if (now - run.sentAt > 3000) {
-        this.run = null;
-        this.stopTick();
-        this.handlers.onAbandon?.();
-        if (this.ms) {
-          const out = this.fireIsOut();
-          showSheetMessage(
-            this.ms.snackSlot,
-            out ? "The fire is out." : "That didn't start.",
-            "warn",
-          );
-        }
-        this.render();
-      }
       return;
     }
     if (!run.quietSince) run.quietSince = now;
@@ -859,7 +859,10 @@ export class CraftUI {
       status = "No room in your bag";
       warn = true;
     } else if (!can) {
-      status = gaps.length === 1 ? this.oneGap(gaps[0]!) : this.manyGaps(gaps.length, recipe.inputs.length, weapon);
+      const countOnly = recipe.output.itemId === "rags" || gaps.length !== 1;
+      status = countOnly
+        ? this.manyGaps(gaps.length, recipe.inputs.length, weapon)
+        : this.oneGap(gaps[0]!);
       warn = true;
     }
     const qty = recipe.output.quantity;
@@ -872,6 +875,7 @@ export class CraftUI {
       name: qty > 1 ? `${base} ×${qty}` : base,
       baseName: base,
       ready: can,
+      mats: inputsOk,
       owned: true,
       weapon,
       breakDown: false,
@@ -904,6 +908,7 @@ export class CraftUI {
       name: `Break down ${tool}`,
       baseName: tool,
       ready: can,
+      mats: owned,
       owned,
       weapon: false,
       breakDown: true,
@@ -936,6 +941,7 @@ export class CraftUI {
       name: `Break down ${name}`,
       baseName: name,
       ready: can,
+      mats: owned,
       owned,
       weapon: true,
       breakDown: true,
@@ -983,7 +989,7 @@ export class CraftUI {
     if (!sheet) return;
     const entries = this.mobileEntries();
     const page = entries.find((entry) => entry.id === this.pageId) ?? null;
-    const readyCount = entries.filter((entry) => entry.ready).length;
+    const readyCount = entries.filter((entry) => entry.mats).length;
     const running = !!this.run && !this.run.result;
     const done = this.run?.result ?? null;
     if (page) {
@@ -1033,7 +1039,7 @@ export class CraftUI {
     const nodes: HTMLElement[] = [];
     const hasWeapons = entries.some((entry) => entry.weapon && !entry.breakDown);
     const hasBreak = entries.some((entry) => entry.breakDown);
-    const readyCount = entries.filter((entry) => entry.ready).length;
+    const readyCount = entries.filter((entry) => entry.mats).length;
     const chips: { id: string; label: string; count?: number }[] = [
       { id: "all", label: "All" },
       { id: "ready", label: "Ready", count: readyCount },
@@ -1047,12 +1053,10 @@ export class CraftUI {
         this.render();
       }),
     );
-    let shown = entries.filter((entry) => this.entryMatchesFilter(entry));
-    shown = [
-      ...shown.filter((entry) => entry.ready),
-      ...shown.filter((entry) => !entry.ready),
-    ];
-    if (shown.length === 0) {
+    const shown = entries.filter((entry) => this.entryMatchesFilter(entry));
+    const crafts = this.readyFirst(shown.filter((entry) => !entry.breakDown));
+    const breaks = this.readyFirst(shown.filter((entry) => entry.breakDown));
+    if (crafts.length === 0 && breaks.length === 0) {
       const empty = document.createElement("div");
       empty.className = "ms-hint ms-craft-empty";
       empty.textContent =
@@ -1060,19 +1064,23 @@ export class CraftUI {
       nodes.push(empty);
       return nodes;
     }
-    let breakLabelled = false;
-    for (const entry of shown) {
-      if (this.filter === "all" && entry.breakDown && !breakLabelled) {
-        nodes.push(sectionLabel("Break down"));
-        breakLabelled = true;
-      }
-      nodes.push(this.entryRow(entry));
+    for (const entry of crafts) nodes.push(this.entryRow(entry));
+    if (breaks.length > 0) {
+      if (this.filter !== "break") nodes.push(sectionLabel("Break down"));
+      for (const entry of breaks) nodes.push(this.entryRow(entry));
     }
     return nodes;
   }
 
+  private readyFirst(entries: CraftEntry[]): CraftEntry[] {
+    return [
+      ...entries.filter((entry) => entry.ready),
+      ...entries.filter((entry) => !entry.ready),
+    ];
+  }
+
   private entryMatchesFilter(entry: CraftEntry): boolean {
-    if (this.filter === "ready") return entry.ready;
+    if (this.filter === "ready") return entry.mats;
     if (this.filter === "weapons") return entry.weapon && !entry.breakDown;
     if (this.filter === "break") return entry.breakDown;
     return true;
@@ -1089,7 +1097,7 @@ export class CraftUI {
       meta,
       metaTone: entry.warn ? "warn" : undefined,
       chevron: true,
-      state: entry.owned ? undefined : "dim",
+      state: entry.mats ? undefined : "dim",
       ariaLabel: entry.name,
       onTap: () => {
         this.pageId = entry.id;
@@ -1354,6 +1362,8 @@ type CraftEntry = {
   name: string;
   baseName: string;
   ready: boolean;
+  /** Ingredients, or the item being broken down, are in the bag. */
+  mats: boolean;
   owned: boolean;
   weapon: boolean;
   breakDown: boolean;

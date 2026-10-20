@@ -1198,8 +1198,11 @@ export class WorldScene extends Phaser.Scene {
    * Treating that leftover id as a new search closes the loot window.
    */
   private staleSearchIdAfterLootOpen: string | null = null;
-  /** Craft finished message arrived before isCrafting cleared. */
-  private staleCraftUntilPatch = false;
+  /**
+   * craftEndTime to ignore after craftSync. The clear patch can be skipped
+   * when the next craft starts immediately, and a boolean would stay stuck.
+   */
+  private staleCraftEndTime = 0;
   private clothingActionLabel = "Wearing";
   /** Edge-triggered reload press. */
   private reloadKeyWasDown = false;
@@ -2617,8 +2620,10 @@ export class WorldScene extends Phaser.Scene {
             activeUntil: msg.payload.activeUntil,
           });
         } else if (msg.type === "craftSync") {
-          const craftingNow = !!this.room?.state.players.get(this.sessionId)?.isCrafting;
-          if (craftingNow) this.staleCraftUntilPatch = true;
+          const craftingPlayer = this.room?.state.players.get(this.sessionId);
+          if (craftingPlayer?.isCrafting && (craftingPlayer.craftEndTime ?? 0) > 0) {
+            this.staleCraftEndTime = craftingPlayer.craftEndTime;
+          }
           this.clearCraftProgressBar();
           if (this.localInventorySync) {
             this.localInventorySync = {
@@ -14244,8 +14249,10 @@ export class WorldScene extends Phaser.Scene {
       this.localTimedAction.optimistic;
     const unloading = !!me.isUnloading || syncConfirmsOptimisticUnload;
     const consuming = !!me.isConsuming;
-    if (this.staleCraftUntilPatch && !me.isCrafting) this.staleCraftUntilPatch = false;
-    const crafting = !!me.isCrafting && !this.staleCraftUntilPatch;
+    if (!me.isCrafting || me.craftEndTime !== this.staleCraftEndTime) {
+      this.staleCraftEndTime = 0;
+    }
+    const crafting = !!me.isCrafting && me.craftEndTime !== this.staleCraftEndTime;
     const changingClothes = !!me.isChangingClothes;
     const building = !!me.isBuilding;
 
@@ -18408,7 +18415,10 @@ export class WorldScene extends Phaser.Scene {
   } | null {
     const me = this.room?.state?.players?.get(this.sessionId);
     const action = this.localTimedAction?.kind === "craft" ? this.localTimedAction : null;
-    const server = !!me?.isCrafting && (me.craftEndTime ?? 0) > 0 && !this.staleCraftUntilPatch;
+    const server =
+      !!me?.isCrafting &&
+      (me.craftEndTime ?? 0) > 0 &&
+      me.craftEndTime !== this.staleCraftEndTime;
     if (!server && !action) return null;
     const durationMs = Math.max(
       1,
