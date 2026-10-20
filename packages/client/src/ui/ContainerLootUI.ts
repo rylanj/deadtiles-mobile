@@ -36,10 +36,14 @@ import {
   isWatchItem,
   wornGearEffectHint,
   WEAPON_SLOT_COUNT,
+  getAmmoTypeForWeapon,
   getEntryDurability,
   getEntryRadioFreq,
+  getEntryWetness,
   getItemDefinition,
   getMaxDurability,
+  isHotbarOnlyItem,
+  weaponIndexFromItemId,
   isRadioSlot,
   isWatchSlot,
   isMapSlot,
@@ -55,9 +59,24 @@ import {
   type Inventory,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
+import { carrySlotGroups, formatCarrySlots, usedSlotCount } from "./carrySlots";
+import "./mobile/loot.css";
+import {
+  chip,
+  createSheet,
+  markSheetOpen,
+  renderTabs,
+  sectionLabel,
+  sheetButton,
+  sheetRow,
+  showSheetMessage,
+  useMobileSheet,
+  type Sheet,
+} from "./mobileSheet";
 import { appendItemDurabilityBar, appendItemIcon, appendItemWetnessBar, markQuestKeepsake } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
+import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
 import {
   bindSlotPointerDnD,
   cancelAllSlotDrags,
@@ -203,6 +222,42 @@ const CATEGORY_COLORS: Record<string, string> = {
   drink: "#406080",
 };
 
+const CATEGORY_LABELS: Record<string, string> = {
+  weapons: "Weapon",
+  clothing: "Clothing",
+  equipment: "Gear",
+  backpack: "Backpack",
+  ammunition: "Ammo",
+  medical: "Medical",
+  crafting: "Material",
+  food: "Food",
+  drink: "Drink",
+  junk: "Junk",
+  magazine: "Magazine",
+};
+
+const MOBILE_WORN_SLOTS = [
+  0,
+  1,
+  ARMOR_SLOT_INDEX,
+  CLOTHING_SLOT_INDEX,
+  BACKPACK_SLOT_INDEX,
+  WATCH_SLOT_INDEX,
+  RADIO_SLOT_INDEX,
+  NECK_SLOT_INDEX,
+  LEFT_HAND_SLOT_INDEX,
+  RIGHT_HAND_SLOT_INDEX,
+  MAP_SLOT_INDEX,
+];
+
+function itemCategoryLabel(itemId: string): string {
+  const def = getItemDefinition(itemId);
+  if (weaponIndexFromItemId(itemId) >= 0) {
+    return getAmmoTypeForWeapon(itemId) ? "Firearm" : "Melee weapon";
+  }
+  return CATEGORY_LABELS[def?.category ?? ""] ?? "Item";
+}
+
 function shortLabel(name: string): string {
   if (name.length <= 10) return name;
   const first = name.split(/\s+/)[0] ?? name;
@@ -225,9 +280,29 @@ export class ContainerLootUI {
   private lastTap: SlotTapState = null;
 
   private overlay: HTMLElement;
+  private layoutEl!: HTMLElement;
   private titleEl: HTMLElement;
+  private playerPanelEl!: HTMLElement;
+  private playerBodyEl!: HTMLElement;
   private containerSlotsEl: HTMLElement;
   private playerSlotsEl: HTMLElement;
+  private phoneOn = false;
+  private ms: Sheet | null = null;
+  private phoneTab: "loot" | "bag" = "loot";
+  private unbindPhoneResize: () => void = () => {};
+  private phoneRoot!: HTMLElement;
+  private phoneTitleEl!: HTMLElement;
+  private phoneMetaEl!: HTMLElement;
+  private phoneTabRow!: HTMLElement;
+  private phoneLootTab!: HTMLButtonElement;
+  private phoneBagTab!: HTMLButtonElement;
+  private phoneListEl!: HTMLElement;
+  private phoneLootPane!: HTMLElement;
+  private phoneBagPane!: HTMLElement;
+  private phoneFooterEl!: HTMLElement;
+  private phoneTakeAllBtn!: HTMLButtonElement;
+  private phoneStoreAllBtn!: HTMLButtonElement;
+  private phonePeekBtn!: HTMLButtonElement;
   private playerWeaponsEl: HTMLElement;
   private playerArmorEl: HTMLElement;
   private playerEquipmentEl: HTMLElement;
@@ -244,6 +319,7 @@ export class ContainerLootUI {
 
     const layout = document.createElement("div");
     layout.className = "container-loot-layout";
+    this.layoutEl = layout;
 
     const sourcePanel = document.createElement("div");
     sourcePanel.className = "inventory-panel container-loot-panel";
@@ -275,6 +351,7 @@ export class ContainerLootUI {
 
     const playerPanel = document.createElement("div");
     playerPanel.className = "inventory-panel container-loot-panel";
+    this.playerPanelEl = playerPanel;
 
     const playerHeader = document.createElement("div");
     playerHeader.className = "inventory-header";
@@ -289,6 +366,7 @@ export class ContainerLootUI {
 
     const playerBody = document.createElement("div");
     playerBody.className = "inventory-grid-wrap container-loot-player-body";
+    this.playerBodyEl = playerBody;
 
     const weaponsSection = document.createElement("div");
     weaponsSection.className = "inventory-section";
@@ -364,17 +442,28 @@ export class ContainerLootUI {
 
     this.playerSlotsEl = document.createElement("div");
     this.playerSlotsEl.className = "container-loot-player-grids";
-    this.playerSlotsEl.append(weaponsSection, equipmentSection, carryScroll);
+    const wornEl = document.createElement("div");
+    wornEl.className = "inventory-worn";
+    wornEl.append(weaponsSection, equipmentSection);
+    this.playerSlotsEl.append(wornEl, carryScroll);
     playerBody.appendChild(this.playerSlotsEl);
     playerPanel.append(playerHeader, playerBody);
 
     layout.append(sourcePanel, playerPanel);
-    this.overlay.appendChild(layout);
+    this.buildPhoneSheet();
+    this.overlay.append(layout, this.phoneRoot);
     document.body.appendChild(this.overlay);
 
     this.overlay.addEventListener("click", (event) => {
+      if (usePhoneDialogSheet()) return;
       if (event.target === this.overlay) this.close();
     });
+    this.unbindPhoneResize = bindPhoneDialogResize(
+      () => this.visible,
+      () => this.overlay.classList.contains("phone-sheet"),
+      () => this.rebuildGrids(),
+      this.overlay,
+    );
   }
 
   open(
@@ -397,6 +486,7 @@ export class ContainerLootUI {
     this.containerId = this.piles[0]?.containerId ?? containerId;
     this.objectType = this.piles.length > 1 ? "" : (this.piles[0]?.objectType ?? objectType);
     this.visible = true;
+    this.phoneTab = "loot";
     this.overlay.hidden = false;
     document.body.classList.add("container-loot-open");
     this.extraPockets = extraPockets;
@@ -427,6 +517,10 @@ export class ContainerLootUI {
     this.dragFromSlot = -1;
     this.dragFromSource = null;
     this.lastTap = null;
+    this.overlay.classList.remove("phone-sheet");
+    this.restoreDesktopBag();
+    markSheetOpen("loot", false);
+    if (this.ms) showSheetMessage(this.ms.snackSlot, "");
     document.body.classList.remove("container-loot-open");
     this.handlers.onClose(closedId);
   }
@@ -481,6 +575,7 @@ export class ContainerLootUI {
 
   private rebuildGrids() {
     cancelAllSlotDrags();
+    this.syncPhoneSheet();
     this.containerSlotsEl.replaceChildren();
     const showLabels = this.piles.length > 1;
     for (const pile of this.piles) {
@@ -597,6 +692,723 @@ export class ContainerLootUI {
         this.createCell("player", idx, this.playerInventory[idx] ?? null),
       );
     }
+    if (this.phoneOn) this.fillPhoneList();
+    if (this.ms && useMobileSheet()) this.msRender();
+  }
+
+  private isTwoWay(): boolean {
+    return (
+      this.storageBoxSlots() != null ||
+      this.objectType === SAFE_DEPOSIT_OBJECT_TYPE ||
+      this.piles.some((pile) => pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE)
+    );
+  }
+
+  private lootItemCount(): number {
+    let count = 0;
+    for (const pile of this.piles) {
+      for (const slot of pile.inventory) {
+        if (slot) count += 1;
+      }
+    }
+    return count;
+  }
+
+  private buildPhoneSheet(): void {
+    this.phoneRoot = document.createElement("div");
+    this.phoneRoot.className = "loot-sheet";
+    this.phoneRoot.hidden = true;
+
+    const header = document.createElement("div");
+    header.className = "loot-sheet-header";
+    const titles = document.createElement("div");
+    titles.className = "loot-sheet-titles";
+    this.phoneTitleEl = document.createElement("h2");
+    this.phoneTitleEl.className = "inventory-title";
+    this.phoneTitleEl.textContent = "Loot";
+    this.phoneMetaEl = document.createElement("div");
+    this.phoneMetaEl.className = "loot-sheet-meta";
+    titles.append(this.phoneTitleEl, this.phoneMetaEl);
+    header.append(titles, createDialogCloseButton(() => this.close()));
+
+    this.phoneTabRow = document.createElement("div");
+    this.phoneTabRow.className = "loot-sheet-tabs";
+    this.phoneLootTab = this.makePhoneTab("Box", "loot");
+    this.phoneBagTab = this.makePhoneTab("Bag", "bag");
+    this.phoneTabRow.append(this.phoneLootTab, this.phoneBagTab);
+
+    this.phoneLootPane = document.createElement("div");
+    this.phoneLootPane.className = "loot-sheet-pane";
+    this.phoneListEl = document.createElement("div");
+    this.phoneListEl.className = "loot-sheet-list";
+    this.phoneLootPane.append(this.phoneListEl);
+
+    this.phoneBagPane = document.createElement("div");
+    this.phoneBagPane.className = "loot-sheet-pane loot-sheet-pane--bag";
+    this.phoneBagPane.hidden = true;
+
+    this.phoneFooterEl = document.createElement("div");
+    this.phoneFooterEl.className = "loot-sheet-footer";
+    this.phoneTakeAllBtn = document.createElement("button");
+    this.phoneTakeAllBtn.type = "button";
+    this.phoneTakeAllBtn.className = "loot-sheet-primary";
+    this.phoneTakeAllBtn.textContent = "Take all";
+    this.phoneTakeAllBtn.addEventListener("click", () => this.takeAll());
+    this.phoneStoreAllBtn = document.createElement("button");
+    this.phoneStoreAllBtn.type = "button";
+    this.phoneStoreAllBtn.className = "loot-sheet-primary";
+    this.phoneStoreAllBtn.textContent = "Store all";
+    this.phoneStoreAllBtn.addEventListener("click", () => this.storeAll());
+    this.phonePeekBtn = document.createElement("button");
+    this.phonePeekBtn.type = "button";
+    this.phonePeekBtn.className = "loot-sheet-peek";
+    this.phonePeekBtn.addEventListener("click", () => {
+      this.phoneTab = this.phoneTab === "bag" ? "loot" : "bag";
+      this.rebuildGrids();
+    });
+    this.phoneFooterEl.append(
+      this.phoneTakeAllBtn,
+      this.phoneStoreAllBtn,
+      this.phonePeekBtn,
+    );
+
+    this.phoneRoot.append(
+      header,
+      this.phoneTabRow,
+      this.phoneLootPane,
+      this.phoneBagPane,
+      this.phoneFooterEl,
+    );
+  }
+
+  private makePhoneTab(label: string, tab: "loot" | "bag"): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "loot-sheet-tab";
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      if (this.phoneTab === tab) return;
+      this.phoneTab = tab;
+      this.rebuildGrids();
+    });
+    return btn;
+  }
+
+  private syncPhoneSheet(): void {
+    const mobile = useMobileSheet();
+    if (mobile) this.ensureMs();
+    this.overlay.classList.toggle("ms-host", mobile);
+    if (this.ms) this.ms.root.hidden = !mobile;
+    markSheetOpen("loot", mobile && this.visible);
+    if (mobile) {
+      this.phoneOn = false;
+      this.overlay.classList.remove("phone-sheet");
+      this.layoutEl.hidden = true;
+      this.phoneRoot.hidden = true;
+      this.restoreDesktopBag();
+      this.msRender();
+      return;
+    }
+    this.phoneOn = usePhoneDialogSheet();
+    this.overlay.classList.toggle("phone-sheet", this.phoneOn);
+    this.layoutEl.hidden = this.phoneOn;
+    this.phoneRoot.hidden = !this.phoneOn;
+    if (!this.phoneOn) {
+      this.restoreDesktopBag();
+      return;
+    }
+
+    const twoWay = this.isTwoWay();
+    const bagOn = this.phoneTab === "bag";
+    this.phoneLootTab.textContent = twoWay ? "Box" : "Loot";
+    this.phoneTabRow.hidden = !twoWay;
+    this.phoneLootTab.classList.toggle("loot-sheet-tab--on", !bagOn);
+    this.phoneBagTab.classList.toggle("loot-sheet-tab--on", bagOn);
+    this.phoneLootPane.hidden = bagOn;
+    this.phoneBagPane.hidden = !bagOn;
+    if (bagOn) {
+      if (this.playerSlotsEl.parentElement !== this.phoneBagPane) {
+        this.phoneBagPane.append(this.playerSlotsEl);
+      }
+    } else {
+      this.restoreDesktopBag();
+    }
+
+    const count = this.lootItemCount();
+    this.phoneTitleEl.textContent =
+      this.piles.length > 1 ? "Loot" : furnitureDisplayName(this.objectType);
+    this.phoneMetaEl.textContent =
+      count === 1 ? "1 item" : `${count} items`;
+    this.phoneTakeAllBtn.hidden = bagOn;
+    this.phoneTakeAllBtn.disabled = count <= 0;
+    this.phoneStoreAllBtn.hidden = !bagOn || !twoWay;
+    this.phonePeekBtn.textContent = bagOn
+      ? "Back to loot"
+      : `Bag ${formatCarrySlots(this.playerInventory, this.extraPockets)}`;
+  }
+
+  private restoreDesktopBag(): void {
+    if (this.playerSlotsEl.parentElement !== this.playerBodyEl) {
+      this.playerBodyEl.append(this.playerSlotsEl);
+    }
+  }
+
+  private fillPhoneList(): void {
+    this.phoneListEl.replaceChildren();
+    const showLabels = this.piles.length > 1;
+    let rows = 0;
+    for (const pile of this.piles) {
+      if (showLabels) {
+        const label = document.createElement("div");
+        label.className = "loot-sheet-pile";
+        label.textContent = furnitureDisplayName(pile.objectType);
+        this.phoneListEl.append(label);
+      }
+      const slotCount = this.containerSlotCount(pile.objectType);
+      for (let i = 0; i < slotCount; i++) {
+        const slot = pile.inventory[i];
+        if (!slot) continue;
+        rows += 1;
+        this.phoneListEl.append(this.makeLootRow(pile, i, slot));
+      }
+    }
+    if (rows === 0) {
+      const empty = document.createElement("div");
+      empty.className = "loot-sheet-empty";
+      empty.textContent = this.isTwoWay() ? "Nothing stored" : "Empty";
+      this.phoneListEl.append(empty);
+    }
+  }
+
+  private makeLootRow(
+    pile: LootPileView,
+    index: number,
+    slot: NonNullable<Inventory[number]>,
+  ): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "loot-sheet-row";
+    const icon = document.createElement("div");
+    icon.className = "loot-sheet-icon";
+    appendItemIcon(icon, slot.id, "loot-sheet-icon-img");
+    markQuestKeepsake(icon, slot.id);
+    const text = document.createElement("div");
+    text.className = "loot-sheet-copy";
+    const name = document.createElement("div");
+    name.className = "loot-sheet-name";
+    const def = getItemDefinition(slot.id);
+    name.textContent = def?.name ?? slot.id;
+    const meta = document.createElement("div");
+    meta.className = "loot-sheet-qty";
+    const packed = sealedBackpackStackCount(slot);
+    const bits: string[] = [];
+    if (slot.quantity > 1) bits.push(`×${slot.quantity}`);
+    else if (packed > 0) bits.push(packed === 1 ? "1 inside" : `${packed} inside`);
+    const effect = wornGearEffectHint(slot.id);
+    if (effect) bits.push(effect);
+    meta.textContent = bits.join(" · ");
+    text.append(name, meta);
+    const take = document.createElement("button");
+    take.type = "button";
+    take.className = "loot-sheet-take";
+    const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
+    take.textContent = "Take";
+    take.disabled = toSlot < 0;
+    if (toSlot < 0) take.title = "No room";
+    take.addEventListener("click", () => {
+      if (this.takeSlot(pile, index)) this.rebuildGrids();
+    });
+    row.append(icon, text, take);
+    return row;
+  }
+
+  /** How many were moved. 0 when nothing fit. */
+  private takeSlot(pile: LootPileView, index: number): number {
+    const slot = pile.inventory[index];
+    if (!slot) return 0;
+    const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
+    if (toSlot < 0) return 0;
+    const moved = this.applyTakeLocal(pile, index, toSlot, slot);
+    if (moved <= 0) return 0;
+    this.handlers.onTakeFromContainer(pile.containerId, index, toSlot);
+    return moved;
+  }
+
+  private applyTakeLocal(
+    pile: LootPileView,
+    fromSlot: number,
+    toSlot: number,
+    entry: NonNullable<Inventory[number]>,
+  ): number {
+    const nextPile = pile.inventory.slice();
+    const nextPlayer = this.playerInventory.map((item) =>
+      item ? { ...item } : null,
+    );
+    const dest = nextPlayer[toSlot];
+    let moved = entry.quantity;
+    if (!dest) {
+      nextPlayer[toSlot] = { ...entry };
+      nextPile[fromSlot] = null;
+    } else if (dest.id === entry.id && slotStackLimit(entry.id, toSlot) > 1) {
+      const room = slotStackLimit(entry.id, toSlot) - dest.quantity;
+      moved = Math.min(Math.max(room, 0), entry.quantity);
+      if (moved <= 0) return 0;
+      nextPlayer[toSlot] = { ...dest, quantity: dest.quantity + moved };
+      const left = entry.quantity - moved;
+      nextPile[fromSlot] = left > 0 ? { ...entry, quantity: left } : null;
+    } else {
+      nextPile[fromSlot] = { ...dest };
+      nextPlayer[toSlot] = { ...entry };
+    }
+    pile.inventory = nextPile;
+    if (this.piles[0] === pile) this.containerInventory = nextPile;
+    this.playerInventory = nextPlayer;
+    return moved;
+  }
+
+  private ensureMs(): void {
+    if (this.ms) return;
+    const sheet = createSheet({ onClose: () => this.close() });
+    sheet.root.classList.add("ms-loot");
+    this.overlay.append(sheet.root);
+    this.ms = sheet;
+  }
+
+  private isDeposit(): boolean {
+    return (
+      this.objectType === SAFE_DEPOSIT_OBJECT_TYPE ||
+      this.piles.some((pile) => pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE)
+    );
+  }
+
+  private msRender(): void {
+    const sheet = this.ms;
+    if (!sheet) return;
+    const twoWay = this.isTwoWay();
+    const boxSlots = this.storageBoxSlots();
+    const title = this.piles.length > 1 ? "Loot" : furnitureDisplayName(this.objectType);
+    const count = this.lootItemCount();
+    sheet.header.setTitle(title);
+    if (this.isDeposit()) {
+      sheet.header.setSub("Stays safe at the market until you collect it");
+    } else if (boxSlots != null) {
+      sheet.header.setSub(`${count} of ${boxSlots} slots used`);
+    } else {
+      sheet.header.setSub(
+        count === 0 ? "Searched · empty" : `Searched · ${count === 1 ? "1 item" : `${count} items`}`,
+      );
+    }
+    const { pockets, backpack } = carrySlotGroups(this.playerInventory, this.extraPockets);
+    const bagSlots = [...pockets, ...backpack];
+    const bagUsed = usedSlotCount(this.playerInventory, bagSlots);
+    const lootLabel = boxSlots != null ? (this.isDeposit() ? "Deposit" : "Box") : title;
+    renderTabs(
+      sheet.tabsSlot,
+      [
+        {
+          id: "loot",
+          label: lootLabel,
+          count: boxSlots != null ? `${count}/${boxSlots}` : count,
+        },
+        {
+          id: "bag",
+          label: "Your bag",
+          count: `${bagUsed}/${bagSlots.length}`,
+          alert: bagUsed >= bagSlots.length,
+        },
+      ],
+      this.phoneTab,
+      (id) => {
+        this.phoneTab = id === "bag" ? "bag" : "loot";
+        this.msRender();
+        sheet.body.scrollTop = 0;
+      },
+    );
+    const scroll = sheet.body.scrollTop;
+    const rows = this.phoneTab === "bag" ? this.msBagRows(pockets, backpack, twoWay) : this.msLootRows();
+    sheet.body.replaceChildren(...rows);
+    sheet.body.scrollTop = scroll;
+    sheet.bar.replaceChildren();
+    if (this.phoneTab === "bag") {
+      if (twoWay) {
+        const storeCount = this.msStorePlanCount();
+        const store = sheetButton("Store all", "pri", () => this.msStoreAll(), {
+          sub: storeCount === 1 ? "1 item" : `${storeCount} items`,
+        });
+        store.disabled = storeCount <= 0;
+        sheet.bar.append(store);
+      }
+    } else if (count > 0) {
+      const takeCount = this.msTakePlanCount();
+      const take = sheetButton("Take all", "pri", () => this.msTakeAll(), {
+        sub: takeCount === count ? undefined : `${takeCount} fit`,
+      });
+      take.disabled = takeCount <= 0;
+      sheet.bar.append(take);
+    }
+    sheet.syncBar();
+  }
+
+  private msOpenSlotRow(): HTMLElement {
+    const row = sheetRow({
+      iconEl: document.createElement("span"),
+      name: "Empty",
+      ariaLabel: "Empty slot",
+    });
+    row.classList.add("ms-row--open");
+    return row;
+  }
+
+  private msMeta(slot: NonNullable<Inventory[number]>): (string | Node)[] {
+    const chips: (string | Node)[] = [];
+    const max = getMaxDurability(slot.id);
+    if (max != null && max > 0) {
+      const pct = Math.round((getEntryDurability(slot) / max) * 100);
+      chips.push(chip(`${pct}%`, pct > 50 ? "g" : pct > 25 ? "y" : "r"));
+    }
+    const freq = getEntryRadioFreq(slot);
+    if (freq > 0) chips.push(chip(String(freq), "y"));
+    if (getEntryWetness(slot) > 0.005) chips.push(chip("Wet", "b"));
+    const bits: string[] = [];
+    const packed = sealedBackpackStackCount(slot);
+    if (slot.quantity > 1) bits.push(`×${slot.quantity}`);
+    else if (packed > 0) bits.push(packed === 1 ? "1 inside" : `${packed} inside`);
+    const effect = wornGearEffectHint(slot.id);
+    bits.push(effect || itemCategoryLabel(slot.id));
+    chips.push(bits.join(" · "));
+    return chips;
+  }
+
+  private msLootRows(): HTMLElement[] {
+    const sheet = this.ms;
+    const rows: HTMLElement[] = [];
+    const showLabels = this.piles.length > 1;
+    for (const pile of this.piles) {
+      const filled: HTMLElement[] = [];
+      const open: HTMLElement[] = [];
+      const deposit = pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE;
+      const slotCount = this.containerSlotCount(pile.objectType);
+      for (let i = 0; i < slotCount; i++) {
+        const slot = pile.inventory[i];
+        if (!slot) {
+          if (deposit) open.push(this.msOpenSlotRow());
+          continue;
+        }
+        const name = getItemDefinition(slot.id)?.name ?? slot.id;
+        const fits = this.findFirstFittingPlayerSlot(slot.id, slot) >= 0;
+        let meta = this.msMeta(slot);
+        let metaTone: "warn" | undefined;
+        let end: HTMLButtonElement | undefined;
+        if (fits) {
+          end = sheetButton(
+            "Take",
+            "pri",
+            () => {
+              const moved = this.takeSlot(pile, i);
+              if (moved <= 0 || !sheet) return;
+              this.rebuildGrids();
+              showSheetMessage(
+                sheet.snackSlot,
+                `Took ${name}${moved > 1 ? ` ×${moved}` : ""}. Bag ${formatCarrySlots(this.playerInventory, this.extraPockets)}.`,
+              );
+            },
+            { small: true },
+          );
+        } else if (
+          isBackpackItem(slot.id) &&
+          this.canDrop("container", slot, "player", BACKPACK_SLOT_INDEX)
+        ) {
+          meta = ["No room. Wear it to swap packs."];
+          metaTone = "warn";
+          end = sheetButton(
+            "Wear",
+            "sec",
+            () => {
+              this.handlers.onTakeFromContainer(pile.containerId, i, BACKPACK_SLOT_INDEX);
+              if (sheet) showSheetMessage(sheet.snackSlot, `Wearing ${name}.`);
+            },
+            { small: true },
+          );
+        } else {
+          meta = [
+            isHotbarOnlyItem(slot.id)
+              ? "Too large for pockets. Free a weapon slot."
+              : "No room. Free a pocket first.",
+          ];
+          metaTone = "warn";
+          const blocked = sheetButton("Take", "sec", () => {}, { small: true });
+          blocked.disabled = true;
+          end = blocked;
+        }
+        filled.push(
+          sheetRow({
+            iconItemId: slot.id,
+            iconText: name,
+            qty: slot.quantity,
+            name,
+            meta,
+            metaTone,
+            end,
+          }),
+        );
+      }
+      filled.push(...open);
+      if (filled.length === 0 && showLabels) continue;
+      if (showLabels) rows.push(sectionLabel(furnitureDisplayName(pile.objectType)));
+      rows.push(...filled);
+    }
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint ms-loot-empty";
+      empty.textContent = this.isTwoWay() ? "Nothing stored yet." : "Nothing left here.";
+      rows.push(empty);
+    }
+    return rows;
+  }
+
+  private msBagRows(pockets: number[], backpack: number[], twoWay: boolean): HTMLElement[] {
+    const sheet = this.ms;
+    const rows: HTMLElement[] = [];
+    const rowFor = (index: number): HTMLElement | null => {
+      const slot = this.playerInventory[index];
+      if (!slot) return null;
+      const name = getItemDefinition(slot.id)?.name ?? slot.id;
+      let meta = this.msMeta(slot);
+      let metaTone: "warn" | undefined;
+      let end: HTMLButtonElement | undefined;
+      if (twoWay) {
+        const stacked = this.containerInventory.reduce(
+          (sum, entry) => (entry && entry.id === slot.id ? sum + entry.quantity : sum),
+          0,
+        );
+        if (stacked > 0 && maxStackForItem(slot.id) > 1) {
+          meta.push(` · stacks with ${stacked} in the box`);
+        }
+        let blocked = "";
+        if (backpackHoldsItems(this.playerInventory, index)) {
+          blocked = "Empty this pack before storing it.";
+        } else if (this.findFirstStorageBoxSlot(slot.id) < 0) {
+          blocked = "The box is full.";
+        }
+        if (blocked) {
+          meta = [blocked];
+          metaTone = "warn";
+        }
+        end = sheetButton(
+          "Store",
+          "sec",
+          () => {
+            const qty = slot.quantity;
+            if (!this.storeSlot(index) || !sheet) return;
+            this.rebuildGrids();
+            showSheetMessage(
+              sheet.snackSlot,
+              `Stored ${name}${qty > 1 ? ` ×${qty}` : ""}.`,
+            );
+          },
+          { small: true },
+        );
+        end.disabled = !!blocked;
+      }
+      return sheetRow({
+        iconItemId: slot.id,
+        iconText: name,
+        qty: slot.quantity,
+        name,
+        meta,
+        metaTone,
+        end,
+      });
+    };
+    const section = (label: string, indices: number[]) => {
+      const items = indices.map(rowFor).filter((row): row is HTMLElement => !!row);
+      if (items.length === 0) return;
+      rows.push(sectionLabel(label), ...items);
+    };
+    section("Pockets", pockets);
+    const pack = this.playerInventory[BACKPACK_SLOT_INDEX];
+    section(pack ? (getItemDefinition(pack.id)?.name ?? "Backpack") : "Backpack", backpack);
+    const worn = MOBILE_WORN_SLOTS.filter((index) => this.playerInventory[index]);
+    if (worn.length > 0) {
+      rows.push(sectionLabel("Worn", "stays on you"));
+      for (const index of worn) {
+        const slot = this.playerInventory[index];
+        if (!slot) continue;
+        const name = getItemDefinition(slot.id)?.name ?? slot.id;
+        rows.push(
+          sheetRow({
+            iconItemId: slot.id,
+            iconText: name,
+            qty: slot.quantity,
+            name,
+            meta: twoWay ? ["Take it off in your bag to store it"] : this.msMeta(slot),
+            state: twoWay ? "dim" : undefined,
+          }),
+        );
+      }
+    }
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint ms-loot-empty";
+      empty.textContent = "Your bag is empty.";
+      rows.push(empty);
+    }
+    return rows;
+  }
+
+  private msTakePlanCount(): number {
+    const saved = this.playerInventory;
+    let draft = saved.map((slot) => (slot ? { ...slot } : null));
+    let count = 0;
+    try {
+      for (const pile of this.piles) {
+        const slotCount = this.containerSlotCount(pile.objectType);
+        for (let i = 0; i < slotCount; i++) {
+          const slot = pile.inventory[i];
+          if (!slot) continue;
+          this.playerInventory = draft;
+          const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
+          if (toSlot < 0) continue;
+          count += 1;
+          draft = draft.slice();
+          const dest = draft[toSlot];
+          draft[toSlot] =
+            dest && dest.id === slot.id
+              ? { ...dest, quantity: dest.quantity + slot.quantity }
+              : { ...slot };
+        }
+      }
+    } finally {
+      this.playerInventory = saved;
+    }
+    return count;
+  }
+
+  private msStorePlanCount(): number {
+    const saved = this.containerInventory;
+    let draft = saved.slice();
+    let count = 0;
+    try {
+      const { pockets, backpack } = carrySlotGroups(this.playerInventory, this.extraPockets);
+      for (const index of [...pockets, ...backpack]) {
+        const slot = this.playerInventory[index];
+        if (!slot || backpackHoldsItems(this.playerInventory, index)) continue;
+        this.containerInventory = draft;
+        const toSlot = this.findFirstStorageBoxSlot(slot.id);
+        if (toSlot < 0) continue;
+        count += 1;
+        draft = draft.slice();
+        const dest = draft[toSlot];
+        draft[toSlot] =
+          dest && dest.id === slot.id
+            ? { ...dest, quantity: dest.quantity + slot.quantity }
+            : { ...slot };
+      }
+    } finally {
+      this.containerInventory = saved;
+    }
+    return count;
+  }
+
+  private msTakeAll(): void {
+    const before = this.lootItemCount();
+    this.takeAll();
+    if (!this.visible || !this.ms) return;
+    const moved = before - this.lootItemCount();
+    const left = this.lootItemCount();
+    showSheetMessage(
+      this.ms.snackSlot,
+      `Took ${moved === 1 ? "1 item" : `${moved} items`}.${left > 0 ? ` ${left} left, no room.` : ""}`,
+      left > 0 ? "warn" : "good",
+    );
+  }
+
+  private msStoreAll(): void {
+    const count = this.msStorePlanCount();
+    this.storeAll();
+    if (this.ms) {
+      showSheetMessage(
+        this.ms.snackSlot,
+        `Stored ${count === 1 ? "1 item" : `${count} items`}.`,
+      );
+    }
+  }
+
+  /** True when the item moved into the box. */
+  private storeSlot(fromSlot: number): boolean {
+    const slot = this.playerInventory[fromSlot];
+    if (!slot || backpackHoldsItems(this.playerInventory, fromSlot)) return false;
+    const toSlot = this.findFirstStorageBoxSlot(slot.id);
+    if (toSlot < 0) return false;
+    this.handlers.onStoreInContainer(this.containerId, fromSlot, toSlot);
+    const nextPlayer = this.playerInventory.map((item) => (item ? { ...item } : null));
+    nextPlayer[fromSlot] = null;
+    this.playerInventory = nextPlayer;
+    const nextBox = this.containerInventory.slice();
+    const dest = nextBox[toSlot];
+    if (dest && dest.id === slot.id) {
+      nextBox[toSlot] = { ...dest, quantity: dest.quantity + slot.quantity };
+    } else if (!dest) {
+      nextBox[toSlot] = { ...slot };
+    }
+    this.containerInventory = nextBox;
+    if (this.piles[0]) this.piles[0].inventory = nextBox;
+    return true;
+  }
+
+  private takeAll(): void {
+    for (const pile of this.piles) {
+      const slotCount = this.containerSlotCount(pile.objectType);
+      for (let i = 0; i < slotCount; i++) {
+        this.takeSlot(pile, i);
+      }
+    }
+    this.rebuildGrids();
+  }
+
+  private storeAll(): void {
+    if (!this.isTwoWay()) return;
+    const fromSlots = [
+      ...this.playerInventory.keys(),
+    ].filter((idx) => {
+      if (!this.playerInventory[idx]) return false;
+      if (idx < WEAPON_SLOT_COUNT) return false;
+      if (
+        idx === ARMOR_SLOT_INDEX ||
+        idx === CLOTHING_SLOT_INDEX ||
+        idx === BACKPACK_SLOT_INDEX ||
+        idx === WATCH_SLOT_INDEX ||
+        idx === RADIO_SLOT_INDEX ||
+        idx === NECK_SLOT_INDEX ||
+        idx === LEFT_HAND_SLOT_INDEX ||
+        idx === RIGHT_HAND_SLOT_INDEX ||
+        idx === MAP_SLOT_INDEX
+      ) {
+        return false;
+      }
+      return true;
+    });
+    for (const from of fromSlots) {
+      const slot = this.playerInventory[from];
+      if (!slot) continue;
+      if (backpackHoldsItems(this.playerInventory, from)) continue;
+      const toSlot = this.findFirstStorageBoxSlot(slot.id);
+      if (toSlot < 0) continue;
+      this.handlers.onStoreInContainer(this.containerId, from, toSlot);
+      const nextPlayer = this.playerInventory.map((item) =>
+        item ? { ...item } : null,
+      );
+      nextPlayer[from] = null;
+      this.playerInventory = nextPlayer;
+      const nextBox = this.containerInventory.slice();
+      const dest = nextBox[toSlot];
+      if (!dest) nextBox[toSlot] = { ...slot };
+      else if (dest.id === slot.id) {
+        nextBox[toSlot] = { ...dest, quantity: dest.quantity + slot.quantity };
+      }
+      this.containerInventory = nextBox;
+      if (this.piles[0]) this.piles[0].inventory = nextBox;
+    }
+    this.rebuildGrids();
   }
 
   private createCell(
@@ -837,8 +1649,9 @@ export class ContainerLootUI {
           cell.classList.remove("inventory-cell--dragging");
           this.clearDragOverStates();
         },
-        onDoubleActivate:
-          source === "container"
+        onDoubleActivate: usePhoneDialogSheet()
+          ? undefined
+          : source === "container"
             ? takeToInventory
             : source === "player" && this.storageBoxSlots() != null
               ? storeToBox
@@ -848,6 +1661,23 @@ export class ContainerLootUI {
           target.classList.toggle("inventory-cell--drag-over", valid);
           target.classList.toggle("inventory-cell--drag-invalid", !valid);
         },
+      });
+    }
+
+    if (usePhoneDialogSheet() && slot) {
+      cell.addEventListener("click", () => {
+        if (source === "container") {
+          const pile = this.piles.find((entry) => entry.containerId === containerId);
+          if (!pile) return;
+          if (this.takeSlot(pile, index)) this.rebuildGrids();
+          return;
+        }
+        if (source === "player" && this.isTwoWay()) {
+          if (backpackHoldsItems(this.playerInventory, index)) return;
+          const toSlot = this.findFirstStorageBoxSlot(slot.id);
+          if (toSlot < 0) return;
+          this.handlers.onStoreInContainer(this.containerId, index, toSlot);
+        }
       });
     }
 
@@ -993,6 +1823,9 @@ export class ContainerLootUI {
   destroy() {
     cancelAllSlotDrags();
     this.visible = false;
+    this.unbindPhoneResize();
+    this.unbindPhoneResize = () => {};
+    this.restoreDesktopBag();
     this.overlay.hidden = true;
     this.containerId = "";
     document.body.classList.remove("container-loot-open");

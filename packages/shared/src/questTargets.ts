@@ -26,10 +26,14 @@ import {
 import { isLootContainerType } from "./items.js";
 import { floodExteriorReachableTiles } from "./sealedRegion.js";
 import {
+  ASHEN_COUNTY_WALK_BOUNDS,
+  worldMaxX,
+  worldMaxY,
+} from "./worldBounds.js";
+import {
   getPlayerSpawnFootprint,
   getBuildingAt,
   getCityName,
-  getCityRoadLinks,
   getSettlementType,
   listBuildingsInRect,
   settlementCellsInRegion,
@@ -227,40 +231,36 @@ export function pickQuietStretchHouse(
 }
 
 /**
- * Motel south of Birchport, or the nearest motel to the south edge if none sit
- * past the footprint.
+ * Motel south of Birchport. The search grows until a motel is found, then
+ * falls back to the nearest motel if none sit south of town.
  */
 export function pickMissingPairMotel(): BuildingInfo | null {
   const f = getPlayerSpawnFootprint();
-  const motels = collectBuildingsInRect(
-    f.minX - 20,
-    f.maxX + 20,
-    f.minY,
-    f.maxY + 80,
-    "motel",
-  );
-  if (motels.length === 0) return null;
-
   const southBand = f.maxY - 24;
-  const south = motels.filter((bld) => bld.oy + bld.h > southBand);
-  if (south.length > 0) {
-    south.sort((a, b) => b.oy - a.oy);
-    return south[0] ?? null;
-  }
-
   const destX = (f.minX + f.maxX) / 2;
   const destY = f.maxY + 10;
-  let best = motels[0]!;
-  let bestDist = Infinity;
-  for (const bld of motels) {
-    const c = buildingCenter(bld);
-    const d = Math.hypot(c.x - destX, c.y - destY);
-    if (d < bestDist) {
-      best = bld;
-      bestDist = d;
+  let nearest: BuildingInfo | null = null;
+  let nearestDist = Infinity;
+  for (const pad of expandingQuestPads()) {
+    const motels = buildingsAroundBirchport(pad).filter(
+      (bld) =>
+        bld.buildingType === "motel" && !isBuildingInBirchport(bld.ox, bld.oy),
+    );
+    const south = motels.filter((bld) => bld.oy + bld.h > southBand);
+    if (south.length > 0) {
+      south.sort((a, b) => b.oy - a.oy);
+      return south[0] ?? null;
+    }
+    for (const bld of motels) {
+      const c = buildingCenter(bld);
+      const d = Math.hypot(c.x - destX, c.y - destY);
+      if (d < nearestDist) {
+        nearest = bld;
+        nearestDist = d;
+      }
     }
   }
-  return best;
+  return nearest;
 }
 
 function questBuildingKind(type: BuildingType | undefined): string {
@@ -310,9 +310,35 @@ export function questTargetBuildingLabel(ox: number, oy: number): string {
   return `${kind} at ${ox}, ${oy}${place}`;
 }
 
-/** Rings around Birchport. Near first, then a wider pass if the near ring is empty. */
+/** First ring around Birchport. Later rings grow by this much until the county edge. */
 const QUEST_NEAR_PAD = 288;
-const QUEST_FAR_PAD = 576;
+
+/** Pad so a Birchport-centered rect covers the walkable county. */
+function countyQuestMaxPad(): number {
+  const f = getPlayerSpawnFootprint();
+  const b = ASHEN_COUNTY_WALK_BOUNDS;
+  const maxX = worldMaxX(b) - 1;
+  const maxY = worldMaxY(b) - 1;
+  return Math.max(
+    QUEST_NEAR_PAD,
+    f.minX - b.minGlobalX,
+    maxX - f.maxX,
+    f.minY - b.minGlobalY,
+    maxY - f.maxY,
+  );
+}
+
+function expandingQuestPads(startPad = QUEST_NEAR_PAD): number[] {
+  const maxPad = countyQuestMaxPad();
+  const pads: number[] = [];
+  let pad = startPad;
+  while (true) {
+    pads.push(pad);
+    if (pad >= maxPad) break;
+    pad = Math.min(pad + QUEST_NEAR_PAD, maxPad);
+  }
+  return pads;
+}
 
 function buildingsAroundBirchport(pad: number): BuildingInfo[] {
   const f = getPlayerSpawnFootprint();
@@ -329,14 +355,14 @@ function pickOutsideBirchport(
   exclude?: QuestTargetExclude,
   fits?: (bld: BuildingInfo) => boolean,
 ): BuildingInfo | null {
-  for (const pad of [QUEST_NEAR_PAD, QUEST_FAR_PAD]) {
+  for (const pad of expandingQuestPads()) {
     const pool = buildingsAroundBirchport(pad).filter(
       (bld) =>
         bld.buildingType === type &&
         !isBuildingInBirchport(bld.ox, bld.oy) &&
         notExcluded(bld, exclude),
     );
-    const picked = pickFirstThatFits(pool, fits, 24);
+    const picked = pickFirstThatFits(pool, fits, pool.length);
     if (picked) return picked;
   }
   return null;
@@ -352,62 +378,25 @@ function birchportCityCell(): { cx: number; cy: number } | null {
   return null;
 }
 
-/** Supermarkets in one city. Grids can sit a little outside the 96-tile cell. */
-function supermarketsInCity(
-  cx: number,
-  cy: number,
-  exclude?: QuestTargetExclude,
-): BuildingInfo[] {
-  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
-  const cellMax = SETTLEMENT_CELL_SIZE - 1;
-  return listBuildingsInRect(
-    cx - spill,
-    cx + cellMax + spill,
-    cy - spill,
-    cy + cellMax + spill,
-  ).filter(
-    (bld) =>
-      bld.buildingType === "supermarket" &&
-      !isBuildingInBirchport(bld.ox, bld.oy) &&
-      notExcluded(bld, exclude),
-  );
-}
-
 /**
  * Supermarket outside Birchport for a supply-run scout.
- * Nearby cities sit past the tile rings, so those markets are included too.
+ * Rings grow until a store with the required shelves (and fridges) is found.
  */
 export function pickAisleCheckSupermarket(
   exclude?: QuestTargetExclude,
   extras?: { fridges?: number },
 ): BuildingInfo | null {
   const needFridges = extras?.fridges ?? 0;
-  const fits = (bld: BuildingInfo) => {
+  return pickOutsideBirchport("supermarket", exclude, (bld) => {
     const fit = interiorQuestFit(bld.ox, bld.oy);
     if (fit.shelves < 3) return false;
     if (needFridges > 0 && fit.fridges < needFridges) return false;
     return true;
-  };
-  const near = pickOutsideBirchport("supermarket", exclude, fits);
-  if (near) return near;
-
-  const hub = birchportCityCell();
-  if (!hub) return null;
-  const pool: BuildingInfo[] = [];
-  const seen = new Set<string>();
-  for (const city of getCityRoadLinks(hub.cx, hub.cy)) {
-    for (const bld of supermarketsInCity(city.cx, city.cy, exclude)) {
-      const key = `${bld.ox},${bld.oy}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pool.push(bld);
-    }
-  }
-  return pickFirstThatFits(pool, fits, 24);
+  });
 }
 
-/** Rings for the starter job: close to town first so new players don't trek far. */
-const FIRST_SWEEP_PADS = [64, 128, QUEST_NEAR_PAD] as const;
+/** Tight rings first so new players don't trek far, then the county rings. */
+const FIRST_SWEEP_PADS = [64, 128] as const;
 /** Pick among this many of the nearest houses so players don't all share one. */
 const FIRST_SWEEP_POOL = 5;
 
@@ -418,7 +407,7 @@ export function pickFirstSweepHouse(
   const f = getPlayerSpawnFootprint();
   const cx = (f.minX + f.maxX) / 2;
   const cy = (f.minY + f.maxY) / 2;
-  for (const pad of FIRST_SWEEP_PADS) {
+  for (const pad of [...FIRST_SWEEP_PADS, ...expandingQuestPads()]) {
     const pool = buildingsAroundBirchport(pad).filter(
       (bld) =>
         bld.buildingType === "house" &&
@@ -589,19 +578,52 @@ export function pickClarkHouse(
 }
 
 /**
- * Warehouse the Red Order wants emptied. Skips the Ashen market.
- * Prefers one outside Birchport.
+ * City warehouses whose cell sits in the Birchport pad. Skips the market
+ * stall and any origin already on the board. Rural cells have none.
+ */
+function warehousesAroundBirchport(
+  pad: number,
+  exclude?: QuestTargetExclude,
+): BuildingInfo[] {
+  const f = getPlayerSpawnFootprint();
+  const minX = f.minX - pad;
+  const maxX = f.maxX + pad;
+  const minY = f.minY - pad;
+  const maxY = f.maxY + pad;
+  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
+  const cellMax = SETTLEMENT_CELL_SIZE - 1;
+  const seen = new Set<string>();
+  const out: BuildingInfo[] = [];
+  for (const cell of settlementCellsInRegion(minX, maxX, minY, maxY)) {
+    if (getSettlementType(cell.cx, cell.cy) !== "city") continue;
+    for (const bld of listBuildingsInRect(
+      cell.cx - spill,
+      cell.cx + cellMax + spill,
+      cell.cy - spill,
+      cell.cy + cellMax + spill,
+    )) {
+      if (bld.buildingType !== "warehouse") continue;
+      if (isAshenTraderWarehouse(bld.ox, bld.oy)) continue;
+      if (!notExcluded(bld, exclude)) continue;
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(bld);
+    }
+  }
+  return out;
+}
+
+/**
+ * Warehouse Kevin (or the Red Order) wants emptied. Skips the Ashen market.
+ * Prefers one outside Birchport. Nearby cities sit past the old tile rings,
+ * so the pad grows until a valid warehouse is found.
  */
 export function pickFloorSpaceWarehouse(
   exclude?: QuestTargetExclude,
 ): BuildingInfo | null {
-  for (const pad of [QUEST_NEAR_PAD, QUEST_FAR_PAD]) {
-    const all = buildingsAroundBirchport(pad).filter(
-      (bld) =>
-        bld.buildingType === "warehouse" &&
-        !isAshenTraderWarehouse(bld.ox, bld.oy) &&
-        notExcluded(bld, exclude),
-    );
+  for (const pad of expandingQuestPads()) {
+    const all = warehousesAroundBirchport(pad, exclude);
     const outside = all.filter((bld) => !isBuildingInBirchport(bld.ox, bld.oy));
     const picked = pickFrom(outside.length > 0 ? outside : all);
     if (picked) return picked;
@@ -637,33 +659,43 @@ function buildingsInCityCell(
   ).filter((bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude));
 }
 
-/** Cities other than Birchport. Road links first, then any city in the far ring. */
-function otherCityCells(): { cx: number; cy: number }[] {
+/** Cities other than Birchport whose origin sits in the Birchport pad. */
+function otherCityCellsInPad(pad: number): { cx: number; cy: number }[] {
   const hub = birchportCityCell();
+  const f = getPlayerSpawnFootprint();
   const cells: { cx: number; cy: number }[] = [];
   const seen = new Set<string>();
-  const push = (cx: number, cy: number) => {
-    if (hub && cx === hub.cx && cy === hub.cy) return;
-    if (getSettlementType(cx, cy) !== "city") return;
-    const key = `${cx},${cy}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    cells.push({ cx, cy });
-  };
-  if (hub) {
-    for (const city of getCityRoadLinks(hub.cx, hub.cy)) push(city.cx, city.cy);
-  }
-  if (cells.length > 0) return cells;
-  const f = getPlayerSpawnFootprint();
   for (const cell of settlementCellsInRegion(
-    f.minX - QUEST_FAR_PAD,
-    f.maxX + QUEST_FAR_PAD,
-    f.minY - QUEST_FAR_PAD,
-    f.maxY + QUEST_FAR_PAD,
+    f.minX - pad,
+    f.maxX + pad,
+    f.minY - pad,
+    f.maxY + pad,
   )) {
-    push(cell.cx, cell.cy);
+    if (hub && cell.cx === hub.cx && cell.cy === hub.cy) continue;
+    if (getSettlementType(cell.cx, cell.cy) !== "city") continue;
+    const key = `${cell.cx},${cell.cy}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cells.push(cell);
   }
   return cells;
+}
+
+function collectFromCities(
+  cities: readonly { cx: number; cy: number }[],
+  each: (cx: number, cy: number) => BuildingInfo[],
+): BuildingInfo[] {
+  const pool: BuildingInfo[] = [];
+  const seen = new Set<string>();
+  for (const city of cities) {
+    for (const bld of each(city.cx, city.cy)) {
+      const key = `${bld.ox},${bld.oy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(bld);
+    }
+  }
+  return pool;
 }
 
 /**
@@ -694,72 +726,35 @@ export function pickOtherCityBuilding(
     if (needTiles > 0 && fit.standingTiles < needTiles) return false;
     return true;
   };
-  const pool: BuildingInfo[] = [];
-  const seen = new Set<string>();
-  for (const city of otherCityCells()) {
-    for (const bld of buildingsInCityCell(city.cx, city.cy, exclude)) {
-      const key = `${bld.ox},${bld.oy}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pool.push(bld);
-    }
+  for (const pad of expandingQuestPads()) {
+    const pool = collectFromCities(otherCityCellsInPad(pad), (cx, cy) =>
+      buildingsInCityCell(cx, cy, exclude),
+    );
+    const picked = pickFirstThatFits(pool, fits, pool.length);
+    if (picked) return picked;
   }
-  const picked = pickFirstThatFits(pool, fits, pool.length);
-  if (picked) return picked;
-  const far = buildingsAroundBirchport(QUEST_FAR_PAD).filter(
-    (bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude),
-  );
-  return pickFirstThatFits(far, fits, far.length);
-}
-
-function departmentStoresInCity(
-  cx: number,
-  cy: number,
-  blocked?: readonly { ox: number; oy: number }[],
-): BuildingInfo[] {
-  const spill = Math.floor(SETTLEMENT_CELL_SIZE / 2);
-  const cellMax = SETTLEMENT_CELL_SIZE - 1;
-  return listBuildingsInRect(
-    cx - spill,
-    cx + cellMax + spill,
-    cy - spill,
-    cy + cellMax + spill,
-  ).filter(
-    (bld) =>
-      bld.buildingType === "large_retail" &&
-      !isBuildingInBirchport(bld.ox, bld.oy) &&
-      !isBlockedOrigin(bld, blocked),
-  );
+  for (const pad of expandingQuestPads()) {
+    const far = buildingsAroundBirchport(pad).filter(
+      (bld) => isOtherCityBuilding(bld) && notExcluded(bld, exclude),
+    );
+    const picked = pickFirstThatFits(far, fits, far.length);
+    if (picked) return picked;
+  }
+  return null;
 }
 
 /**
  * Department store outside Birchport with enough shelves and clothing racks
- * for Kevin's floor count. Nearby cities are included when the near ring is empty.
+ * for Kevin's floor count.
  */
 export function pickFloorModelStore(
   blocked?: readonly { ox: number; oy: number }[],
 ): BuildingInfo | null {
-  const fits = (bld: BuildingInfo) => {
+  return pickOutsideBirchport("large_retail", undefined, (bld) => {
     if (isBlockedOrigin(bld, blocked)) return false;
     const fit = interiorQuestFit(bld.ox, bld.oy);
     return fit.shelves >= 4 && fit.racks >= 2;
-  };
-  const near = pickOutsideBirchport("large_retail", undefined, fits);
-  if (near) return near;
-
-  const hub = birchportCityCell();
-  if (!hub) return null;
-  const pool: BuildingInfo[] = [];
-  const seen = new Set<string>();
-  for (const city of getCityRoadLinks(hub.cx, hub.cy)) {
-    for (const bld of departmentStoresInCity(city.cx, city.cy, blocked)) {
-      const key = `${bld.ox},${bld.oy}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pool.push(bld);
-    }
-  }
-  return pickFirstThatFits(pool, fits, 24);
+  });
 }
 
 /**
@@ -774,53 +769,27 @@ export function pickSupplyListStore(
     if (isBlockedOrigin(bld, blocked)) return false;
     return interiorQuestFit(bld.ox, bld.oy).managerStash >= 1;
   };
-  const pool: BuildingInfo[] = [];
-  const seen = new Set<string>();
-  for (const city of otherCityCells()) {
-    for (const bld of departmentStoresInCity(city.cx, city.cy, blocked)) {
-      const key = `${bld.ox},${bld.oy}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pool.push(bld);
-    }
+  for (const pad of expandingQuestPads()) {
+    const pool = collectFromCities(otherCityCellsInPad(pad), (cx, cy) =>
+      buildingsInCityCell(cx, cy).filter(
+        (bld) =>
+          bld.buildingType === "large_retail" && !isBlockedOrigin(bld, blocked),
+      ),
+    );
+    const picked = pickFirstThatFits(pool, fits, pool.length);
+    if (picked) return picked;
   }
-  const picked = pickFirstThatFits(pool, fits, pool.length);
-  if (picked) return picked;
-  const far = buildingsAroundBirchport(QUEST_FAR_PAD).filter(
-    (bld) =>
-      bld.buildingType === "large_retail" &&
-      isOtherCityBuilding(bld) &&
-      !isBlockedOrigin(bld, blocked),
-  );
-  return pickFirstThatFits(far, fits, far.length);
-}
-
-/** Cities other than Birchport, road links first, then any city in the far ring. */
-function citiesBeyondBirchport(): { cx: number; cy: number }[] {
-  const hub = birchportCityCell();
-  const cells: { cx: number; cy: number }[] = [];
-  const seen = new Set<string>();
-  const push = (cx: number, cy: number) => {
-    if (hub && cx === hub.cx && cy === hub.cy) return;
-    if (getSettlementType(cx, cy) !== "city") return;
-    const key = `${cx},${cy}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    cells.push({ cx, cy });
-  };
-  if (hub) {
-    for (const city of getCityRoadLinks(hub.cx, hub.cy)) push(city.cx, city.cy);
+  for (const pad of expandingQuestPads()) {
+    const far = buildingsAroundBirchport(pad).filter(
+      (bld) =>
+        bld.buildingType === "large_retail" &&
+        isOtherCityBuilding(bld) &&
+        !isBlockedOrigin(bld, blocked),
+    );
+    const picked = pickFirstThatFits(far, fits, far.length);
+    if (picked) return picked;
   }
-  const f = getPlayerSpawnFootprint();
-  for (const cell of settlementCellsInRegion(
-    f.minX - QUEST_FAR_PAD,
-    f.maxX + QUEST_FAR_PAD,
-    f.minY - QUEST_FAR_PAD,
-    f.maxY + QUEST_FAR_PAD,
-  )) {
-    push(cell.cx, cell.cy);
-  }
-  return cells;
+  return null;
 }
 
 function buildingsOfTypeInCity(
@@ -866,22 +835,14 @@ export function pickSeizedPoliceStation(
     if (isBlockedOrigin(bld, blocked)) return false;
     return interiorQuestFit(bld.ox, bld.oy).standingTiles >= 2;
   };
-  const pool: BuildingInfo[] = [];
-  const seen = new Set<string>();
-  for (const city of citiesBeyondBirchport()) {
-    for (const bld of buildingsOfTypeInCity(
-      city.cx,
-      city.cy,
-      "police_station",
-      blocked,
-    )) {
-      const key = `${bld.ox},${bld.oy}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      pool.push(bld);
-    }
+  for (const pad of expandingQuestPads()) {
+    const pool = collectFromCities(otherCityCellsInPad(pad), (cx, cy) =>
+      buildingsOfTypeInCity(cx, cy, "police_station", blocked),
+    );
+    const picked = pickFirstThatFits(pool, fits, pool.length);
+    if (picked) return picked;
   }
-  return pickFirstThatFits(pool, fits, 24);
+  return null;
 }
 
 export type BothEndsSites = {
@@ -891,45 +852,50 @@ export type BothEndsSites = {
 
 /**
  * A warehouse in one other city and a supermarket with three shelves in a
- * different city. Birchport is never either stop.
+ * different city. Birchport is never either stop. The city ring grows until
+ * two cities can host both stops.
  */
 export function pickBothEndsSites(
   blocked?: readonly { ox: number; oy: number }[],
 ): BothEndsSites | null {
-  const cities = shuffleCells(citiesBeyondBirchport());
   const marketFits = (bld: BuildingInfo) => {
     if (isBlockedOrigin(bld, blocked)) return false;
     return interiorQuestFit(bld.ox, bld.oy).shelves >= 3;
   };
-  for (let i = 0; i < cities.length; i++) {
-    const warehouseCity = cities[i]!;
-    const warehouse = pickFirstThatFits(
-      buildingsOfTypeInCity(
+  for (const pad of expandingQuestPads()) {
+    const cities = shuffleCells(otherCityCellsInPad(pad));
+    for (let i = 0; i < cities.length; i++) {
+      const warehouseCity = cities[i]!;
+      const warehouses = buildingsOfTypeInCity(
         warehouseCity.cx,
         warehouseCity.cy,
         "warehouse",
         blocked,
-      ),
-      (bld) =>
-        !isBlockedOrigin(bld, blocked) &&
-        interiorQuestFit(bld.ox, bld.oy).standingTiles >= 2,
-      8,
-    );
-    if (!warehouse) continue;
-    for (let j = 0; j < cities.length; j++) {
-      if (i === j) continue;
-      const marketCity = cities[j]!;
-      const market = pickFirstThatFits(
-        buildingsOfTypeInCity(
+      );
+      const warehouse = pickFirstThatFits(
+        warehouses,
+        (bld) =>
+          !isBlockedOrigin(bld, blocked) &&
+          interiorQuestFit(bld.ox, bld.oy).standingTiles >= 2,
+        warehouses.length,
+      );
+      if (!warehouse) continue;
+      for (let j = 0; j < cities.length; j++) {
+        if (i === j) continue;
+        const marketCity = cities[j]!;
+        const markets = buildingsOfTypeInCity(
           marketCity.cx,
           marketCity.cy,
           "supermarket",
           blocked,
-        ),
-        (bld) => marketFits(bld) && !sameSettlement(bld, warehouse),
-        8,
-      );
-      if (market) return { warehouse, market };
+        );
+        const market = pickFirstThatFits(
+          markets,
+          (bld) => marketFits(bld) && !sameSettlement(bld, warehouse),
+          markets.length,
+        );
+        if (market) return { warehouse, market };
+      }
     }
   }
   return null;

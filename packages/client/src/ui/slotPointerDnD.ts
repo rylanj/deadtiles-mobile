@@ -21,6 +21,8 @@ export type SlotPointerDnDOptions = {
    * Null keeps the stack's normal label.
    */
   shiftGhostQuantity?: (shift: boolean) => number | null;
+  /** When this returns false, the press stays a tap and does not start a drag. */
+  canStartDrag?: () => boolean;
   onDragBegan?: () => void;
   onDragEnded?: () => void;
   /** Double-click / double-tap action (take / equip). */
@@ -331,6 +333,10 @@ export function bindSlotPointerDnD(opts: SlotPointerDnDOptions): void {
   cell.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     if (pointerId !== null) return;
+    if (opts.canStartDrag && !opts.canStartDrag()) {
+      suppressClick = false;
+      return;
+    }
 
     // Another slot still dragging (stale) — scrub before starting.
     if (activeDrags.size > 0) cancelAllSlotDrags();

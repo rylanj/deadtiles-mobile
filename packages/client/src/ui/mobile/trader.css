@@ -1,0 +1,58 @@
+/* Phone trade sheet (design/mobile-dialogs board 06) */
+.trader-ms .ms-pill-slot .trader-standing-pill {
+  margin-left: 8px;
+  vertical-align: 2px;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.trader-ms-search {
+  margin-bottom: 10px;
+}
+.trader-ms-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 15px;
+}
+.trader-ms-bar {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+.trader-ms-sum {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.trader-ms-sum b {
+  font: 750 15px/1.2 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.trader-ms-bar > .ms-btn {
+  flex: 0 0 168px;
+}
+.trader-ms .ms-drawer .ms-quick {
+  margin: 10px 0 14px;
+}
+.trader-rep-lock {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(40, 28, 8, 0.92);
+  color: #f0d090;
+  font: 600 12px/1.3 system-ui, sans-serif;
+  text-align: center;
+}
+.trader-ms .ms-drawer .trader-rep-lock {
+  display: block;
+  margin-top: 8px;
+  padding: 6px 8px;
+}
+.trader-ms .ms-row--rep .ms-row-ico,
+.trader-ms .ms-row--rep .ms-row-nm,
+.trader-ms .ms-row--rep .ms-row-end {
+  filter: saturate(0.4);
+  opacity: 0.72;
+}

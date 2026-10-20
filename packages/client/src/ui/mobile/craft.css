@@ -1,0 +1,106 @@
+/* Workbench and furnace sheet (design/mobile-dialogs board 08). */
+
+/* The overlay ids in index.html outrank `.ms-host`, so restate the sheet layer. */
+body.is-mobile #craft-overlay.ms-host {
+  z-index: 100;
+  padding: 0;
+}
+
+.ms-craft-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(240, 160, 70, 0.45);
+  background: rgba(70, 36, 10, 0.55);
+  color: #f6dcb4;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.ms-craft-banner--out {
+  border-color: rgba(240, 110, 110, 0.5);
+  background: #2a1010;
+  color: #f6c4c4;
+}
+.ms-craft-banner b {
+  color: #fff0d8;
+}
+.ms-craft-banner--out b {
+  color: #ffdede;
+}
+
+.ms-craft-hero {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0 4px;
+}
+.ms-craft-hero-cell {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  border-radius: 14px;
+  border: 1px solid var(--ms-line-2);
+  background: rgba(0, 0, 0, 0.3);
+  display: grid;
+  place-items: center;
+}
+.ms-craft-hero-cell img {
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.ms-craft-hero-cell--busy {
+  border-color: var(--ms-lime);
+  box-shadow: 0 0 0 3px rgba(159, 232, 48, 0.25);
+}
+.ms-craft-hero-q {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font: 800 14px/1 system-ui, sans-serif;
+  color: #e8ffe8;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+
+.ms-craft-hint {
+  margin: 10px 2px 0;
+}
+
+.ms-craft-prog-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font: 700 15px/1 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.ms-craft-prog-line span:last-child {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ms-muted);
+}
+.ms-craft-prog .ms-meter {
+  height: 10px;
+  border-radius: 5px;
+}
+.ms-craft-prog .ms-meter > i {
+  transition: width 0.2s linear;
+}
+
+.ms-craft-done {
+  margin: 12px 0 4px;
+  text-align: center;
+  font: 750 19px/1.25 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.craft-ms .ms-craft-hint {
+  text-align: center;
+}
+
+.ms-craft-empty {
+  margin: 18px 4px;
+  text-align: center;
+}

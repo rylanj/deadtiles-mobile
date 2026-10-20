@@ -9,6 +9,7 @@ import {
   PLAYER_DIE_FRAMES,
   PLAYER_FIRE_FRAMES,
   PLAYER_SKIN_DEFAULT,
+  normalizeGuardSkin,
   normalizeZombieSkin,
   isMilitiaCaptainSkin,
   isMilitiaDoctorSkin,
@@ -56,6 +57,7 @@ import {
   type IdleWeaponKey,
 } from "@zombie/shared";
 import {
+  isEntityPackReady,
   resolveLoadedGuardSkin,
   resolveLoadedPlayerSkin,
   resolveLoadedRedManSkin,
@@ -578,6 +580,39 @@ export function guardIdleAKKey(dir: DirectionLabel, skin = 1) {
   return `militiaguard${militiaGuardArtSkin(skin)}-idle-ak-${dir}`;
 }
 
+/** Stand-in while an NPC pack has not loaded. Eight facing idles, no anims. */
+export function placeholderManKey(dir: DirectionLabel): string {
+  return `placeholderman1-${dir}`;
+}
+
+function applyPlaceholderManFrame(
+  sprite: Phaser.GameObjects.Sprite,
+  dir: DirectionLabel,
+) {
+  const key = placeholderManKey(dir);
+  if (textureKeyExists(sprite.scene, key)) {
+    applyEntitySpriteFrame(sprite, key, HUMAN_FEET_ORIGIN_Y);
+    return;
+  }
+  const south = placeholderManKey("S");
+  if (dir !== "S" && textureKeyExists(sprite.scene, south)) {
+    applyEntitySpriteFrame(sprite, south, HUMAN_FEET_ORIGIN_Y);
+  }
+}
+
+/** True when this militia skin's own sheet is in memory. Guard1 stays at boot. */
+function militiaSheetReady(skin: number): boolean {
+  if (isMilitiaCaptainSkin(skin)) {
+    return isEntityPackReady(`guard-${MILITIA_CAPTAIN_SKIN}`);
+  }
+  if (isMilitiaDoctorSkin(skin)) {
+    return isEntityPackReady(`guard-${MILITIA_DOCTOR_SKIN}`);
+  }
+  const id = normalizeGuardSkin(skin);
+  if (id === 1) return true;
+  return isEntityPackReady(`guard-${id}`);
+}
+
 export function guardSitKey(
   dir: DirectionLabel,
   skin = 1,
@@ -732,11 +767,18 @@ export function loadSurvivorAssets(scene: Phaser.Scene) {
   // Boot art is the fallback set for any skin whose pack has not loaded yet:
   // ZombieMan1, MilitiaGuard1, PlayerMan1. Each is a single packed atlas, so
   // boot costs ~3 GPU uploads instead of ~1,650 individual textures.
+  // Unloaded NPC sheets draw PlaceholderMan1 instead of MilitiaGuard1.
   for (const id of BOOT_PACK_IDS) {
     queuePackLoad(scene, id);
   }
 
   scene.load.setPath("/assets");
+  for (const dir of DIRECTION_LABELS) {
+    scene.load.image(
+      placeholderManKey(dir),
+      `PlaceholderMan1/PlaceholderMan1_${dir}.png`,
+    );
+  }
 
   scene.load.image("tile-ground", "GroundTile1.png");
   scene.load.image("tile-path", "PathUpLeft.png");
@@ -1282,7 +1324,7 @@ function applyGuardDieFrame(
 
 function applyTraderManIdle(sprite: Phaser.GameObjects.Sprite, dir: DirectionLabel) {
   if (!traderManPackReady()) {
-    applyGuardIdleAKFrame(sprite, dir, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   applyEntitySpriteFrame(sprite, traderManIdleKey(dir), HUMAN_FEET_ORIGIN_Y);
@@ -1294,7 +1336,7 @@ function applyTraderManWalk(
   animFrame: number,
 ) {
   if (!traderManPackReady()) {
-    applyGuardWalkAKFrame(sprite, dir, animFrame, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   const frame = (Math.floor(animFrame) % 8) + 1;
@@ -1307,7 +1349,7 @@ function applyTraderManDie(
   frame: number,
 ) {
   if (!traderManPackReady()) {
-    applyGuardDieFrame(sprite, dir, frame, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   const clamped = Math.max(1, Math.min(8, Math.floor(frame)));
@@ -1316,7 +1358,7 @@ function applyTraderManDie(
 
 function applyTraderGuardIdle(sprite: Phaser.GameObjects.Sprite, dir: DirectionLabel) {
   if (!traderGuardPackReady()) {
-    applyGuardIdleAKFrame(sprite, dir, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   applyEntitySpriteFrame(sprite, traderGuardIdleKey(dir), HUMAN_FEET_ORIGIN_Y);
@@ -1341,7 +1383,7 @@ function applyTraderGuardWalk(
   animFrame: number,
 ) {
   if (!traderGuardPackReady()) {
-    applyGuardWalkAKFrame(sprite, dir, animFrame, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   const frame = (Math.floor(animFrame) % 8) + 1;
@@ -1354,7 +1396,7 @@ function applyTraderGuardFirePistol(
   frame: number,
 ) {
   if (!traderGuardPackReady()) {
-    applyGuardFireAKFrame(sprite, dir, frame, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   const clamped = Math.max(1, Math.min(8, frame));
@@ -1371,7 +1413,7 @@ function applyTraderGuardDie(
   frame: number,
 ) {
   if (!traderGuardPackReady()) {
-    applyGuardDieFrame(sprite, dir, frame, 1);
+    applyPlaceholderManFrame(sprite, dir);
     return;
   }
   const clamped = Math.max(1, Math.min(8, Math.floor(frame)));
@@ -1393,7 +1435,7 @@ function applyRedManIdle(
     applyEntitySpriteFrame(sprite, key, HUMAN_FEET_ORIGIN_Y);
     return;
   }
-  applyGuardIdleAKFrame(sprite, dir, 1);
+  applyPlaceholderManFrame(sprite, dir);
 }
 
 function applyRedManWalk(
@@ -1409,7 +1451,7 @@ function applyRedManWalk(
     applyEntitySpriteFrame(sprite, preferred, HUMAN_FEET_ORIGIN_Y);
     return;
   }
-  applyGuardWalkAKFrame(sprite, dir, animFrame, 1);
+  applyPlaceholderManFrame(sprite, dir);
 }
 
 function applyRedManFire(
@@ -1450,7 +1492,7 @@ function applyRedManDie(
     applyEntitySpriteFrame(sprite, preferred, HUMAN_DIE_FEET_ORIGIN_Y);
     return;
   }
-  applyGuardDieFrame(sprite, dir, clamped, 1);
+  applyPlaceholderManFrame(sprite, dir);
 }
 
 export type EntityVisualState = {
@@ -1685,7 +1727,13 @@ export function updateEntityVisual(
     }
 
     const guardSkin = state.guardSkin ?? 1;
-    // Prefer raw captain/doctor skin so Idle/Die can resolve even before pack marks ready.
+    if (!militiaSheetReady(guardSkin)) {
+      applyPlaceholderManFrame(sprite, dir);
+      sprite.setAngle(0);
+      sprite.setAlpha(1);
+      return;
+    }
+    // Captain and doctor keep their own skin once that pack is in memory.
     const visualSkin = isMilitiaCaptainSkin(guardSkin)
       ? MILITIA_CAPTAIN_SKIN
       : isMilitiaDoctorSkin(guardSkin)

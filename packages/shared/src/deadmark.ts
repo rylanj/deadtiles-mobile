@@ -124,3 +124,102 @@ export type WireResultPayload = WireDeskPayload & {
   pending: boolean;
   reason: string;
 };
+
+/** Deadmarks Kevin takes for one banknote. Allies pay one. */
+export const DEADMARK_MARKS_PER_NOTE = 2;
+
+/** Marks for one note. Allied standing pays one. Everyone else pays two. */
+export function deadmarkMarksPerNote(allied: boolean): number {
+  return allied ? 1 : DEADMARK_MARKS_PER_NOTE;
+}
+
+/** Whole marks charged for this many notes. 0 when the count is not a sale. */
+export function deadmarkMarksForNotes(
+  notes: number,
+  marksPerNote: number = DEADMARK_MARKS_PER_NOTE,
+): number {
+  const whole = Math.floor(notes);
+  const rate = Math.floor(marksPerNote);
+  if (!Number.isSafeInteger(whole) || whole < 1 || !Number.isSafeInteger(rate) || rate < 1) return 0;
+  const marks = whole * rate;
+  return Number.isSafeInteger(marks) ? marks : 0;
+}
+
+/**
+ * Notes Kevin can sell right now. Confirmed wires minus notes already bought
+ * or held for a transfer that has not finished.
+ */
+export function deadmarkBuybackLimit(poolLeft: number): number {
+  const left = Math.floor(poolLeft);
+  return left > 0 ? left : 0;
+}
+
+/** Notes the wallet can pay for at this rate. The drawer is a separate cap. */
+export function deadmarkBuybackWalletNotes(marksHeld: number, rateMarks: number): number {
+  const held = Math.floor(marksHeld);
+  const rate = Math.floor(rateMarks);
+  if (!Number.isSafeInteger(held) || held < 1 || !Number.isSafeInteger(rate) || rate < 1) {
+    return 0;
+  }
+  const notes = Math.floor(held / rate);
+  return Number.isSafeInteger(notes) && notes > 0 ? notes : 0;
+}
+
+/** Largest note count a buyback message may carry. The drawer is the real cap. */
+export const DEADMARK_BUYBACK_PARSE_MAX = 1_000_000_000;
+
+/** Why the desk will not sell paper. Used when the drawer is empty. */
+export function deadmarkBuybackClosedReason(input: {
+  configured: boolean;
+  outage?: boolean;
+  poolLeft: number;
+}): string {
+  if (input.outage) return deadmarkWireOutageReason();
+  if (!input.configured) return "The coast isn't selling paper today.";
+  if (input.poolLeft <= 0) {
+    return "Those notes are already spoken for. More paper has to be set aside before I can sell again.";
+  }
+  return "I don't have that many notes set aside.";
+}
+
+/** A buy still on the book. `submitted` includes a transfer the coast is still checking. */
+export type BuybackClaimWire = {
+  id: string;
+  notes: number;
+  marks: number;
+  status: "reserved" | "submitted" | "ready";
+};
+
+/** What Kevin's buyback desk shows. */
+export type BuybackDeskPayload = {
+  traderId: string;
+  configured: boolean;
+  outage?: boolean;
+  /** Marks taken for one note. */
+  rateMarks: number;
+  /** Whole Deadmarks in the player's token account. */
+  marksHeld: number;
+  /** Confirmed notes wired east, all time. */
+  wired: number;
+  /** Notes bought or held against the drawer, all time. */
+  bought: number;
+  /** Notes still for sale: wired minus bought. */
+  poolLeft: number;
+  /** Same as poolLeft. The drawer is the only purchase limit. */
+  max: number;
+  claims: BuybackClaimWire[];
+  inventoryJson: string;
+};
+
+export type BuybackResultPayload = BuybackDeskPayload & {
+  ok: boolean;
+  reason: string;
+};
+
+/** Unsigned transfer the player's wallet must sign and send. */
+export type BuybackPreparedPayload = BuybackDeskPayload & {
+  claimId: string;
+  notes: number;
+  marks: number;
+  unsignedTxBase64: string;
+};

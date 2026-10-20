@@ -27,6 +27,8 @@ import {
 import { isMobileDevice } from "../device";
 import { loadCachedAuthSession } from "../network/ColyseusClient";
 import { resetDialogScroll } from "./dialogScroll";
+import { sheetButton, sheetCloseButton } from "./mobileSheet";
+import "./mobile/map.css";
 import { type MinimapTileKind } from "../world/IsoTiles";
 
 /** Tiles across the map the first time it opens, centered on the player. */
@@ -98,6 +100,8 @@ type MarkerDraft = {
   y: number;
   shape: MapMarkerShape;
   text: string;
+  /** Phone "Add marker here": the pin rides the centre crosshair while the map is dragged. */
+  follow?: boolean;
 };
 
 function markerOwnerKey(): string {
@@ -314,12 +318,16 @@ export class MapOverlayUI {
   private lastPoiKey = "";
   private pois: BirchportMapPoi[] | null = null;
   private mapChart: BirchportMapChart | null = null;
+  /** Phone layout: full-screen chart, floating controls, marker drawer, no double-tap. */
+  private readonly phone = isMobileDevice();
+  private addMarkerBtn?: HTMLButtonElement;
 
   constructor(options?: { onMarkersChange?: (markers: MapMarker[]) => void }) {
     this.onMarkersChange = options?.onMarkersChange ?? null;
     this.overlay = document.createElement("div");
     this.overlay.id = "map-overlay";
     this.overlay.hidden = true;
+    if (this.phone) this.overlay.classList.add("map-phone");
 
     const panel = document.createElement("div");
     panel.className = "map-panel";
@@ -375,9 +383,13 @@ export class MapOverlayUI {
       this.questLayer,
       this.radioLayer,
       this.customLayer,
-      this.markerEditor,
     );
-    panel.append(header, frame, this.buildLegend());
+    if (this.phone) {
+      panel.append(header, frame, ...this.buildPhoneControls(frame), this.markerEditor);
+    } else {
+      frame.append(this.markerEditor);
+      panel.append(header, frame, this.buildLegend());
+    }
     this.overlay.appendChild(panel);
     document.body.appendChild(this.overlay);
 
@@ -409,6 +421,14 @@ export class MapOverlayUI {
     if (!this.followPlayer) return;
     this.viewX = playerX;
     this.viewY = playerY;
+    this.clampView();
+  }
+
+  /** Center on a tile and stop following the player. */
+  focusOn(x: number, y: number) {
+    this.followPlayer = false;
+    this.viewX = x;
+    this.viewY = y;
     this.clampView();
   }
 
@@ -546,13 +566,35 @@ export class MapOverlayUI {
     this.clampView();
   }
 
+  /**
+   * Half of the map that is actually on screen, in tiles.
+   * The phone chart is a square larger than the display, so a zoomed-out
+   * viewSpan is wider than the visible strip. Clamping to the full square
+   * stops the pan before the left and right edges reach the screen.
+   */
+  private visibleHalfSpans(): { halfX: number; halfY: number } {
+    const half = this.viewSpan / 2;
+    const frame = this.mapFrame.getBoundingClientRect();
+    const view = this.overlay.getBoundingClientRect();
+    if (frame.width < 1 || frame.height < 1 || view.width < 1 || view.height < 1) {
+      return { halfX: half, halfY: half };
+    }
+    const visW = Math.max(0, Math.min(frame.right, view.right) - Math.max(frame.left, view.left));
+    const visH = Math.max(0, Math.min(frame.bottom, view.bottom) - Math.max(frame.top, view.top));
+    if (visW < 1 || visH < 1) return { halfX: half, halfY: half };
+    return {
+      halfX: half * (visW / frame.width),
+      halfY: half * (visH / frame.height),
+    };
+  }
+
   private clampView() {
     const chart = this.mapChart ?? getBirchportMapChart();
-    const half = this.viewSpan / 2;
-    const minCX = chart.minX + half;
-    const maxCX = chart.minX + chart.width - half;
-    const minCY = chart.minY + half;
-    const maxCY = chart.minY + chart.height - half;
+    const { halfX, halfY } = this.visibleHalfSpans();
+    const minCX = chart.minX + halfX;
+    const maxCX = chart.minX + chart.width - halfX;
+    const minCY = chart.minY + halfY;
+    const maxCY = chart.minY + chart.height - halfY;
     this.viewX = minCX > maxCX ? chart.minX + chart.width / 2 : Math.max(minCX, Math.min(maxCX, this.viewX));
     this.viewY = minCY > maxCY ? chart.minY + chart.height / 2 : Math.max(minCY, Math.min(maxCY, this.viewY));
   }
@@ -600,6 +642,7 @@ export class MapOverlayUI {
     this.questLayer.replaceChildren();
     this.radioLayer.replaceChildren();
     this.customLayer.replaceChildren();
+    this.overlay.classList.remove("map-layers-open");
     document.body.classList.remove("map-open");
   }
 
@@ -634,6 +677,12 @@ export class MapOverlayUI {
       this.centerTY = Math.floor(this.viewY);
       this.lastKindsSize = kinds.size;
       this.paintTerrain(kinds);
+    }
+
+    if (this.draft?.follow) {
+      const point = this.clampMarkerPoint(this.viewX, this.viewY);
+      this.draft.x = point.x;
+      this.draft.y = point.y;
     }
 
     this.paintMarkers(markers);
@@ -742,6 +791,86 @@ export class MapOverlayUI {
       ctx.strokeRect(x, y, Math.abs(b.px - a.px), Math.abs(b.py - a.py));
     }
     ctx.restore();
+  }
+
+  /** Title bar, zoom / recenter / layers buttons, centre crosshair, Add marker, layers drawer. */
+  private buildPhoneControls(frame: HTMLElement): HTMLElement[] {
+    const tap = (btn: HTMLButtonElement, onTap: () => void) => {
+      btn.addEventListener("pointerdown", (event) => event.stopPropagation());
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onTap();
+      });
+      return btn;
+    };
+    const fab = (text: string, label: string, onTap: () => void) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "map-fab";
+      btn.textContent = text;
+      btn.setAttribute("aria-label", label);
+      return tap(btn, onTap);
+    };
+    const zoomBy = (factor: number) => {
+      const rect = frame.getBoundingClientRect();
+      this.zoomAt(frame, rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+      this.rememberView();
+    };
+
+    const top = document.createElement("div");
+    top.className = "map-phone-top";
+    const title = document.createElement("div");
+    title.className = "map-phone-title";
+    title.textContent = "Ashen County";
+    const close = sheetCloseButton(() => this.close());
+    close.addEventListener("pointerdown", (event) => event.stopPropagation());
+    top.append(title, close);
+
+    const fabs = document.createElement("div");
+    fabs.className = "map-fabs";
+    fabs.append(
+      fab("+", "Zoom in", () => zoomBy(1 / 1.4)),
+      fab("−", "Zoom out", () => zoomBy(1.4)),
+      fab("◎", "Recenter on you", () => {
+        this.followPlayer = true;
+      }),
+      fab("☰", "Map key", () => this.overlay.classList.toggle("map-layers-open")),
+    );
+
+    const cross = document.createElement("div");
+    cross.className = "map-crosshair";
+    cross.setAttribute("aria-hidden", "true");
+
+    const bottom = document.createElement("div");
+    bottom.className = "map-phone-bottom";
+    this.addMarkerBtn = sheetButton("＋ Add marker here", "pri", () => this.openCenterMarkerEditor());
+    this.addMarkerBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+    bottom.append(this.addMarkerBtn);
+
+    const layers = document.createElement("div");
+    layers.className = "map-layers";
+    layers.addEventListener("pointerdown", (event) => event.stopPropagation());
+    const layersHead = document.createElement("div");
+    layersHead.className = "map-layers-head";
+    const layersTitle = document.createElement("b");
+    layersTitle.textContent = "Map key";
+    layersHead.append(
+      layersTitle,
+      sheetCloseButton(() => this.overlay.classList.remove("map-layers-open")),
+    );
+    layers.append(layersHead, this.buildLegend());
+
+    return [top, fabs, cross, bottom, layers];
+  }
+
+  private openCenterMarkerEditor() {
+    if (!Number.isFinite(this.viewX) || !Number.isFinite(this.viewY)) return;
+    this.overlay.classList.remove("map-layers-open");
+    const point = this.clampMarkerPoint(this.viewX, this.viewY);
+    this.draft = { id: null, x: point.x, y: point.y, shape: this.lastShape, text: "", follow: true };
+    this.followPlayer = false;
+    this.showMarkerEditor(false, 0, 0);
   }
 
   private buildLegend(): HTMLElement {
@@ -980,6 +1109,7 @@ export class MapOverlayUI {
 
   /** Second quick tap on the map opens the marker editor at that spot. */
   private onMapTap(event: PointerEvent) {
+    if (this.phone) return;
     const now = performance.now();
     const gap = Math.hypot(event.clientX - this.lastTapX, event.clientY - this.lastTapY);
     const gapLimit = event.pointerType === "touch" ? 48 : 30;
@@ -1071,7 +1201,7 @@ export class MapOverlayUI {
     this.markerTextInput = document.createElement("input");
     this.markerTextInput.type = "text";
     this.markerTextInput.maxLength = MAP_MARKER_TEXT_LIMIT;
-    this.markerTextInput.placeholder = "Label";
+    this.markerTextInput.placeholder = this.phone ? "Tap to name it (optional)" : "Label";
     this.markerTextInput.autocomplete = "off";
     this.markerTextInput.spellcheck = true;
     this.markerTextInput.enterKeyHint = "done";
@@ -1209,14 +1339,20 @@ export class MapOverlayUI {
     this.editorOpenY = clientY;
     const editing = this.draft.id !== null;
     this.markerTitle.textContent = editing ? "Edit marker" : "New marker";
-    this.markerSaveBtn.textContent = editing ? "Save" : "Place";
+    this.markerSaveBtn.textContent = editing ? "Save" : this.phone ? "Place marker" : "Place";
     this.markerRemoveBtn.hidden = !editing;
     this.markerTextInput.value = this.draft.text;
     this.syncMarkerEditor();
     this.editorOpenedAt = performance.now();
     this.markerEditor.hidden = false;
+    this.overlay.classList.toggle("map-aiming", !!this.draft.follow);
+    if (this.addMarkerBtn) this.addMarkerBtn.hidden = true;
     this.lastCustomDataKey = "";
     this.paintCustomMarkers();
+    if (this.phone) {
+      this.overlay.classList.remove("map-layers-open");
+      return;
+    }
     const focusField = (selectText: boolean) => {
       if (!this.draft || this.markerEditor.hidden) return;
       this.markerTextInput.focus({ preventScroll: true });
@@ -1234,7 +1370,18 @@ export class MapOverlayUI {
   private syncMarkerEditor() {
     if (!this.draft) return;
     const full = this.draft.id === null && this.markers.length >= MAP_MARKER_LIMIT;
-    this.markerNote.hidden = !full;
+    if (this.phone) {
+      const used = `${this.markers.length} of ${MAP_MARKER_LIMIT} markers used.`;
+      this.markerNote.hidden = false;
+      this.markerNote.classList.toggle("map-marker-note--full", full);
+      this.markerNote.textContent = full
+        ? `All ${MAP_MARKER_LIMIT} markers are used. Tap one on the map, then Remove.`
+        : this.draft.follow
+          ? `Drag the map to move the pin. ${used}`
+          : used;
+    } else {
+      this.markerNote.hidden = !full;
+    }
     this.markerSaveBtn.disabled = full;
     for (const [shape, button] of this.markerShapeButtons) {
       const selected = shape === this.draft.shape;
@@ -1283,6 +1430,8 @@ export class MapOverlayUI {
   private dismissMarkerEditor(paint: boolean) {
     this.draft = null;
     this.markerEditor.hidden = true;
+    this.overlay.classList.remove("map-aiming");
+    if (this.addMarkerBtn) this.addMarkerBtn.hidden = false;
     this.markerTextInput.blur();
     this.lastCustomDataKey = "";
     if (paint && this.visible) this.paintCustomMarkers();

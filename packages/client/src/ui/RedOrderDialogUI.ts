@@ -34,7 +34,7 @@ import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
-import { PhoneTalkNav, TalkSheet, syncTalkSheet, type TalkPush } from "./talkSheet";
+import { PhoneTalkNav, TalkSheet, syncTalkSheet, talkJobReward, type TalkPush } from "./talkSheet";
 
 export type RedOrderDialogUIHandlers = {
   onClose: () => void;
@@ -481,6 +481,11 @@ export class RedOrderDialogUI {
 
     const section = document.createElement("div");
     section.className = "craft-recipe";
+    section.dataset.jobReward = talkJobReward(
+      task.rewardBanknotes,
+      task.rewardReputation,
+      remaining,
+    );
     if (expanded) section.classList.add("craft-recipe--expanded");
     if (canComplete) section.classList.add("craft-recipe--ready");
     if (accepted) section.classList.add("craft-recipe--accepted");

@@ -72,6 +72,20 @@ export const COYWOLF_ZOMBIE_SCARE_RADIUS = 8;
 export const COYWOLF_EVADE_DIST = 30;
 /** After they escape, they still fear that source for this long. */
 export const COYWOLF_FEAR_MS = 5 * 60 * 1000;
+/**
+ * Prey ducked into a building. Stand on the stoop this long so a quick peek
+ * is still dangerous, then walk off instead of camping the door.
+ */
+export const COYWOLF_DOOR_LINGER_MS = 8000;
+/** Extra random wait on top of the linger so packs do not leave in lockstep. */
+export const COYWOLF_DOOR_LINGER_JITTER_MS = 3500;
+/** After leaving a door, skip that player this long unless they get close or hit the pack. */
+export const COYWOLF_BOREDOM_MS = 28000;
+/** This close, boredom ignore breaks. They will hunt again. */
+export const COYWOLF_BOREDOM_BREAK_DIST = 5;
+/** Walk at least this far from the door when they get bored. */
+export const COYWOLF_LEAVE_DIST_MIN = 16;
+export const COYWOLF_LEAVE_DIST_MAX = 26;
 
 export const COYWOLF_WALK_FRAMES = 8;
 export const COYWOLF_RUN_FRAMES = 8;

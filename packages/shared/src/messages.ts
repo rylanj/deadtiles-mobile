@@ -1,7 +1,11 @@
 import { isStructureBuildKind, type StructureBuildKind } from "./buildCosts.js";
 import {
+  DEADMARK_BUYBACK_PARSE_MAX,
   DEADMARK_MAX_WIRE,
   DEADMARK_MIN_WIRE,
+  type BuybackDeskPayload,
+  type BuybackPreparedPayload,
+  type BuybackResultPayload,
   type WireDeskPayload,
   type WireResultPayload,
 } from "./deadmark.js";
@@ -163,6 +167,32 @@ export type WireConfirmMessage = {
   notes: number;
 };
 
+/** Ask Kevin what paper the coast will still sell for Deadmarks. */
+export type BuybackQuoteMessage = {
+  traderId: string;
+};
+
+export type BuybackPurchaseMessage = {
+  traderId: string;
+  notes: number;
+};
+
+export type BuybackSubmitMessage = {
+  traderId: string;
+  claimId: string;
+  signature: string;
+};
+
+export type BuybackCancelMessage = {
+  traderId: string;
+  claimId: string;
+};
+
+export type BuybackCollectMessage = {
+  traderId: string;
+  claimId: string;
+};
+
 /** Confirm a pending multi-line trade offer (net cash settlement). */
 export type TradeConfirmMessage = {
   traderId: string;
@@ -299,7 +329,12 @@ export type EnterDoorCodeMessage = {
   x: number;
   y: number;
   code: string;
+  /** Answer with a `doorCodeResult` event instead of a toast (mobile keypad). */
+  reply?: boolean;
 };
+
+/** Server answer to `enterDoorCode` when `reply` was set. */
+export type DoorCodeResult = "open" | "wrong" | "wait" | "far" | "gone";
 
 /** Open the Fireplace1 fuel dialog at a structure tile. */
 export type FireplaceOpenMessage = {
@@ -467,6 +502,11 @@ export type ClientMessage =
   | { type: "tradeClose" }
   | { type: "wireQuote"; payload: WireQuoteMessage }
   | { type: "wireConfirm"; payload: WireConfirmMessage }
+  | { type: "buybackQuote"; payload: BuybackQuoteMessage }
+  | { type: "buybackPurchase"; payload: BuybackPurchaseMessage }
+  | { type: "buybackSubmit"; payload: BuybackSubmitMessage }
+  | { type: "buybackCancel"; payload: BuybackCancelMessage }
+  | { type: "buybackCollect"; payload: BuybackCollectMessage }
   | { type: "marketOpen"; payload: MarketOpenMessage }
   | { type: "marketList"; payload: MarketListMessage }
   | { type: "marketBuy"; payload: MarketListingIdMessage }
@@ -559,6 +599,18 @@ function isIntInRange(n: unknown, min: number, max: number): n is number {
 
 function isIdString(n: unknown): n is string {
   return typeof n === "string" && n.length > 0 && n.length <= 128;
+}
+
+const CLAIM_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function isClaimId(n: unknown): n is string {
+  return typeof n === "string" && CLAIM_ID_PATTERN.test(n);
+}
+
+/** Base58 Solana transaction signature. */
+function isTxSignature(n: unknown): n is string {
+  return typeof n === "string" && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(n);
 }
 
 /**
@@ -791,6 +843,29 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isIntInRange(p.notes, 1, DEADMARK_MAX_WIRE)) return null;
       return { type, payload: { traderId: p.traderId, notes: p.notes } };
     }
+    case "buybackQuote": {
+      if (!isIdString(p.traderId)) return null;
+      return { type, payload: { traderId: p.traderId } };
+    }
+    case "buybackPurchase": {
+      if (!isIdString(p.traderId)) return null;
+      if (!isIntInRange(p.notes, 1, DEADMARK_BUYBACK_PARSE_MAX)) return null;
+      return { type, payload: { traderId: p.traderId, notes: p.notes } };
+    }
+    case "buybackSubmit": {
+      if (!isIdString(p.traderId) || !isClaimId(p.claimId) || !isTxSignature(p.signature)) {
+        return null;
+      }
+      return {
+        type,
+        payload: { traderId: p.traderId, claimId: p.claimId, signature: p.signature },
+      };
+    }
+    case "buybackCancel":
+    case "buybackCollect": {
+      if (!isIdString(p.traderId) || !isClaimId(p.claimId)) return null;
+      return { type, payload: { traderId: p.traderId, claimId: p.claimId } };
+    }
     case "tradeConfirm": {
       if (!isIdString(p.traderId)) return null;
       if (!Array.isArray(p.sells) || !Array.isArray(p.buys)) return null;
@@ -895,7 +970,10 @@ export function parseClientActionMessage(raw: unknown): ClientMessage | null {
       if (!isFiniteNum(p.x) || !isFiniteNum(p.y)) return null;
       if (!Number.isInteger(p.x) || !Number.isInteger(p.y)) return null;
       if (typeof p.code !== "string" || !/^[0-9]{4,8}$/.test(p.code)) return null;
-      return { type, payload: { x: p.x, y: p.y, code: p.code } };
+      return {
+        type,
+        payload: { x: p.x, y: p.y, code: p.code, ...(p.reply === true ? { reply: true } : {}) },
+      };
     }
     case "fireplaceCook": {
       if (!isFiniteNum(p.x) || !isFiniteNum(p.y)) return null;
@@ -1147,6 +1225,18 @@ export type ServerMessage =
   | {
       type: "wireResult";
       payload: WireResultPayload;
+    }
+  | {
+      type: "buybackQuote";
+      payload: BuybackDeskPayload;
+    }
+  | {
+      type: "buybackResult";
+      payload: BuybackResultPayload;
+    }
+  | {
+      type: "buybackPrepared";
+      payload: BuybackPreparedPayload;
     }
   | {
       type: "dialogHealComplete";
@@ -1467,6 +1557,10 @@ export type ServerMessage =
       /** Owner-only personal map pins. */
       type: "mapMarkerSync";
       payload: { markers: MapMarker[] };
+    }
+  | {
+      type: "doorCodeResult";
+      payload: { x: number; y: number; result: DoorCodeResult };
     }
   | {
       /** Owner-only note. Shown as a popup, not a chat bubble. */

@@ -1,0 +1,16 @@
+/* Mobile loot (design/mobile-dialogs board 02). */
+.ms-loot .ms-row-end .ms-btn {
+  min-width: 76px;
+}
+.ms-loot-empty {
+  margin: 28px 0;
+  text-align: center;
+}
+.ms-loot .ms-row--open {
+  border-style: dashed;
+  background: transparent;
+}
+.ms-loot .ms-row--open .ms-row-nm {
+  color: var(--ms-muted);
+  font-weight: 500;
+}

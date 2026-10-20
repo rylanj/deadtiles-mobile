@@ -1,0 +1,167 @@
+/* Fireplace, unfinished build and take down (design/mobile-dialogs board 09). */
+
+body.is-mobile #fireplace-overlay.ms-host,
+body.is-mobile #prefab-overlay.ms-host {
+  z-index: 100;
+  padding: 0;
+}
+
+/* Status card */
+.ms-fire-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+}
+.ms-fire-flame {
+  flex: 0 0 54px;
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background: radial-gradient(circle at 50% 65%, #ffcf5a, #e46a1c 55%, #5a1a08);
+  box-shadow: 0 0 20px rgba(255, 140, 40, 0.45);
+}
+.ms-fire-flame--cold {
+  background: radial-gradient(circle at 50% 65%, #6a6a6a, #343434 60%, #161616);
+  box-shadow: none;
+}
+.ms-fire-card-t {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ms-fire-state {
+  font: 800 18px/1.2 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.ms-fire-pips {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.ms-fire-pips i {
+  flex: 1 1 0;
+  height: 8px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ms-fire-pips i.on {
+  background: #d98a2a;
+}
+
+/* Cook spots */
+.ms-fire-spots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.ms-fire-spot {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  aspect-ratio: 1;
+  min-height: 64px;
+  margin: 0;
+  padding: 4px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ms-text);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.ms-fire-spot-in {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  background: #0f160f;
+  display: grid;
+  place-items: center;
+}
+.ms-fire-spot-in img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.ms-fire-spot--empty {
+  background: transparent;
+  border: 1px dashed var(--ms-line-2);
+}
+.ms-fire-spot--empty .ms-fire-spot-in {
+  background: transparent;
+  color: var(--ms-dim);
+  font: 400 24px/1 system-ui, sans-serif;
+}
+.ms-fire-spot--done .ms-fire-spot-in {
+  background: rgba(94, 200, 94, 0.18);
+  box-shadow: inset 0 0 0 1px var(--ms-pri-line);
+}
+.ms-fire-spot--burnt .ms-fire-spot-in {
+  background: rgba(200, 80, 80, 0.14);
+}
+.ms-fire-cap {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font: 800 12px/1 system-ui, sans-serif;
+  color: #e8ffe8;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.ms-fire-tag {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font: 800 10.5px/1.1 system-ui, sans-serif;
+  letter-spacing: 0.03em;
+  background: rgba(255, 255, 255, 0.12);
+  color: #e7f6e7;
+}
+.ms-fire-tag--ok {
+  background: var(--ms-lime);
+  color: #142010;
+}
+.ms-fire-tag--bad {
+  background: rgba(200, 80, 80, 0.85);
+  color: #fff;
+}
+
+/* Unfinished build */
+.ms-prefab-total {
+  height: 10px;
+  margin: 4px 0 14px;
+  border-radius: 5px;
+}
+.ms-prefab-row .ms-meter {
+  margin-top: 7px;
+}
+.ms-prefab-row .ms-row-end {
+  font-size: 14px;
+}
+.ms-prefab-carry {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--ms-muted);
+}
+
+/* Take down card over the world */
+body.is-mobile #deconstruct-overlay.ms-card-host .ms-drawer {
+  box-sizing: border-box;
+}
+body.is-mobile #deconstruct-overlay.ms-card-host .ms-drawer * {
+  box-sizing: border-box;
+}
+.ms-take-title {
+  margin: 0 0 4px;
+  font: 800 21px/1.2 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.ms-take-hint {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+.ms-take-card {
+  background: rgba(0, 0, 0, 0.25);
+}

@@ -236,6 +236,10 @@ export const ASHEN_HOSTILE_WARN_LINE =
  */
 export const HOSPITAL_WEAPON_WARN_DELAY_MS = 10_000;
 export const HOSPITAL_WEAPON_WARN_LINE = "Put your weapon away now!";
+/** Verbal scold for slamming a door (Clark / Davis) or loitering at the barracks gate. */
+export const SCOLD_REP_MINOR = -1;
+/** Verbal scold for a drawn weapon (hospital or talk) or being caught stealing. */
+export const SCOLD_REP_SERIOUS = -10;
 /**
  * Faction theft. National Guard and Red Order aim and say this when they
  * see a player search their furniture or one of their dead. Cancelling
@@ -243,6 +247,14 @@ export const HOSPITAL_WEAPON_WARN_LINE = "Put your weapon away now!";
  * or the Red Order squad in that building.
  */
 export const HOSPITAL_SEARCH_WARN_LINE = "Stop stealing now!";
+/**
+ * Clark / Davis scold players who slam a door while within this Chebyshev
+ * range. Count is toggles inside the window; cooldown stops chat spam.
+ */
+export const DOOR_SLAM_SCOLD_RANGE = 10;
+export const DOOR_SLAM_COUNT = 3;
+export const DOOR_SLAM_WINDOW_MS = 5_000;
+export const DOOR_SLAM_SCOLD_COOLDOWN_MS = 8_000;
 /**
  * Barracks bargate: one street guard warns when a player comes this close
  * (Euclidean tiles). Leave radius is a bit larger so the edge does not spam.

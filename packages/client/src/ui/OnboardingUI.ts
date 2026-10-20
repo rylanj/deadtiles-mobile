@@ -19,9 +19,27 @@ import {
   type TutorialTipId,
 } from "@zombie/shared";
 import { isMobileDevice } from "../device";
+import { sheetCloseButton } from "./mobileSheet";
+import "./mobile/alerts.css";
 
 export type OnboardingUIHandlers = {
   send: (payload: TutorialCompleteStepMessage) => void;
+  openBag?: () => void;
+  openJournal?: () => void;
+};
+
+/** Phone tips get one button that does the thing the tip asks for. */
+const TIP_ACTIONS: Partial<Record<TutorialTipId, { label: string; run: "bag" | "journal" }>> = {
+  hungry: { label: "Open bag", run: "bag" },
+  thirsty: { label: "Open bag", run: "bag" },
+  cold: { label: "Open bag", run: "bag" },
+  hot: { label: "Open bag", run: "bag" },
+  wet: { label: "Open bag", run: "bag" },
+  infected: { label: "Open bag", run: "bag" },
+  raw_meat: { label: "Open bag", run: "bag" },
+  low_health: { label: "Open bag", run: "bag" },
+  weapon_broke: { label: "Open bag", run: "bag" },
+  standing_hostile: { label: "Open journal", run: "journal" },
 };
 
 const TIP_SHOW_MS = 14_000;
@@ -68,6 +86,11 @@ export class OnboardingUI {
   private tipQueue: TutorialTipId[] = [];
   private tipShowing: TutorialTipId | null = null;
   private tipTimer: number | null = null;
+  private tipActionBtn: HTMLButtonElement;
+  private lineProgressEl?: HTMLElement;
+  private lineTitleEl?: HTMLElement;
+  private lineChevronEl?: HTMLElement;
+  private trackerExpanded = false;
 
   constructor(private handlers: OnboardingUIHandlers) {
     this.stack = document.createElement("div");
@@ -106,6 +129,32 @@ export class OnboardingUI {
     actions.append(skipBtn, controlsBtn, this.endBtn);
 
     this.tracker.append(head, this.titleEl, this.bodyEl, actions);
+    if (this.mobile) {
+      // One 44px line under the HUD. The arrow opens the step text and actions.
+      this.tracker.classList.add("tutorial-tracker--phone");
+      const line = makeButton("", "tutorial-line", () => {
+        this.trackerExpanded = !this.trackerExpanded;
+        this.syncTrackerExpanded();
+      });
+      this.lineProgressEl = document.createElement("span");
+      this.lineProgressEl.className = "ms-chip ms-chip--g tutorial-line-n";
+      this.lineTitleEl = document.createElement("span");
+      this.lineTitleEl.className = "tutorial-line-title";
+      this.lineChevronEl = document.createElement("span");
+      this.lineChevronEl.className = "tutorial-line-chev";
+      this.lineChevronEl.setAttribute("aria-hidden", "true");
+      line.append(this.lineProgressEl, this.lineTitleEl, this.lineChevronEl);
+      this.tracker.prepend(line);
+      actions.append(
+        makeButton("Turn off tips", "tutorial-btn tutorial-btn--quiet", () => {
+          this.flags.tipsOff = true;
+          this.handlers.send({ tipsOff: true });
+          this.tipQueue = [];
+          if (this.tipShowing) this.dismissTip();
+        }),
+      );
+      this.syncTrackerExpanded();
+    }
 
     this.pill = makeButton("", "tutorial-pill", () => this.setMinimized(false));
     this.pill.id = "tutorial-pill";
@@ -165,7 +214,15 @@ export class OnboardingUI {
       ? "The Field Guide in your Journal explains the rest."
       : "Press J for the Field Guide in your Journal. Esc reopens this list.";
     const closeLegend = makeButton("Close", "onboarding-next", () => this.closeLegend());
-    legendPanel.append(legendTitle, list, legendHint, closeLegend);
+    if (this.mobile) {
+      this.legendEl.classList.add("onboarding-legend--phone");
+      const legendHead = document.createElement("div");
+      legendHead.className = "onboarding-legend-head";
+      legendHead.append(legendTitle, sheetCloseButton(() => this.closeLegend()));
+      legendPanel.append(legendHead, list, legendHint);
+    } else {
+      legendPanel.append(legendTitle, list, legendHint, closeLegend);
+    }
     this.legendEl.appendChild(legendPanel);
     this.legendEl.addEventListener("click", (e) => {
       if (e.target === this.legendEl) this.closeLegend();
@@ -183,17 +240,37 @@ export class OnboardingUI {
     this.tipBodyEl.className = "tutorial-tracker-body";
     const tipActions = document.createElement("div");
     tipActions.className = "tutorial-tracker-actions";
-    tipActions.append(
-      makeButton("Got it", "tutorial-btn", () => this.dismissTip()),
-      makeButton("Turn off tips", "tutorial-btn tutorial-btn--quiet", () => {
-        this.flags.tipsOff = true;
-        this.handlers.send({ tipsOff: true });
-        this.tipQueue = [];
-        this.dismissTip();
-      }),
-    );
+    this.tipActionBtn = makeButton("", "tutorial-btn tutorial-btn--do", () => {
+      const action = this.tipShowing ? TIP_ACTIONS[this.tipShowing] : undefined;
+      this.dismissTip();
+      if (action?.run === "bag") this.handlers.openBag?.();
+      else if (action?.run === "journal") this.handlers.openJournal?.();
+    });
+    this.tipActionBtn.hidden = true;
+    tipActions.append(this.tipActionBtn, makeButton("Got it", "tutorial-btn", () => this.dismissTip()));
+    if (!this.mobile) {
+      tipActions.append(
+        makeButton("Turn off tips", "tutorial-btn tutorial-btn--quiet", () => {
+          this.flags.tipsOff = true;
+          this.handlers.send({ tipsOff: true });
+          this.tipQueue = [];
+          this.dismissTip();
+        }),
+      );
+    }
     this.tipEl.append(this.tipTitleEl, this.tipBodyEl, tipActions);
-    this.stack.appendChild(this.tipEl);
+    if (this.mobile) {
+      // Above the joystick, out of the top HUD.
+      this.tipEl.classList.add("tutorial-tip--phone");
+      document.body.appendChild(this.tipEl);
+    } else {
+      this.stack.appendChild(this.tipEl);
+    }
+  }
+
+  private syncTrackerExpanded() {
+    this.tracker.classList.toggle("tutorial-tracker--open", this.trackerExpanded);
+    if (this.lineChevronEl) this.lineChevronEl.textContent = this.trackerExpanded ? "⌃" : "⌄";
   }
 
   /** A modal piece (legend or card) is open and should take Esc first. */
@@ -291,6 +368,7 @@ export class OnboardingUI {
     if (this.flashTimer != null) window.clearTimeout(this.flashTimer);
     if (this.endConfirmTimer != null) window.clearTimeout(this.endConfirmTimer);
     this.stack.remove();
+    this.tipEl.remove();
     this.cardOverlay.remove();
     this.legendEl.remove();
   }
@@ -389,7 +467,11 @@ export class OnboardingUI {
     this.titleEl.textContent = def.title;
     this.bodyEl.textContent = this.bodyFor(def);
     this.pill.textContent = `Tutorial: ${def.title}`;
-    const minimized = this.flags.minimized === true;
+    if (this.lineTitleEl && this.lineProgressEl) {
+      this.lineTitleEl.textContent = def.title;
+      this.lineProgressEl.textContent = this.progressLabel();
+    }
+    const minimized = !this.mobile && this.flags.minimized === true;
     this.tracker.hidden = minimized;
     this.pill.hidden = !minimized;
     if (advanced) this.flashAdvance();
@@ -511,6 +593,9 @@ export class OnboardingUI {
     this.tipShowing = next;
     this.tipTitleEl.textContent = tip.title;
     this.tipBodyEl.textContent = this.tipBodyFor(tip);
+    const action = this.mobile ? TIP_ACTIONS[next] : undefined;
+    this.tipActionBtn.hidden = !action;
+    this.tipActionBtn.textContent = action?.label ?? "";
     this.tipEl.hidden = false;
     this.tipTimer = window.setTimeout(() => this.dismissTip(), TIP_SHOW_MS);
   }

@@ -1,8 +1,7 @@
-/** Phone talk and trade sheets. Desktop and iPad keep the two-column layouts. */
+/** Talk and trade sheets on every touch device. Desktop keeps the two-column layouts. */
 export function usePhoneDialogSheet(): boolean {
   if (typeof document === "undefined" || typeof window === "undefined") return false;
-  if (!document.body.classList.contains("is-mobile")) return false;
-  return window.innerWidth < 720 || window.innerHeight < 520;
+  return document.body.classList.contains("is-mobile");
 }
 
 /**

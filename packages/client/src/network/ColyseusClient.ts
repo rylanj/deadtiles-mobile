@@ -2,12 +2,15 @@ import { Client, Room } from "colyseus.js";
 import {
   WORLD_FULL_MESSAGE,
   WORLD_ROOM_NAME,
+  type DoorCodeResult,
   type FreeAimSurface,
   type MapMarker,
   type MarketStatePayload,
   type StructureBuildKind,
   type StructureFenceCorner,
   type StructureFenceFacing,
+  type BuybackDeskPayload,
+  type BuybackPreparedPayload,
   type WireDeskPayload,
 } from "@zombie/shared";
 import {
@@ -1029,6 +1032,11 @@ export type SkillLevelUpEvent = {
   payload: { label: string; subId: string; level: number };
 };
 
+export type DoorCodeResultEvent = {
+  type: "doorCodeResult";
+  payload: { x: number; y: number; result: DoorCodeResult };
+};
+
 export type PlayerNoteEvent = {
   type: "playerNote";
   payload: {
@@ -1060,6 +1068,19 @@ export type WireDeskEvent = {
   };
 };
 
+export type BuybackDeskEvent = {
+  type: "buybackQuote" | "buybackResult";
+  payload: BuybackDeskPayload & {
+    ok?: boolean;
+    reason?: string;
+  };
+};
+
+export type BuybackPreparedEvent = {
+  type: "buybackPrepared";
+  payload: BuybackPreparedPayload;
+};
+
 export type ServerEvent =
   | LootEvent
   | ContainerOpenEvent
@@ -1073,6 +1094,8 @@ export type ServerEvent =
   | DialogSpokenEvent
   | DialogHealCompleteEvent
   | WireDeskEvent
+  | BuybackDeskEvent
+  | BuybackPreparedEvent
   | SafeDepositCloseEvent
   | QuestSyncEvent
   | SkillSyncEvent
@@ -1095,4 +1118,5 @@ export type ServerEvent =
   | StructureDamagedEvent
   | DeconstructOpenEvent
   | SkillLevelUpEvent
+  | DoorCodeResultEvent
   | PlayerNoteEvent;

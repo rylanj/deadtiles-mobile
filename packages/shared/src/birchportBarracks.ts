@@ -412,8 +412,11 @@ function barracksBuildingOccupiesTile(tx: number, ty: number): boolean {
   return false;
 }
 
-/** Quiet channel. Same length as the blood-stain inspect. */
-export const GRAVE_INSPECT_MS = 5000;
+/** Quiet channel. Shorter than the blood-stain inspect. */
+export const GRAVE_INSPECT_MS = 3000;
+
+/** National Guard standing from reading a barracks grave. Once per player per restart. */
+export const GRAVE_INSPECT_MILITIA_REP = 10;
 
 export const INSPECT_GRAVE_ID_PREFIX = "inspect:grave:";
 

@@ -1,6 +1,16 @@
 import bs58 from "bs58";
 import { getWallets } from "@wallet-standard/app";
 
+export class DeadmarkWalletError extends Error {
+  readonly cancelled: boolean;
+
+  constructor(message: string, cancelled: boolean) {
+    super(message);
+    this.name = "DeadmarkWalletError";
+    this.cancelled = cancelled;
+  }
+}
+
 export type SolanaWalletProvider = {
   isPhantom?: boolean;
   isSolflare?: boolean;
@@ -278,4 +288,114 @@ export async function signLoginMessage(
   const encoded = new TextEncoder().encode(message);
   const result = await provider.signMessage(encoded, "utf8");
   return bs58.encode(signatureToBytes(result));
+}
+
+type StandardAccount = { address: string };
+type SignAndSendWallet = {
+  name: string;
+  features: {
+    "standard:connect"?: {
+      connect: () => Promise<{ accounts: StandardAccount[] }>;
+    };
+    "solana:signAndSendTransaction"?: {
+      signAndSendTransaction: (
+        ...inputs: {
+          account: StandardAccount;
+          transaction: Uint8Array;
+          chain?: string;
+        }[]
+      ) => Promise<readonly { signature: Uint8Array | string }[]>;
+    };
+  };
+};
+
+function bytesFromBase64(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function signatureBase58(signature: Uint8Array | string): string {
+  if (typeof signature === "string") {
+    try {
+      if (bs58.decode(signature).length === 64) return signature;
+    } catch {
+      /* base64 below */
+    }
+    const bytes = bytesFromBase64(signature);
+    if (bytes.length === 64) return bs58.encode(bytes);
+    throw new Error("Wallet did not return a transfer signature");
+  }
+  if (signature.length !== 64) throw new Error("Wallet did not return a transfer signature");
+  return bs58.encode(signature);
+}
+
+function walletNameHint(id: string | null): string | null {
+  if (!id) return null;
+  const lower = id.toLowerCase();
+  if (lower.includes("phantom")) return "phantom";
+  if (lower.includes("solflare")) return "solflare";
+  if (lower.includes("metamask")) return "metamask";
+  if (lower.startsWith("standard:")) return lower.slice("standard:".length);
+  return null;
+}
+
+function walletFailure(err: unknown): DeadmarkWalletError {
+  if (err instanceof DeadmarkWalletError) return err;
+  const message = err instanceof Error ? err.message : "The wallet could not send the transfer.";
+  const cancelled = /reject|denied|cancel/i.test(message);
+  return new DeadmarkWalletError(cancelled ? "Wallet request was cancelled." : message, cancelled);
+}
+
+/**
+ * Ask the browser wallet that matches this session to sign and send the
+ * coast's unsigned transfer. The signature is base58.
+ */
+export async function sendBrowserDeadmarkBuyback(
+  unsignedTxBase64: string,
+  expectedWallet: string,
+  walletHint: string | null,
+): Promise<string> {
+  const bytes = bytesFromBase64(unsignedTxBase64);
+  const wanted = walletNameHint(walletHint);
+  const wallets = getWallets().get() as unknown as SignAndSendWallet[];
+  const capable = wallets.filter(
+    (wallet) =>
+      wallet.features["standard:connect"] && wallet.features["solana:signAndSendTransaction"],
+  );
+  const wallet =
+    capable.find((entry) => wanted && entry.name.toLowerCase().includes(wanted)) ?? capable[0];
+  if (!wallet?.features["standard:connect"] || !wallet.features["solana:signAndSendTransaction"]) {
+    throw new DeadmarkWalletError(
+      "No Solana wallet can send this transfer. Open Phantom or Solflare and try again.",
+      false,
+    );
+  }
+  let accounts: StandardAccount[] = [];
+  try {
+    accounts = (await wallet.features["standard:connect"].connect()).accounts ?? [];
+  } catch (err) {
+    throw walletFailure(err);
+  }
+  const account = accounts.find((entry) => entry.address === expectedWallet) ?? accounts[0];
+  if (!account || account.address !== expectedWallet) {
+    throw new DeadmarkWalletError(
+      "That wallet isn't the one on your ledger. Connect the wallet you signed in with.",
+      false,
+    );
+  }
+  try {
+    const [out] = await wallet.features["solana:signAndSendTransaction"].signAndSendTransaction({
+      account,
+      transaction: bytes,
+      chain: "solana:mainnet",
+    });
+    if (!out?.signature) throw new Error("Wallet did not return a transfer signature");
+    return signatureBase58(out.signature);
+  } catch (err) {
+    throw walletFailure(err);
+  }
 }

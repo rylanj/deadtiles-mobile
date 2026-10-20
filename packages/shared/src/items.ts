@@ -19,7 +19,12 @@ import {
   xmur3,
 } from "./worldgen.js";
 import { ZOMBIE_SKIN_MAN11 } from "./sprites.js";
-import { STORY_ITEM_LABELS, STORY_PAPER_ITEM_IDS } from "./storyQuests.js";
+import {
+  COLEMAN_CONFESSION_ITEM_ID,
+  STORY_FIND_TEXT,
+  STORY_ITEM_LABELS,
+  STORY_PAPER_ITEM_IDS,
+} from "./storyQuests.js";
 
 /** Fixed slot count — each occupied slot holds one stack. */
 export const WEAPON_SLOT_COUNT = 2;
@@ -915,6 +920,30 @@ export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
     itemId === COLEMAN_NOTE_ITEM_ID ||
     (!!itemId && (STORY_PAPER_ITEM_IDS as readonly string[]).includes(itemId))
   );
+}
+
+/** Pickup popup copy for daily-job papers. Story papers use STORY_FIND_TEXT. */
+const QUEST_PAPER_TEXT: Readonly<Record<string, string>> = {
+  [CARAVAN_MANIFEST_ITEM_ID]:
+    "The page says the missing crate is definitely still on the caravan.",
+  [WAGON_NOTE_ITEM_ID]:
+    "The note says the radio works. Under that, in worse handwriting: the walkers also work.",
+  [SUPPLY_LIST_ITEM_ID]:
+    "A National Guard supply list. Bandages, tins, shells. They kept it off the radio.",
+  [COLEMAN_NOTE_ITEM_ID]: "A note addressed to Sergeant Coleman.",
+  [COLEMAN_CONFESSION_ITEM_ID]:
+    "I sold patrol issue out of my own pack. I left a stranger on the road because my buyer told me to. Holland made me go back. I went to the hospital every morning to see if that stranger knew my face. Holland followed me to the motel. They shot him and took us both. He died in that cell.",
+};
+
+/** Body text for notes, diaries, and other papers you can re-read from inventory. */
+export function getReadableItemText(itemId: string | undefined): string | undefined {
+  if (!itemId) return undefined;
+  const id = canonicalItemId(itemId);
+  return QUEST_PAPER_TEXT[id] ?? STORY_FIND_TEXT[id];
+}
+
+export function isReadableItem(itemId: string | undefined): boolean {
+  return !!getReadableItemText(itemId);
 }
 
 /** True when this furniture type can roll container loot. */

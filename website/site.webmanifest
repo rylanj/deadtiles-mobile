@@ -1,0 +1,25 @@
+{
+  "name": "Deadtiles",
+  "short_name": "Deadtiles",
+  "description": "Play Deadtiles free in the browser. A multiplayer zombie survival game in Ashen County.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "browser",
+  "background_color": "#07090a",
+  "theme_color": "#07090a",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.png",
+      "type": "image/png",
+      "sizes": "4096x4096",
+      "purpose": "any"
+    }
+  ]
+}

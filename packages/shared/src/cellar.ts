@@ -20,6 +20,10 @@ export const CELLAR_DOORS: readonly CellarDoor[] = [
 export const CELLAR_INTERIOR_W = 12;
 export const CELLAR_INTERIOR_H = 10;
 
+/** Interior tile Coleman stands on. Furniture keeps this tile and the aisle clear. */
+export const CELLAR_NPC_TILE_X = 3;
+export const CELLAR_NPC_TILE_Y = Math.floor(CELLAR_INTERIOR_H / 2);
+
 const cellarAt = new Map<string, CellarDoor>();
 for (const door of CELLAR_DOORS) {
   for (let dy = 0; dy < door.h; dy++) {

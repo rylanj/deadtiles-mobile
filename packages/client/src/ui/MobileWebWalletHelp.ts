@@ -15,6 +15,7 @@ import {
   walletReturnIsHttps,
 } from "../network/walletDeepLinks";
 import { resetDialogScroll } from "./dialogScroll";
+import "./mobile/menu.css";
 
 type HelpLink = {
   href?: string;

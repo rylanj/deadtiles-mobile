@@ -2,6 +2,8 @@ import { mulberry32, xmur3, getBuildingAt, buildingEntranceFace, buildingEntranc
 import {
   CELLAR_INTERIOR_H,
   CELLAR_INTERIOR_W,
+  CELLAR_NPC_TILE_X,
+  CELLAR_NPC_TILE_Y,
   getCellarAt,
 } from "./cellar.js";
 import { RED_MAN_SUPERMARKET_OWN_CHANCE } from "./constants.js";
@@ -12228,6 +12230,8 @@ const APARTMENT_CORRIDOR_ROWS = 3;
 /** Two flats per storey only when each still gets a full kitchen and bedroom. */
 const APARTMENT_TWO_FLAT_MIN_ALONG = 16;
 const APARTMENT_TWO_FLAT_MIN_DEPTH = 8;
+/** Per flat. Houses roll 3% per bedroom or office wall. Same loot table. */
+const APARTMENT_GUNCABINET_CHANCE = 0.01;
 
 /**
  * Placement grid for one storey, in the canonical frame: `a` runs along the
@@ -12885,6 +12889,31 @@ function planApartmentFlat(
   if (rng() < 0.3) grid.placeFirst("desk", under(1, true), living);
   if (rng() < 0.25) grid.placeFirst("suitcase", aptShuffle(rng, anywhere(living)), living);
 
+  // GunCabinet1 is SE-only. Prefer a bedroom west wall, then the living room.
+  if (rng() < APARTMENT_GUNCABINET_CHANCE) {
+    const seOnly = (cands: AptCand[]) => cands.filter((c) => c[2] === "SE");
+    let placed = false;
+    for (const room of aptShuffle(rng, bedroomRooms)) {
+      const wall = westCol(room.a0, room.d0, room.d1);
+      placed = !!grid.placeFirst("guncabinet", wall, room);
+      if (placed) break;
+      placed = !!grid.placeFirst(
+        "guncabinet",
+        aptShuffle(rng, seOnly(anywhere(room))),
+        room,
+      );
+      if (placed) break;
+    }
+    if (!placed) {
+      grid.placeFirst("guncabinet", westCol(x0, livingTop, livingBottom), living) ||
+        grid.placeFirst(
+          "guncabinet",
+          aptShuffle(rng, seOnly(anywhere(living))),
+          living,
+        );
+    }
+  }
+
   const frontWalls: AptTile[] = [];
   for (let a = Math.max(0, x0 - 1); a <= Math.min(grid.A - 1, x1 + 1); a++) {
     if (a === entrance) continue;
@@ -13160,6 +13189,253 @@ export function apartmentRoomAtDoor(
   return null;
 }
 
+/**
+ * East Forestford cellar (12×10). Storage along the walls: shelves, crates,
+ * water barrels, a cabinet, and lanterns. The east door and the aisle to
+ * Coleman stay clear so the player can walk in and talk.
+ */
+function placeCellarFurniture(
+  bx: number,
+  by: number,
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  rng: () => number,
+  occupied: Set<string>,
+): SearchableObject[] {
+  const furnitures: SearchableObject[] = [];
+  let furnitureIndex = 0;
+
+  const shuffle = <T,>(list: T[]): T[] => {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = list[i]!;
+      list[i] = list[j]!;
+      list[j] = tmp;
+    }
+    return list;
+  };
+
+  const npcX = CELLAR_NPC_TILE_X;
+  const npcY = CELLAR_NPC_TILE_Y;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const tx = npcX + dx;
+      const ty = npcY + dy;
+      if (tx >= 0 && ty >= 0 && tx < iW && ty < iH) occupied.add(`${tx},${ty}`);
+    }
+  }
+  for (let tx = 0; tx < iW; tx++) occupied.add(`${tx},${npcY}`);
+
+  const blocksExit = (tx: number, ty: number): boolean => {
+    if (tx === exit.insideX && ty === exit.insideY) return true;
+    if (exit.face === "SE") {
+      if (tx >= iW - 3 && ty >= exit.alongMin - 1 && ty <= exit.alongMax + 1) {
+        return true;
+      }
+    } else if (ty >= iH - 3 && tx >= exit.alongMin - 1 && tx <= exit.alongMax + 1) {
+      return true;
+    }
+    return false;
+  };
+
+  const canPlace = (
+    objectType: string,
+    ox: number,
+    oy: number,
+    facing: FurnitureFacing,
+    reserveApproach: boolean,
+    doorClearance = true,
+  ): boolean => {
+    const { w, h } = furnitureFootprint(objectType, facing);
+    if (ox < 0 || oy < 0 || ox + w > iW || oy + h > iH) return false;
+    for (let ty = oy; ty < oy + h; ty++) {
+      for (let tx = ox; tx < ox + w; tx++) {
+        if (occupied.has(`${tx},${ty}`)) return false;
+        if (tx === exit.insideX && ty === exit.insideY) return false;
+        if (doorClearance && blocksExit(tx, ty)) return false;
+      }
+    }
+    if (!reserveApproach) return true;
+    const approaches = furnitureFrontApproachTiles({
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      facing,
+    });
+    if (approaches.length === 0) return false;
+    for (const t of approaches) {
+      if (t.x < 0 || t.y < 0 || t.x >= iW || t.y >= iH) return false;
+      if (occupied.has(`${t.x},${t.y}`)) return false;
+      if (blocksExit(t.x, t.y)) return false;
+    }
+    return true;
+  };
+
+  const commit = (
+    objectType: string,
+    ox: number,
+    oy: number,
+    facing?: FurnitureFacing,
+    opts?: { reserveApproach?: boolean; doorClearance?: boolean },
+  ): boolean => {
+    const face = facing ?? furnitureFacing(objectType);
+    const reserveApproach = opts?.reserveApproach !== false;
+    const doorClearance = opts?.doorClearance !== false;
+    if (!canPlace(objectType, ox, oy, face, reserveApproach, doorClearance)) {
+      return false;
+    }
+    const { w, h } = furnitureFootprint(objectType, face);
+    for (let ty = oy; ty < oy + h; ty++) {
+      for (let tx = ox; tx < ox + w; tx++) occupied.add(`${tx},${ty}`);
+    }
+    if (reserveApproach) {
+      for (const t of furnitureFrontApproachTiles({
+        kind: "furniture",
+        objectType,
+        x: ox,
+        y: oy,
+        facing: face,
+      })) {
+        occupied.add(`${t.x},${t.y}`);
+      }
+    }
+    furnitures.push({
+      id: interiorSearchableId(bx, by, "furniture", furnitureIndex++),
+      kind: "furniture",
+      objectType,
+      x: ox,
+      y: oy,
+      searched: false,
+      buildingX: bx,
+      buildingY: by,
+      facing: face,
+    });
+    return true;
+  };
+
+  const facingsFor = (objectType: FurnitureType): FurnitureFacing[] => {
+    if (
+      objectType === "cabinet" ||
+      objectType === "drawers" ||
+      objectType === "suitcase" ||
+      objectType === "footlocker" ||
+      objectType === "kitbag" ||
+      objectType === "lantern1"
+    ) {
+      return ["SE", "SW"];
+    }
+    return [furnitureFacing(objectType)];
+  };
+
+  const collectSpots = (
+    objectType: FurnitureType,
+    opts?: {
+      facing?: FurnitureFacing;
+      reserveApproach?: boolean;
+      doorClearance?: boolean;
+      wallOnly?: boolean;
+      westWall?: boolean;
+    },
+  ): { x: number; y: number; facing: FurnitureFacing }[] => {
+    const faces = opts?.facing ? [opts.facing] : facingsFor(objectType);
+    const reserveApproach = opts?.reserveApproach !== false;
+    const doorClearance = opts?.doorClearance !== false;
+    const spots: { x: number; y: number; facing: FurnitureFacing }[] = [];
+    for (const facing of faces) {
+      const { w, h } = furnitureFootprint(objectType, facing);
+      for (let y = 0; y <= iH - h; y++) {
+        for (let x = 0; x <= iW - w; x++) {
+          if (opts?.westWall && x !== 0) continue;
+          if (opts?.wallOnly && x !== 0 && y !== 0) continue;
+          if (!canPlace(objectType, x, y, facing, reserveApproach, doorClearance)) {
+            continue;
+          }
+          spots.push({ x, y, facing });
+        }
+      }
+    }
+    return spots;
+  };
+
+  const placeCount = (
+    objectType: FurnitureType,
+    count: number,
+    opts?: {
+      facing?: FurnitureFacing;
+      reserveApproach?: boolean;
+      doorClearance?: boolean;
+      wallOnly?: boolean;
+      westWall?: boolean;
+    },
+  ): number => {
+    if (count <= 0) return 0;
+    const spots = shuffle(collectSpots(objectType, opts));
+    let placed = 0;
+    for (const spot of spots) {
+      if (placed >= count) break;
+      if (
+        commit(objectType, spot.x, spot.y, spot.facing, {
+          reserveApproach: opts?.reserveApproach,
+          doorClearance: opts?.doorClearance,
+        })
+      ) {
+        placed++;
+      }
+    }
+    return placed;
+  };
+
+  const doorSides =
+    exit.face === "SE"
+      ? [
+          { x: exit.insideX, y: exit.alongMin - 1 },
+          { x: exit.insideX, y: exit.alongMax + 1 },
+        ]
+      : [
+          { x: exit.alongMin - 1, y: exit.insideY },
+          { x: exit.alongMax + 1, y: exit.insideY },
+        ];
+  for (const spot of doorSides) {
+    if (
+      commit("lantern1", spot.x, spot.y, "SE", {
+        reserveApproach: false,
+        doorClearance: false,
+      })
+    ) {
+      break;
+    }
+  }
+  const aisleLanterns: { x: number; y: number }[] = [
+    { x: 7, y: npcY - 1 },
+    { x: 7, y: npcY + 1 },
+  ];
+  shuffle(aisleLanterns);
+  for (const spot of aisleLanterns) {
+    commit("lantern1", spot.x, spot.y, rng() < 0.5 ? "SE" : "SW", {
+      reserveApproach: false,
+    });
+  }
+
+  placeCount("bigshelf", rng() < 0.35 ? 1 : 2, {
+    facing: "SE",
+    westWall: true,
+  });
+  placeCount("cabinet", rng() < 0.4 ? 1 : 2, { wallOnly: true });
+  if (rng() < 0.55) placeCount("drawers", 1, { wallOnly: true });
+  placeCount("bigbox", 2 + Math.floor(rng() * 3));
+  placeCount("watercontainer", rng() < 0.45 ? 1 : 2);
+  if (rng() < 0.5) placeCount("footlocker", 1);
+  if (rng() < 0.4) placeCount("suitcase", 1);
+  if (rng() < 0.3) placeCount("kitbag", 1);
+  if (rng() < 0.7) {
+    placeCount("lantern1", 1, { reserveApproach: false });
+  }
+
+  return furnitures;
+}
+
 export function generateInteriorContent(bx: number, by: number): {
   furnitures: SearchableObject[];
   zombieSpawns: { x: number; y: number }[];
@@ -13168,7 +13444,17 @@ export function generateInteriorContent(bx: number, by: number): {
   doors: { x: number; y: number }[];
 } {
   if (getCellarAt(bx, by)) {
-    return { furnitures: [], zombieSpawns: [], walls: [], doors: [] };
+    const { iW, iH } = interiorDimensions(bx, by);
+    const exit = interiorExitForBuildingAt(bx, by);
+    const occupied = new Set<string>();
+    const seed = xmur3(`interior_${bx},${by}`);
+    const rng = mulberry32(seed());
+    return {
+      furnitures: placeCellarFurniture(bx, by, iW, iH, exit, rng, occupied),
+      zombieSpawns: [],
+      walls: [],
+      doors: [],
+    };
   }
   const { iW, iH } = interiorDimensions(bx, by);
   const exit = interiorExitForBuildingAt(bx, by);

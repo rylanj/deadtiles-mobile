@@ -165,6 +165,7 @@ import {
   RED_ORDER_REP_START,
   RED_ORDER_FACTION,
   factionStanding,
+  factionStandingLabel,
   isMilitiaTalkSkin,
   isMilitiaDoctorSkin,
   isMilitiaNonCombatSkin,
@@ -264,6 +265,7 @@ import {
   stepBirchportMapChart,
   type QuestMapMarker,
   buildingEntranceRun,
+  buildingEntranceTiles,
   borderWallFootprint,
   borderWallsNear,
   getBorderWallAt,
@@ -348,6 +350,8 @@ import {
   type WorldRoom,
   type ZombieSchema,
 } from "../network/ColyseusClient";
+import { sendDeadmarkBuyback } from "../network/sendDeadmarks";
+import { DeadmarkWalletError } from "../network/solanaWallet";
 import { Client, getStateCallbacks } from "colyseus.js";
 import {
   applyIdleFrame,
@@ -357,6 +361,7 @@ import {
   BEAR_TILE_DROP_PX,
   RABBIT_TILE_DROP_PX,
   guardIdleAKKey,
+  placeholderManKey,
   playerManIdleKey,
   resetTreeFallFrameRequests,
   updateEntityVisual,
@@ -466,6 +471,9 @@ import {
   EXTERIOR_PURGE_BUILDINGS_PER_FRAME,
 } from "../gameConfig";
 import { isMobileDevice } from "../device";
+import "../ui/mobile/build.css";
+import "../ui/mobile/alerts.css";
+import { sheetCloseButton } from "../ui/mobileSheet";
 
 type StoryInspectCandidate = {
   id: string;
@@ -740,6 +748,10 @@ export class WorldScene extends Phaser.Scene {
   private guardSprites = new Map<string, EntitySprite>();
   /** Local /godmode — sprite AABB + id overlay. */
   private godModeDebug = false;
+  /** Player ids hidden by admin /spectate. Includes the local player. */
+  private spectatingPlayerIds = new Set<string>();
+  /** Ignores a second /hud from a duplicated chat listener in the same press. */
+  private lastHudToggleAt = 0;
   /** Local /build — place temporary interior partition walls. */
   private buildMode = false;
   /** Admin-placed walls keyed by buildingKey (in-memory mirror of server). */
@@ -767,6 +779,17 @@ export class WorldScene extends Phaser.Scene {
   private bKey?: Phaser.Input.Keyboard.Key;
   private bKeyWasDown = false;
   private structureBuildHudEl?: HTMLElement;
+  private structureBuildTray?: {
+    title: HTMLElement;
+    costs: HTMLElement;
+    note: HTMLElement;
+    cards: HTMLElement;
+    storageBtn: HTMLButtonElement;
+    takeDownBtn: HTMLButtonElement;
+    rotateBtn: HTMLButtonElement;
+    storage: boolean;
+    paintKey?: string;
+  };
   private structureBuildWallBtn?: HTMLButtonElement;
   private structureBuildDoorBtn?: HTMLButtonElement;
   private structureBuildFireplaceBtn?: HTMLButtonElement;
@@ -864,7 +887,7 @@ export class WorldScene extends Phaser.Scene {
   private lastTreeChopClickAt = 0;
   /** Last time we sent chopTree while pursuing — retry if the server ignored us. */
   private treeChopStartSentAt = 0;
-  /** Named grave the player clicked. Walk up, then inspect for 5s. */
+  /** Named grave the player clicked. Walk up, then inspect for 3s. */
   private graveInspectTargetTile: { x: number; y: number } | null = null;
   private graveInspectApproachTile: { x: number; y: number } | null = null;
   private graveInspectSprint = false;
@@ -905,6 +928,8 @@ export class WorldScene extends Phaser.Scene {
   private aimHeld = false;
   /** Mobile has no CTRL key — the HUD aim button latches the same state. */
   private mobileAimLatched = false;
+  /** WASD / stick cancelled this CTRL-hold. Aim again only after CTRL is released. */
+  private aimBrokeByMove = false;
   /** 8-way facing from mouse while CTRL-aiming. Null when not aiming. */
   private localAimFacing: number | null = null;
   private lastSentAimLookFacing = -1;
@@ -1042,6 +1067,9 @@ export class WorldScene extends Phaser.Scene {
   private factionAttackWarningsShown = new Set<
     "ashen" | "ashenMilitia" | "redOrder"
   >();
+  private pendingFactionWarningKey: "ashen" | "ashenMilitia" | "redOrder" | null = null;
+  /** Where the local player last died, pinned on the map while the corpse lasts. */
+  private deathBody: { x: number; y: number; until: number } | null = null;
   /** Faint copy of the local player, drawn above buildings, trees, and walls. */
   private playerOccludedGhost?: PlayerOccludedGhost;
   private entityActionLabels?: EntityActionLabelManager;
@@ -1779,11 +1807,14 @@ export class WorldScene extends Phaser.Scene {
 
   /** CTRL held (or the mobile aim button latched) with a weapon → aim stance. */
   private handleAimInput() {
+    if (!this.ctrlKey?.isDown) this.aimBrokeByMove = false;
     if (this.mobileAimLatched && !this.canHoldAimStance()) {
       this.mobileAimLatched = false;
     }
     const wantAim =
-      (this.mobileAimLatched || !!this.ctrlKey?.isDown) && this.canHoldAimStance();
+      !this.aimBrokeByMove &&
+      (this.mobileAimLatched || !!this.ctrlKey?.isDown) &&
+      this.canHoldAimStance();
     if (wantAim !== this.aimHeld) {
       this.setAimHeld(wantAim);
       this.refreshMobileAimButton();
@@ -1825,6 +1856,9 @@ export class WorldScene extends Phaser.Scene {
       this.clearTreeChopTarget();
       this.clearGraveInspectTarget();
       this.stopPlayerMovement();
+      // Drop leftover WASD / stick so walking into aim does not cancel it immediately.
+      this.clearHeldMoveKeys();
+      if (this.moveStickPointerId !== null) this.releaseMoveStick();
     } else {
       this.localAimFacing = null;
       this.lastSentAimLookFacing = -1;
@@ -1890,6 +1924,12 @@ export class WorldScene extends Phaser.Scene {
   private chatBarEl: HTMLElement | null = null;
   private chatInputEl: HTMLInputElement | null = null;
   private chatOpen = false;
+  /** Phone chat: recent lines, channel tabs, and the keyboard-aware position. */
+  private chatLog: ChatBroadcast[] = [];
+  private chatLogEl: HTMLElement | null = null;
+  private chatTabsEl: HTMLElement | null = null;
+  private chatChannel: "nearby" | "radio" = "nearby";
+  private chatViewportUnbind: (() => void) | null = null;
   private chatBubbles = new Map<
     string,
     {
@@ -2041,6 +2081,13 @@ export class WorldScene extends Phaser.Scene {
         this.journalUI?.close();
         this.onboardingUI?.replay();
       },
+      canShowMap: () => this.playerHasMapItem(),
+      onShowOnMap: (x, y) => {
+        if (!this.playerHasMapItem()) return;
+        if (!this.mapOverlayUI?.isOpen()) this.toggleMapOverlay();
+        this.mapOverlayUI?.focusOn(x, y);
+        this.refreshMapOverlay();
+      },
     });
     this.containerLootUI = new ContainerLootUI({
       onTakeFromContainer: (containerId, fromSlot, toSlot) =>
@@ -2110,6 +2157,10 @@ export class WorldScene extends Phaser.Scene {
       onPayDeposit: (traderId) => this.requestSafeDepositPay(traderId),
       onRequestWire: (traderId) => this.sendWireQuote(traderId),
       onConfirmWire: (traderId, notes) => this.sendWireConfirm(traderId, notes),
+      onRequestBuyback: (traderId) => this.sendBuybackQuote(traderId),
+      onPurchaseBuyback: (traderId, notes) => this.sendBuybackPurchase(traderId, notes),
+      onCollectBuyback: (traderId, claimId) => this.sendBuybackCollect(traderId, claimId),
+      onCancelBuyback: (traderId, claimId) => this.sendBuybackCancel(traderId, claimId),
       onAcceptQuest: (questId) =>
         this.sendQuestAccept(questId, this.ashenTraderDialogUI?.getNpcId()),
       onCompleteTask: (taskId) => this.sendAshenTraderCompleteTask(taskId),
@@ -2138,13 +2189,23 @@ export class WorldScene extends Phaser.Scene {
     if (gameEl) this.damageOverlay = new DamageOverlay(gameEl);
     this.lootPopup = new LootPopup();
     this.factionAttackWarningUI = new FactionAttackWarningUI({
-      onClose: () => {},
+      onDecision: (attack) => {
+        const key = this.pendingFactionWarningKey;
+        this.pendingFactionWarningKey = null;
+        if (!attack && key) this.factionAttackWarningsShown.delete(key);
+      },
     });
     this.deathScreenUI = new DeathScreenUI({
       onRespawn: () => this.requestRespawn(),
     });
     this.onboardingUI = new OnboardingUI({
       send: (payload) => this.sendTutorialUpdate(payload),
+      openBag: () => {
+        if (!this.inventoryUI?.isOpen()) this.toggleInventoryOverlay();
+      },
+      openJournal: () => {
+        if (!this.journalUI?.isOpen()) this.toggleJournalOverlay();
+      },
     });
     this.doorCodeUI = new DoorCodeUI({
       onSubmitEnterCode: (code) => {
@@ -2432,7 +2493,7 @@ export class WorldScene extends Phaser.Scene {
       // (world origin from centerWorld) and later idle syncs think they are done.
       this.centerCameraOnLocalPlayer();
       this.cameras.main.preRender();
-      // Reveal only after packs are ready so Ashen traders never flash as MilitiaGuard1.
+      // Reveal only after packs are ready so nearby NPCs do not flash the placeholder.
       this.worldRevealReady = true;
       this.bindRoom(room);
       // Structure / temp-wall sync is sent from onJoin and again on clientReady.
@@ -2595,6 +2656,20 @@ export class WorldScene extends Phaser.Scene {
             pending: msg.payload.pending === true,
             reason: msg.payload.reason ?? "",
           });
+        } else if (msg.type === "buybackQuote" || msg.type === "buybackResult") {
+          this.ashenTraderDialogUI?.applyBuyback(
+            msg.payload,
+            msg.type === "buybackResult"
+              ? { ok: msg.payload.ok === true, reason: msg.payload.reason ?? "" }
+              : undefined,
+          );
+        } else if (msg.type === "buybackPrepared") {
+          this.ashenTraderDialogUI?.noteBuyback("Approve the transfer in your wallet.", {
+            busy: true,
+            signing: true,
+          });
+          this.ashenTraderDialogUI?.applyBuyback(msg.payload);
+          void this.beginBuybackTransfer(msg.payload);
         } else if (msg.type === "questSync") {
           this.applyQuestSync(msg.payload.questsJson);
         } else if (msg.type === "skillSync") {
@@ -2686,7 +2761,7 @@ export class WorldScene extends Phaser.Scene {
                 id: item.id,
                 name: item.name,
                 quantity: item.quantity,
-                hideQuantity: item.quantity <= 1,
+                hideQuantity: item.id === "rep" ? false : item.quantity <= 1,
               })),
               { header: text, durationMs },
             );
@@ -2753,6 +2828,9 @@ export class WorldScene extends Phaser.Scene {
 
       room.onMessage("chat", (msg: ChatBroadcast) => {
         this.showChatBubble(msg.senderId, msg.text, msg.tone === "action");
+        this.chatLog.push(msg);
+        if (this.chatLog.length > 40) this.chatLog.splice(0, this.chatLog.length - 40);
+        if (this.chatOpen && this.chatLogEl) this.renderPhoneChat();
         if (msg.channel === "radio") {
           const sprite = this.getEntitySprite(msg.senderId);
           if (!sprite?.visible) {
@@ -2782,6 +2860,21 @@ export class WorldScene extends Phaser.Scene {
       room.onMessage("godmode", (msg: { enabled?: boolean }) => {
         this.godModeDebug = msg.enabled === true;
         if (!this.godModeDebug) this.clearEntitySpriteBoundsDebug();
+      });
+
+      room.onMessage("spectate", (msg: { playerId?: string; enabled?: boolean }) => {
+        this.setPlayerSpectating(msg.playerId, msg.enabled === true);
+      });
+      room.onMessage("spectateSync", (msg: { ids?: unknown }) => {
+        const ids = Array.isArray(msg.ids)
+          ? msg.ids.filter((id): id is string => typeof id === "string")
+          : [];
+        const touched = new Set<string>([...this.spectatingPlayerIds, ...ids]);
+        this.spectatingPlayerIds = new Set(ids);
+        for (const id of touched) {
+          const sprite = this.playerSprites.get(id);
+          if (sprite) this.updateEntityFromState(sprite, "player", id);
+        }
       });
 
       room.onMessage("buildMode", (msg: { enabled?: boolean }) => {
@@ -3097,6 +3190,7 @@ export class WorldScene extends Phaser.Scene {
 
   shutdown() {
     this.dismissWorldPageUi();
+    this.detachChatBar();
     document.removeEventListener("keydown", this.onFieldKeyDown);
     document.removeEventListener("keyup", this.onFieldKeyUp);
     this.events.off(
@@ -3231,6 +3325,7 @@ export class WorldScene extends Phaser.Scene {
     this.entityActionLabels?.destroy();
     this.moveTargetOcclusionMask?.destroy();
     this.godModeDebug = false;
+    this.spectatingPlayerIds.clear();
     this.buildMode = false;
     this.tempInteriorWallsByBuilding.clear();
     this.clearOverworldTempWallSprites();
@@ -3272,6 +3367,7 @@ export class WorldScene extends Phaser.Scene {
     this.doorCodeUI?.destroy();
     this.structureBuildHudEl?.remove();
     this.structureBuildHudEl = undefined;
+    this.structureBuildTray = undefined;
     this.clearBuildModePreview();
     this.clearEntitySpriteBoundsDebug();
     this.entityBoundsGfx?.destroy();
@@ -3660,6 +3756,7 @@ export class WorldScene extends Phaser.Scene {
       this.mobileBuildBtn.hidden = !this.playerHasHammerEquipped();
     }
     this.closeStructureBuildWithoutHammer();
+    this.paintStructureBuildTray();
 
     this.refreshMobileAimButton();
 
@@ -3835,45 +3932,161 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private setupChatBar() {
+    this.detachChatBar();
     this.chatBarEl = document.getElementById("chat-bar");
     this.chatInputEl = document.getElementById("chat-input") as HTMLInputElement | null;
     const chatSendEl = document.getElementById("chat-send");
 
-    // Enter key on the canvas/document opens the chat bar
+    // Enter key on the canvas/document opens the chat bar.
+    // Remove first: create() runs again after leaving and rejoining, and a
+    // second listener would toggle /hud off in the same keypress.
     document.addEventListener("keydown", this.onDocumentKeyDown);
     // Phaser preventDefault on captured keys (hotbar 1 and 2, unequip 0) otherwise
     // eats those digits before a number field can show them.
+    document.removeEventListener("keydown", this.onFieldKeyDown);
+    document.removeEventListener("keyup", this.onFieldKeyUp);
     document.addEventListener("keydown", this.onFieldKeyDown);
     document.addEventListener("keyup", this.onFieldKeyUp);
 
-    const submitChat = () => {
-      const text = this.chatInputEl?.value.trim() ?? "";
-      this.closeChatBar();
-      if (text) this.sendChatMessage(text);
-    };
-
-    this.chatInputEl?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopPropagation();
-        submitChat();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        this.closeChatBar();
-      }
-      // Prevent game keys from firing while typing
-      e.stopPropagation();
-    });
-
-    chatSendEl?.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      submitChat();
-    });
+    this.chatInputEl?.addEventListener("keydown", this.onChatInputKeyDown);
+    chatSendEl?.addEventListener("click", this.onChatSendClick);
 
     if (IS_MOBILE && chatSendEl) {
       chatSendEl.textContent = "Send";
+      this.setupPhoneChat(chatSendEl);
     }
+  }
+
+  /** Phone chat panel: Nearby / Radio tabs, ✕, the last few lines, then the field. */
+  private setupPhoneChat(sendEl: HTMLElement) {
+    const bar = this.chatBarEl;
+    const input = this.chatInputEl;
+    if (!bar || !input) return;
+    const head = document.createElement("div");
+    head.className = "chat-phone-head";
+    const tabs = document.createElement("div");
+    tabs.className = "ms-tabs chat-phone-tabs";
+    const close = sheetCloseButton(() => this.closeChatBar());
+    close.addEventListener("pointerdown", (event) => event.preventDefault());
+    head.append(tabs, close);
+    this.chatTabsEl = tabs;
+    const oldHead = bar.querySelector(".chat-phone-head");
+    const oldLog = bar.querySelector<HTMLElement>(".chat-phone-log");
+    if (oldHead && oldLog) {
+      // Rejoin: the bar is already split up, but its ✕ still points at the old scene.
+      oldHead.replaceWith(head);
+      this.chatLogEl = oldLog;
+      return;
+    }
+    bar.classList.add("chat-bar--phone");
+    const log = document.createElement("div");
+    log.className = "chat-phone-log";
+    const row = document.createElement("div");
+    row.className = "chat-phone-row";
+    row.append(input, sendEl);
+    bar.replaceChildren(head, log, row);
+    this.chatLogEl = log;
+  }
+
+  private renderPhoneChat() {
+    const tabs = this.chatTabsEl;
+    const log = this.chatLogEl;
+    if (!tabs || !log) return;
+    const freq = this.localRadioFreq();
+    if (freq <= 0 && this.chatChannel === "radio") this.chatChannel = "nearby";
+    const tab = (id: "nearby" | "radio", label: string, disabled: boolean) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = this.chatChannel === id ? "ms-tab ms-tab--on" : "ms-tab";
+      btn.textContent = label;
+      btn.disabled = disabled;
+      btn.addEventListener("pointerdown", (event) => event.preventDefault());
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.chatChannel = id;
+        this.renderPhoneChat();
+      });
+      return btn;
+    };
+    tabs.replaceChildren(
+      tab("nearby", "Nearby", false),
+      tab("radio", freq > 0 ? `Radio ${freq}` : "No radio", freq <= 0),
+    );
+    if (this.chatInputEl) {
+      this.chatInputEl.placeholder =
+        this.chatChannel === "radio" ? `Talk on ${freq}…` : "Say something nearby…";
+    }
+    const lines = this.chatLog
+      .filter((msg) => (this.chatChannel === "radio" ? msg.channel === "radio" : msg.channel !== "radio"))
+      .slice(-4);
+    log.replaceChildren();
+    log.hidden = lines.length === 0;
+    for (const msg of lines) {
+      const line = document.createElement("div");
+      line.className = msg.tone === "action" ? "chat-phone-line chat-phone-line--action" : "chat-phone-line";
+      if (msg.senderId === this.sessionId) {
+        const name = document.createElement("b");
+        name.className = "chat-phone-you";
+        name.textContent = "You";
+        line.append(name, ` ${msg.text}`);
+      } else {
+        line.textContent = msg.text;
+      }
+      log.append(line);
+    }
+  }
+
+  /** Keep the open chat above the on-screen keyboard. */
+  private bindChatViewport() {
+    const vv = window.visualViewport;
+    const bar = this.chatBarEl;
+    if (!vv || !bar || this.chatViewportUnbind) return;
+    const sync = () => {
+      const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      bar.style.setProperty("--chat-kb", `${Math.round(covered)}px`);
+    };
+    vv.addEventListener("resize", sync);
+    vv.addEventListener("scroll", sync);
+    sync();
+    this.chatViewportUnbind = () => {
+      vv.removeEventListener("resize", sync);
+      vv.removeEventListener("scroll", sync);
+      bar.style.removeProperty("--chat-kb");
+    };
+  }
+
+  private detachChatBar() {
+    document.removeEventListener("keydown", this.onDocumentKeyDown);
+    this.chatInputEl?.removeEventListener("keydown", this.onChatInputKeyDown);
+    document.getElementById("chat-send")?.removeEventListener("click", this.onChatSendClick);
+  }
+
+  private readonly onChatInputKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.submitChat();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      this.closeChatBar();
+    }
+    // Prevent game keys from firing while typing
+    e.stopPropagation();
+  };
+
+  private readonly onChatSendClick = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    this.submitChat();
+  };
+
+  private submitChat() {
+    let text = this.chatInputEl?.value.trim() ?? "";
+    this.closeChatBar();
+    if (text && this.chatLogEl && this.chatChannel === "radio" && !text.startsWith("/")) {
+      text = `/radio ${text}`;
+    }
+    if (text) this.sendChatMessage(text);
   }
 
   private isTextField(target: EventTarget | null): boolean {
@@ -3975,6 +4188,11 @@ export class WorldScene extends Phaser.Scene {
         this.journalUI.close();
         return;
       }
+      if (this.inventoryUI?.isReading()) {
+        e.preventDefault();
+        this.inventoryUI.closeRead();
+        return;
+      }
       if (this.inventoryUI?.isOpen()) {
         e.preventDefault();
         this.inventoryUI.close();
@@ -4020,12 +4238,18 @@ export class WorldScene extends Phaser.Scene {
     this.chatBarEl.classList.add("chat-bar--open");
     document.body.classList.add("chat-open");
     this.chatInputEl.value = "";
+    if (this.chatLogEl) {
+      this.renderPhoneChat();
+      this.bindChatViewport();
+    }
     // Small delay so the Enter keypress doesn't bubble into the input
     setTimeout(() => this.chatInputEl?.focus(), 30);
   }
 
   private closeChatBar() {
     if (!this.chatBarEl) return;
+    this.chatViewportUnbind?.();
+    this.chatViewportUnbind = null;
     this.chatOpen = false;
     this.chatBarEl.classList.remove("chat-bar--open");
     document.body.classList.remove("chat-open");
@@ -4036,8 +4260,48 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private sendChatMessage(text: string) {
+    if (text.trim().toLowerCase() === "/hud") {
+      this.toggleHudHidden();
+      return;
+    }
     if (!this.room) return;
     this.room.send("chat", { text });
+  }
+
+  private ensureHudHiddenStyle() {
+    if (document.getElementById("hud-hidden-style")) return;
+    const style = document.createElement("style");
+    style.id = "hud-hidden-style";
+    style.textContent = `
+      html.hud-hidden #player-hud,
+      html.hud-hidden #weapon-hotbar,
+      html.hud-hidden #world-clock,
+      html.hud-hidden #mobile-hud-stack,
+      html.hud-hidden #move-stick,
+      html.hud-hidden #search-progress,
+      html.hud-hidden #structure-build-hud,
+      html.hud-hidden #combat-lock-banner,
+      html.hud-hidden #loot-popup-container,
+      html.hud-hidden #radio-caption,
+      html.hud-hidden #tutorial-stack,
+      html.hud-hidden #damage-overlay,
+      html.hud-hidden #temperature-fx,
+      html.hud-hidden #infection-fx {
+        display: none !important;
+        visibility: hidden !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  private toggleHudHidden() {
+    const now = performance.now();
+    if (now - this.lastHudToggleAt < 50) return;
+    this.lastHudToggleAt = now;
+    this.ensureHudHiddenStyle();
+    const hidden = !document.documentElement.classList.contains("hud-hidden");
+    document.documentElement.classList.toggle("hud-hidden", hidden);
+    document.body.classList.toggle("hud-hidden", hidden);
   }
 
   private showRadioCaption(text: string, action = false) {
@@ -4933,6 +5197,179 @@ export class WorldScene extends Phaser.Scene {
     this.structureBuildStorageBoxBtn = storageBoxBtn;
     this.structureBuildStorageBox2Btn = storageBox2Btn;
     this.structureBuildDeconstructBtn = deconstructBtn;
+    if (isMobileDevice()) this.setupStructureBuildTray(hud);
+  }
+
+  /** Phone build mode: top banner with have / need, bottom tray of cards, Rotate and Done. */
+  private setupStructureBuildTray(hud: HTMLElement) {
+    hud.classList.add("sb-phone");
+    const el = (tag: string, cls: string, text = "") => {
+      const node = document.createElement(tag);
+      node.className = cls;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const tapBtn = (cls: string, text: string, onTap: () => void) => {
+      const btn = el("button", cls, text) as HTMLButtonElement;
+      btn.type = "button";
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.releaseStolenTouchInput({ swallowTapMs: 280 });
+        onTap();
+      });
+      return btn;
+    };
+
+    const banner = el("div", "sb-m sb-banner");
+    const title = el("div", "sb-title");
+    const costs = el("div", "sb-costs");
+    const note = el("div", "sb-note");
+    banner.append(title, costs, note);
+
+    const thumbs = el("div", "sb-m sb-thumbs");
+    const rotateBtn = tapBtn("sb-thumb", "⟳ Rotate", () => {
+      if (!isStructurePanelKind(this.structureBuildKind)) return;
+      this.structureFenceFacing = nextStructureFenceFacing(this.structureFenceFacing);
+      this.updateStructureBuildHud();
+    });
+    const doneBtn = tapBtn("sb-thumb sb-thumb--done", "Done", () => {
+      if (this.structureBuildMode) this.toggleStructureBuildMode();
+    });
+    thumbs.append(rotateBtn, doneBtn);
+
+    const tray = el("div", "sb-m sb-tray");
+    const cards = el("div", "sb-cards");
+    const row = el("div", "sb-tray-row");
+    const storageBtn = tapBtn("sb-tray-btn", "", () => {
+      const t = this.structureBuildTray;
+      if (!t) return;
+      t.storage = !t.storage;
+      const first = t.storage ? "storage_box" : "wall";
+      this.structureBuildKind = first;
+      this.updateStructureBuildHud();
+    });
+    const takeDownBtn = tapBtn("sb-tray-btn sb-tray-btn--danger", "Take down", () => {
+      this.structureBuildKind =
+        this.structureBuildKind === "deconstruct"
+          ? this.structureBuildTray?.storage
+            ? "storage_box"
+            : "wall"
+          : "deconstruct";
+      this.updateStructureBuildHud();
+    });
+    row.append(storageBtn, takeDownBtn);
+    tray.append(cards, row);
+    hud.append(banner, thumbs, tray);
+    this.structureBuildTray = {
+      title,
+      costs,
+      note,
+      cards,
+      storageBtn,
+      takeDownBtn,
+      rotateBtn,
+      storage: false,
+    };
+  }
+
+  private paintStructureBuildTray() {
+    const t = this.structureBuildTray;
+    if (!t || !this.structureBuildMode) return;
+    const kind = this.structureBuildKind;
+    if (kind === "storage_box" || kind === "storage_box_2") t.storage = true;
+    else if (kind !== "deconstruct") t.storage = false;
+
+    const pieces: { kind: StructureBuildKind; name: string; icon: string }[] = t.storage
+      ? [
+          { kind: "storage_box", name: "Storage Box", icon: "/assets/Furniture/StorageBox1/StorageBox1_Inactive_SE.png" },
+          { kind: "storage_box_2", name: "Storage Box 2", icon: "/assets/Furniture/StorageBox2/StorageBox2_Inactive_SE.png" },
+        ]
+      : [
+          { kind: "wall", name: "Wall", icon: "/assets/Buildings/Wall1.png" },
+          { kind: "door", name: "Door", icon: "/assets/Buildings/Door1.png" },
+          { kind: "fireplace", name: "Fireplace", icon: "/assets/Furniture/Fireplace1/Fireplace1_Inactive_SE.png" },
+          { kind: "fence", name: "Fence", icon: "/assets/Fence/ChainLinkFence1_SE.png" },
+          { kind: "bargate", name: "Bargate", icon: "/assets/Fence/Bargate1_Idle_SE.png" },
+        ];
+
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const inventoryJson = me ? (this.localInventorySync?.inventoryJson ?? me.inventoryJson) : "[]";
+    const key = `${t.storage}|${kind}`;
+    const paintKey = `${key}|${inventoryJson}`;
+    if (t.paintKey === paintKey) return;
+    t.paintKey = paintKey;
+    const inventory = this.readLocalInventory(inventoryJson);
+    const have = (itemId: string) => countItemInInventory(inventory, itemId);
+
+    if (t.cards.dataset.key !== key) {
+      t.cards.dataset.key = key;
+      t.cards.replaceChildren();
+      for (const piece of pieces) {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = `sb-card${piece.kind === kind ? " sb-card--on" : ""}`;
+        const img = document.createElement("img");
+        img.src = piece.icon;
+        img.alt = "";
+        img.draggable = false;
+        const name = document.createElement("span");
+        name.className = "sb-card-name";
+        name.textContent = piece.name;
+        const cost = document.createElement("small");
+        cost.className = "sb-card-cost";
+        cost.textContent = getStructureBuildCosts(piece.kind)
+          .map((line) => line.quantity)
+          .join(" · ");
+        card.append(img, name, cost);
+        card.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.releaseStolenTouchInput({ swallowTapMs: 280 });
+          this.structureBuildKind = piece.kind;
+          this.updateStructureBuildHud();
+        });
+        t.cards.append(card);
+      }
+    }
+    t.storageBtn.textContent = t.storage ? "‹ Walls and fences" : "Storage boxes ›";
+    t.takeDownBtn.classList.toggle("sb-tray-btn--on", kind === "deconstruct");
+    t.takeDownBtn.textContent = kind === "deconstruct" ? "Stop taking down" : "Take down";
+    t.rotateBtn.hidden = kind === "deconstruct" || !isStructurePanelKind(kind);
+
+    if (kind === "deconstruct") {
+      t.title.textContent = "Take down";
+      t.title.append(this.structureBuildSubSpan("tap something you built"));
+      t.costs.textContent = "You get half the materials back.";
+      t.note.textContent = "";
+      return;
+    }
+    const piece = pieces.find((p) => p.kind === kind);
+    t.title.textContent = piece?.name ?? "Build";
+    t.title.append(
+      this.structureBuildSubSpan(
+        kind === "door" ? "tap between two walls" : "tap a tile to place",
+      ),
+    );
+    t.costs.replaceChildren();
+    let short = false;
+    getStructureBuildCosts(kind).forEach((line, i) => {
+      const owned = have(line.itemId);
+      if (owned < line.quantity) short = true;
+      if (i > 0) t.costs.append(" · ");
+      const b = document.createElement("b");
+      b.className = owned >= line.quantity ? "sb-ok" : "sb-warn";
+      b.textContent = `${owned}/${line.quantity}`;
+      t.costs.append(`${getItemDefinition(line.itemId)?.name ?? line.itemId} `, b);
+    });
+    t.note.textContent = short ? "You can place it now and add the rest later." : "";
+  }
+
+  private structureBuildSubSpan(text: string): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "sb-sub";
+    span.textContent = ` · ${text}`;
+    return span;
   }
 
   private updateStructureBuildHud() {
@@ -4998,6 +5435,7 @@ export class WorldScene extends Phaser.Scene {
         cost.textContent = `Costs: ${lines}`;
       }
     }
+    this.paintStructureBuildTray();
     if (this.structureBuildMode) this.updateBuildModeHover();
   }
 
@@ -5086,7 +5524,12 @@ export class WorldScene extends Phaser.Scene {
       markers,
       this.tileManager?.getMinimapKinds() ?? new Map(),
       this.mapSettlementCache.labels,
-      this.activeQuestMapMarkers(),
+      this.deathBody && Date.now() < this.deathBody.until
+        ? [
+            ...this.activeQuestMapMarkers(),
+            { questId: "__body", title: "Your body", x: this.deathBody.x, y: this.deathBody.y },
+          ]
+        : this.activeQuestMapMarkers(),
       this.activeRadioPings(),
     );
   }
@@ -5346,6 +5789,11 @@ export class WorldScene extends Phaser.Scene {
       questsJson,
       skillsJson,
       equippedJewelrySkillXp(parseInventory(inventoryJson)),
+      {
+        ashenMilitia: me.ashenMilitiaReputation ?? ASHEN_REP_START,
+        ashenTraders: me.ashenReputation ?? ASHEN_REP_START,
+        redOrder: me.redOrderReputation ?? RED_ORDER_REP_START,
+      },
     );
     const key = `${questsJson}|${skillsJson}`;
     if (key === this.lastQuestUiKey) return;
@@ -7706,7 +8154,9 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * If standing at the door-front tile centre, interact and clear the pursuit.
-   * Returns false (without clearing) when not yet close enough.
+   * `adjacentOk` also accepts any neighbouring tile, which is the server rule
+   * and what the E key uses. Returns false (without clearing) when not yet
+   * close enough.
    */
   private tryStartDoorInteract(
     me: {
@@ -7719,13 +8169,16 @@ export class WorldScene extends Phaser.Scene {
     tx: number,
     ty: number,
     door: InteriorDoorTile,
+    adjacentOk = false,
   ): boolean {
     if (!this.room) return false;
     const goal = this.doorApproachGoal(me, tx, ty);
-    if (!goal) return false;
-    if (Math.hypot(me.x - goal.x, me.y - goal.y) > PATH_ARRIVAL) {
-      return false;
-    }
+    const atStand =
+      !!goal && Math.hypot(me.x - goal.x, me.y - goal.y) <= PATH_ARRIVAL;
+    const beside =
+      Math.max(Math.abs(Math.floor(me.x) - tx), Math.abs(Math.floor(me.y) - ty)) <=
+      1;
+    if (!atStand && !(adjacentOk && beside)) return false;
 
     // In range but already busy: keep the current action. Returning true
     // stops the click from sending a new move, which would cancel a pick.
@@ -8030,17 +8483,45 @@ export class WorldScene extends Phaser.Scene {
     return true;
   }
 
-  private tryStartBargateInteract(me: { x: number; y: number }): boolean {
+  /** Same reach the server uses for opening the barracks bargate. */
+  private playerNearBarracksBargate(me: { x: number; y: number }): boolean {
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    for (const t of [
+      birchportBarracksBargateOutsideStand(),
+      birchportBarracksBargateInsideStand(),
+    ]) {
+      if (Math.max(Math.abs(ptx - t.x), Math.abs(pty - t.y)) <= 1) return true;
+    }
+    if (birchportBarracksBargateOccupiesTile(ptx, pty)) return true;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        if (birchportBarracksBargateOccupiesTile(ptx + dx, pty + dy)) return true;
+      }
+    }
+    return false;
+  }
+
+  private tryStartBargateInteract(
+    me: { x: number; y: number },
+    nearbyOk = false,
+  ): boolean {
     if (!this.room) return false;
-    const goal = this.bargateApproachGoal(me);
-    if (Math.hypot(me.x - goal.x, me.y - goal.y) > PATH_ARRIVAL) {
-      return false;
+    if (nearbyOk) {
+      if (!this.playerNearBarracksBargate(me)) return false;
+    } else {
+      const goal = this.bargateApproachGoal(me);
+      if (Math.hypot(me.x - goal.x, me.y - goal.y) > PATH_ARRIVAL) {
+        return false;
+      }
     }
 
     this.clearBargateTarget();
     const now = Date.now();
     if (now - this.lastBargateEnterAt < 500) return true;
     this.lastBargateEnterAt = now;
+    this.releaseHeldSteer();
     this.playBarracksBargateOpen(BIRCHPORT_BARRACKS_BARGATE.facing);
     const message: ClientMessage = { type: "enterBarracksBargate" };
     this.room.send("action", message);
@@ -9842,10 +10323,9 @@ export class WorldScene extends Phaser.Scene {
       if (!cellarDoor) {
         const bld = getBuildingAt(clickTX, clickTY);
         if (bld) {
-          const run = buildingEntranceRun(bld);
-          const mid = (run.span - 1) * 0.5;
-          tileX = run.x + 0.5 + (run.face === "SE" ? 0 : mid);
-          tileY = run.y + 0.5 + (run.face === "SE" ? mid : 0);
+          const door = this.buildingDoorwayPoint(bld);
+          tileX = door.x;
+          tileY = door.y;
         } else {
           const approach = blockedTileApproachGoal(
             me?.x ?? clickTX + 0.5,
@@ -11110,8 +11590,24 @@ export class WorldScene extends Phaser.Scene {
     if (standing === "hostile" || standing === "exiled") return false;
 
     this.factionAttackWarningsShown.add(factionKey);
+    this.pendingFactionWarningKey = factionKey;
     this.clearCombatTarget();
-    this.factionAttackWarningUI?.show(factionName);
+    this.factionAttackWarningUI?.show({
+      factionName,
+      targetLabel:
+        factionKey === "ashen"
+          ? "an Ashen Trader"
+          : factionKey === "redOrder"
+            ? "the Red Order"
+            : `the ${factionName}`,
+      standingLabel: factionStandingLabel(standing),
+      closes:
+        factionKey === "ashen"
+          ? "Trade, wire and jobs"
+          : factionKey === "ashenMilitia"
+            ? "Talking and the barracks"
+            : "Their jobs",
+    });
     return true;
   }
 
@@ -11166,6 +11662,20 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private showDeathScreen() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    let itemCount = 0;
+    if (me) {
+      this.deathBody = {
+        x: me.inInterior ? me.overworldX : me.x,
+        y: me.inInterior ? me.overworldY : me.y,
+        until: Date.now() + 60 * 60 * 1000,
+      };
+      const inventory = this.readLocalInventory(
+        this.localInventorySync?.inventoryJson ?? me.inventoryJson,
+      );
+      itemCount = inventory.filter((slot) => !!slot).length;
+    }
+    this.deathScreenUI?.setDetails({ itemCount });
     this.clearCombatTarget();
     this.clearInteractTarget();
     this.clearLootTarget();
@@ -11304,11 +11814,26 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  /** Server steer keeps moving for a short time after the key is released. */
+  private releaseHeldSteer() {
+    if (!this.room) return;
+    this.steerActive = false;
+    this.lastSteerX = 0;
+    this.lastSteerY = 0;
+    this.lastSteerSprint = false;
+    this.lastSteerSentAt = Date.now();
+    this.room.send("action", {
+      type: "steer",
+      payload: { dirX: 0, dirY: 0, sprint: false },
+    } satisfies ClientMessage);
+  }
+
   /** Halt path-following immediately (server + optimistic local idle). */
   private stopPlayerMovement() {
     if (!this.room) return;
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me) return;
+    this.releaseHeldSteer();
 
     // stopOnly: do not treat "stand still on exit tile" as an intentional leave.
     this.room.send("action", {
@@ -11372,6 +11897,20 @@ export class WorldScene extends Phaser.Scene {
       optimistic,
     };
     this.lastSearchProgressPct = -1;
+    if (kind !== "craft") this.closeSheetsForTimedAction();
+  }
+
+  /**
+   * Drink, eat, bandage, unload, reload, and the other world actions hide the
+   * sheet so the progress bar is visible. Crafting keeps its own sheet.
+   * Trade, fire, and build sessions are left to their own close paths so a
+   * progress bar cannot send a session-end message by mistake.
+   */
+  private closeSheetsForTimedAction() {
+    if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
+    if (this.journalUI?.isOpen()) this.journalUI.close();
+    if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
+    if (this.containerLootUI?.isOpen()) this.containerLootUI.close();
   }
 
   private canStartReload(me: {
@@ -11442,7 +11981,7 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
-  /** Blood stain or a named grave. Both use the quiet 5s inspect channel. */
+  /** Blood stain (5s) or a named grave (3s). Both use the quiet inspect channel. */
   private isInspectAction(
     objectType?: string,
     id?: string,
@@ -11991,10 +12530,12 @@ export class WorldScene extends Phaser.Scene {
     wy: number,
     sprint = false,
     queue = false,
+    ignoreAim = false,
   ) {
     if (!this.room) return;
     // CTRL aim blocks click-to-move; keyboard stopOnly (same tile) still allowed.
-    if (this.aimHeld) {
+    // E can still step through a doorway while a firearm is aimed.
+    if (this.aimHeld && !ignoreAim) {
       const me = this.room.state?.players?.get(this.sessionId);
       if (
         me &&
@@ -12101,25 +12642,12 @@ export class WorldScene extends Phaser.Scene {
   private handleKeyboardMovement() {
     if (!this.room || !this.keys || !this.cursors) return;
 
-    // Melee aim locks movement (WASD, arrows, and the thumb stick).
-    const blocked =
-      this.isOverlayOpen() ||
-      this.chatOpen ||
-      (this.aimHeld && this.localEquippedIsMelee());
+    const blocked = this.isOverlayOpen() || this.chatOpen;
     this.moveStickEl?.classList.toggle("move-stick--blocked", blocked);
     if (blocked) {
       if (this.moveStickPointerId !== null) this.releaseMoveStick();
       // UI steals keyup — clear stuck WASD/Shift so we don't keep walking.
-      this.keys.W.reset();
-      this.keys.A.reset();
-      this.keys.S.reset();
-      this.keys.D.reset();
-      this.cursors.left.reset();
-      this.cursors.right.reset();
-      this.cursors.up.reset();
-      this.cursors.down.reset();
-      this.cursors.shift.reset();
-      this.shiftKey?.reset();
+      this.clearHeldMoveKeys();
       this.sendSteer(0, 0, false);
       return;
     }
@@ -12136,6 +12664,7 @@ export class WorldScene extends Phaser.Scene {
       this.sendSteer(0, 0, false);
       return;
     }
+    if (this.aimHeld) this.cancelAimFromMove();
     if (this.pauseMoveAfterStairs) {
       this.sendSteer(0, 0, false);
       return;
@@ -12144,6 +12673,27 @@ export class WorldScene extends Phaser.Scene {
     const world = screenInputToWorldDelta(screenDx, screenDy);
     const sprint = this.isSprintKeyDown() && (me.stamina ?? 0) > 0;
     this.sendSteer(world.x, world.y, sprint);
+  }
+
+  /** Leave aim, then let this frame's WASD / stick steer. */
+  private cancelAimFromMove() {
+    this.aimBrokeByMove = true;
+    this.mobileAimLatched = false;
+    this.setAimHeld(false);
+    this.refreshMobileAimButton();
+  }
+
+  private clearHeldMoveKeys() {
+    this.keys.W.reset();
+    this.keys.A.reset();
+    this.keys.S.reset();
+    this.keys.D.reset();
+    this.cursors.left.reset();
+    this.cursors.right.reset();
+    this.cursors.up.reset();
+    this.cursors.down.reset();
+    this.cursors.shift.reset();
+    this.shiftKey?.reset();
   }
 
   /** Screen-space move vector from WASD, arrows, or the mobile thumb stick. */
@@ -12539,6 +13089,256 @@ export class WorldScene extends Phaser.Scene {
     this.game.canvas.style.cursor = canLoot ? "pointer" : "";
   }
 
+  /** World position the server steps onto to enter this building. */
+  private buildingDoorwayPoint(
+    bld: Parameters<typeof buildingEntranceRun>[0],
+  ): { x: number; y: number } {
+    const run = buildingEntranceRun(bld);
+    const mid = (run.span - 1) * 0.5;
+    return {
+      x: run.x + 0.5 + (run.face === "SE" ? 0 : mid),
+      y: run.y + 0.5 + (run.face === "SE" ? mid : 0),
+    };
+  }
+
+  private interiorExitTiles(
+    buildingX: number,
+    buildingY: number,
+  ): { x: number; y: number }[] {
+    const exit = interiorExitForBuildingAt(buildingX, buildingY);
+    const tiles: { x: number; y: number }[] = [];
+    for (let i = exit.alongMin; i <= exit.alongMax; i++) {
+      if (exit.face === "SE") tiles.push({ x: exit.outsideX, y: i });
+      else tiles.push({ x: i, y: exit.outsideY });
+    }
+    return tiles;
+  }
+
+  private playerNearInteriorExit(me: {
+    x: number;
+    y: number;
+    buildingX: number;
+    buildingY: number;
+  }): boolean {
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    for (const t of this.interiorExitTiles(me.buildingX, me.buildingY)) {
+      if (Math.max(Math.abs(ptx - t.x), Math.abs(pty - t.y)) <= 1) return true;
+    }
+    return false;
+  }
+
+  private nearestInteriorExitTile(me: {
+    x: number;
+    y: number;
+    buildingX: number;
+    buildingY: number;
+  }): { x: number; y: number } {
+    let best = { x: Math.floor(me.x), y: Math.floor(me.y) };
+    let bestDist = Infinity;
+    for (const t of this.interiorExitTiles(me.buildingX, me.buildingY)) {
+      const d = Math.hypot(me.x - (t.x + 0.5), me.y - (t.y + 0.5));
+      if (d < bestDist) {
+        bestDist = d;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  private playerNearBuildingEntrance(
+    me: { x: number; y: number },
+    bld: Parameters<typeof buildingEntranceTiles>[0],
+  ): boolean {
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    for (const t of buildingEntranceTiles(bld)) {
+      if (Math.max(Math.abs(ptx - t.x), Math.abs(pty - t.y)) <= 1) return true;
+    }
+    return false;
+  }
+
+  private playerNearCellar(
+    me: { x: number; y: number },
+    door: { ox: number; oy: number; w: number; h: number },
+  ): boolean {
+    const ptx = Math.floor(me.x);
+    const pty = Math.floor(me.y);
+    for (let dy = 0; dy < door.h; dy++) {
+      for (let dx = 0; dx < door.w; dx++) {
+        if (
+          Math.max(Math.abs(ptx - (door.ox + dx)), Math.abs(pty - (door.oy + dy))) <=
+          1
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Step onto a doorway, cellar, or exit. Clears leftover WASD steer first. */
+  private interactMoveTo(wx: number, wy: number) {
+    this.releaseHeldSteer();
+    this.clearCombatTarget();
+    this.clearInteractTarget();
+    this.clearLootTarget();
+    this.clearDoorTarget();
+    this.clearFireplaceTarget();
+    this.clearTreeChopTarget();
+    this.clearGraveInspectTarget();
+    this.clearPrefabTarget();
+    this.sendMoveToCoords(wx, wy, false, false, true);
+    this.drawMoveTarget(wx, wy, false);
+    this.moveTargetFadeUntil = Date.now() + 800;
+  }
+
+  /**
+   * Desktop E on the object under the cursor.
+   * Acts only when the player is already close enough. A click still walks up.
+   * "held" means the cursor is on one of these and E should not use something else.
+   */
+  private tryDesktopPointerInteract(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+    interiorLevel?: number;
+    anim?: string;
+    searchTargetId?: string;
+  }): "acted" | "held" | "miss" {
+    if (isMobileDevice() || this.structureBuildMode || !this.room) return "miss";
+    const pointer = this.input.activePointer;
+    if (!pointer || !this.isPointerOnGameCanvas(pointer)) return "miss";
+
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const cart = isoToCartesian(world.x, world.y);
+    const tx = Math.floor(cart.x);
+    const ty = Math.floor(cart.y);
+    const ctx = {
+      inInterior: !!me.inInterior,
+      buildingX: me.buildingX,
+      buildingY: me.buildingY,
+      interiorLevel: me.interiorLevel ?? 0,
+    };
+
+    const door = this.findDoorAt(ctx, tx, ty);
+    if (door) {
+      const beside =
+        Math.max(Math.abs(Math.floor(me.x) - tx), Math.abs(Math.floor(me.y) - ty)) <=
+        1;
+      if (beside && this.tryStartDoorInteract(me, tx, ty, door, true)) return "acted";
+      return "held";
+    }
+
+    if (
+      !ctx.inInterior &&
+      birchportBarracksBargateOccupiesTile(tx, ty) &&
+      this.barracksBargateClickable()
+    ) {
+      if (!this.playerNearBarracksBargate(me)) return "held";
+      const onGate = birchportBarracksBargateOccupiesTile(
+        Math.floor(me.x),
+        Math.floor(me.y),
+      );
+      if (onGate || this.barracksBargateAnimUntil > Date.now()) {
+        const dest = birchportBarracksBargateCrossStand(me.x, me.y);
+        this.interactMoveTo(dest.x + 0.5, dest.y + 0.5);
+        return "acted";
+      }
+      if (this.tryStartBargateInteract(me, true)) return "acted";
+      return "held";
+    }
+
+    const fireplace = this.findFireplaceAt(ctx, tx, ty);
+    if (fireplace) {
+      if (this.tryStartFireplaceInteract(me, tx, ty)) return "acted";
+      return "held";
+    }
+
+    const box = this.findStorageBoxAt(ctx, tx, ty);
+    if (box) {
+      if (this.tryStartStorageBoxInteract(me, tx, ty)) return "acted";
+      return "held";
+    }
+
+    const prefab = this.findPrefabAt(ctx, tx, ty);
+    if (prefab && prefab.kind !== "fence_corner") {
+      if (this.tryStartPrefabInteract(me, tx, ty)) return "acted";
+      return "held";
+    }
+
+    if (!ctx.inInterior && this.hatchetEquipped() && getStandingTreeAt(tx, ty)) {
+      if (playerReadyToChopTree(me.x, me.y, tx, ty)) {
+        this.releaseHeldSteer();
+        this.treeChopTargetTile = { x: tx, y: ty };
+        this.treeChopApproachTile = {
+          x: Math.floor(me.x),
+          y: Math.floor(me.y),
+        };
+        this.treeChopSprint = false;
+        this.tryStartTreeChop(me, tx, ty);
+        return "acted";
+      }
+      return "held";
+    }
+
+    if (!ctx.inInterior) {
+      const grave = this.graveUnderPointer(pointer.x, pointer.y);
+      if (grave && graveInscriptionAt(grave.ox, grave.oy, this.hollandBuried)) {
+        if (playerReadyToInspectGrave(me.x, me.y, grave.ox, grave.oy)) {
+          this.releaseHeldSteer();
+          this.graveInspectTargetTile = { x: grave.ox, y: grave.oy };
+          this.graveInspectApproachTile = {
+            x: Math.floor(me.x),
+            y: Math.floor(me.y),
+          };
+          this.graveInspectSprint = false;
+          this.tryStartGraveInspect(me, grave.ox, grave.oy);
+          return "acted";
+        }
+        return "held";
+      }
+    }
+
+    if (this.pointerIsInteriorExit(pointer.x, pointer.y)) {
+      if (this.playerNearInteriorExit(me)) {
+        const spot = this.nearestInteriorExitTile(me);
+        this.interactMoveTo(spot.x + 0.5, spot.y + 0.5);
+        return "acted";
+      }
+      return "held";
+    }
+
+    if (!ctx.inInterior) {
+      const cellar =
+        this.tileManager?.pickCellarAtWorld(world.x, world.y) ?? getCellarAt(tx, ty);
+      if (cellar) {
+        if (this.playerNearCellar(me, cellar)) {
+          const near = nearestCellarTile(cellar, me.x, me.y);
+          this.interactMoveTo(near.x + 0.5, near.y + 0.5);
+          return "acted";
+        }
+        return "held";
+      }
+
+      if (isWallTile(tx, ty)) {
+        const bld = getBuildingAt(tx, ty);
+        if (bld) {
+          if (this.playerNearBuildingEntrance(me, bld)) {
+            const doorway = this.buildingDoorwayPoint(bld);
+            this.interactMoveTo(doorway.x, doorway.y);
+            return "acted";
+          }
+          return "held";
+        }
+      }
+    }
+
+    return "miss";
+  }
+
   private handleSearchInput() {
     if (!this.room || !this.keys) return;
     if (this.isOverlayOpen() || this.chatOpen) {
@@ -12562,12 +13362,48 @@ export class WorldScene extends Phaser.Scene {
     if (this.isBusyWithTimedAction(me)) return;
 
     this.searchKeyWasDown = true;
+
+    // Desktop: the object under the cursor wins over whatever else is nearby.
+    // Phones keep the older "nearest thing in reach" behaviour.
+    if (!isMobileDevice()) {
+      if (this.tryDesktopPointerInteract(me) !== "miss") return;
+
+      const talkAction = this.getInteractableHoverAction();
+      if (talkAction && this.hoveredEntityId && this.hoveredEntityKind) {
+        const data = this.getEntityData(
+          this.hoveredEntityId,
+          this.hoveredEntityKind,
+        );
+        if (
+          data &&
+          data.isDead !== true &&
+          data.alive !== false &&
+          playerNearEntity(me.x, me.y, data.x, data.y, this.npcTalkRange(me))
+        ) {
+          this.stopPlayerMovement();
+          this.clearInteractTarget();
+          this.openInteractAction(talkAction, this.hoveredEntityId);
+        }
+        return;
+      }
+
+      // Pointing at a living fighter. E does not attack.
+      if (
+        this.hoveredEntityId &&
+        this.hoveredEntityKind &&
+        !this.hoveredLootableId
+      ) {
+        return;
+      }
+    }
+
     let started = false;
 
     const target = this.nearestSearchable();
-    if (target && playerAdjacentToSearchable(me.x, me.y, target)) {
+    if (target) {
       const overworldBag = target.buildingX === OVERWORLD_BAG_BUILDING;
-      if (overworldBag ? !me.inInterior : me.inInterior) {
+      const inContext = overworldBag ? !me.inInterior : me.inInterior;
+      if (inContext && playerAdjacentToSearchable(me.x, me.y, target)) {
         if (furnitureIsFurnace(target.objectType)) {
           this.stopPlayerMovement();
           const message: ClientMessage = {
@@ -12603,11 +13439,13 @@ export class WorldScene extends Phaser.Scene {
           this.room.send("action", message);
         }
         started = true;
+      } else if (!isMobileDevice() && inContext) {
+        return;
       }
     }
 
     // Open adjacent Fireplace1 (structure tile).
-    if (!started) {
+    if (!started && (isMobileDevice() || !this.hoveredLootableId)) {
       const fp = this.nearestAdjacentFireplace(me);
       if (fp) {
         this.stopPlayerMovement();
@@ -12620,7 +13458,7 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    if (!started) {
+    if (!started && (isMobileDevice() || !this.hoveredLootableId)) {
       const box = this.nearestAdjacentStorageBox(me);
       if (box) {
         this.stopPlayerMovement();
@@ -12634,7 +13472,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // Open adjacent un-built prefab (deposit UI).
-    if (!started) {
+    if (!started && (isMobileDevice() || !this.hoveredLootableId)) {
       const prefab = this.nearestAdjacentPrefab(me);
       if (prefab) {
         this.stopPlayerMovement();
@@ -12648,7 +13486,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // Talk to nearby Trader / Red Order (works armed or unarmed).
-    if (!started) {
+    if (!started && (isMobileDevice() || !this.hoveredLootableId)) {
       const npcId = this.nearestTalkableNpc(me);
       if (npcId) {
         this.stopPlayerMovement();
@@ -14561,15 +15399,13 @@ export class WorldScene extends Phaser.Scene {
     data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
   ) {
     if (!this.entityVisible("coywolf", data, id)) {
-      const existing = this.coywolfSprites.get(id);
-      if (existing) {
-        existing.setData("server", {
-          ...data,
-          isDead: !!data.isDead,
-          looted: !!data.looted,
-        });
-        this.softHideEntitySprite(existing);
-      }
+      const existing = this.ensureEntity(this.coywolfSprites, id, "coywolf");
+      existing.setData("server", {
+        ...data,
+        isDead: !!data.isDead,
+        looted: !!data.looted,
+      });
+      this.softHideEntitySprite(existing);
       return;
     }
 
@@ -14604,15 +15440,13 @@ export class WorldScene extends Phaser.Scene {
     data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
   ) {
     if (!this.entityVisible("bear", data, id)) {
-      const existing = this.bearSprites.get(id);
-      if (existing) {
-        existing.setData("server", {
-          ...data,
-          isDead: !!data.isDead,
-          looted: !!data.looted,
-        });
-        this.softHideEntitySprite(existing);
-      }
+      const existing = this.ensureEntity(this.bearSprites, id, "bear");
+      existing.setData("server", {
+        ...data,
+        isDead: !!data.isDead,
+        looted: !!data.looted,
+      });
+      this.softHideEntitySprite(existing);
       return;
     }
 
@@ -14657,16 +15491,14 @@ export class WorldScene extends Phaser.Scene {
     },
   ) {
     if (!this.entityVisible("crow", data, id)) {
-      const existing = this.crowSprites.get(id);
-      if (existing) {
-        existing.setData("server", {
-          ...data,
-          isDead: !!data.isDead,
-          looted: !!data.looted,
-          altitude: data.altitude ?? 0,
-        });
-        this.softHideEntitySprite(existing);
-      }
+      const existing = this.ensureEntity(this.crowSprites, id, "crow");
+      existing.setData("server", {
+        ...data,
+        isDead: !!data.isDead,
+        looted: !!data.looted,
+        altitude: data.altitude ?? 0,
+      });
+      this.softHideEntitySprite(existing);
       return;
     }
 
@@ -14716,15 +15548,13 @@ export class WorldScene extends Phaser.Scene {
     data: { x: number; y: number; facing: number; anim: string; animFrame: number; health: number; isDead?: boolean; looted?: boolean },
   ) {
     if (!this.entityVisible("rabbit", data, id)) {
-      const existing = this.rabbitSprites.get(id);
-      if (existing) {
-        existing.setData("server", {
-          ...data,
-          isDead: !!data.isDead,
-          looted: !!data.looted,
-        });
-        this.softHideEntitySprite(existing);
-      }
+      const existing = this.ensureEntity(this.rabbitSprites, id, "rabbit");
+      existing.setData("server", {
+        ...data,
+        isDead: !!data.isDead,
+        looted: !!data.looted,
+      });
+      this.softHideEntitySprite(existing);
       return;
     }
 
@@ -15704,7 +16534,9 @@ export class WorldScene extends Phaser.Scene {
         kind === "player"
           ? playerManIdleKey("S")
           : kind === "guard"
-            ? guardIdleAKKey("S")
+            ? this.textures.exists(placeholderManKey("S"))
+              ? placeholderManKey("S")
+              : guardIdleAKKey("S")
             : kind === "coywolf" && this.textures.exists(coywolfKey)
               ? coywolfKey
               : kind === "coywolf"
@@ -16325,6 +17157,14 @@ export class WorldScene extends Phaser.Scene {
     ].join("|");
   }
 
+  private setPlayerSpectating(playerId: string | undefined, enabled: boolean) {
+    if (!playerId) return;
+    if (enabled) this.spectatingPlayerIds.add(playerId);
+    else this.spectatingPlayerIds.delete(playerId);
+    const sprite = this.playerSprites.get(playerId);
+    if (sprite) this.updateEntityFromState(sprite, "player", playerId);
+  }
+
   private updateEntityFromState(
     sprite: EntitySprite,
     kind: "player" | "zombie" | "guard" | "corpse" | "coywolf" | "bear" | "crow" | "rabbit",
@@ -16593,8 +17433,9 @@ export class WorldScene extends Phaser.Scene {
     // re-sorts every building and tree in a zoomed-out city.
     if (sprite.depth !== depth) sprite.setDepth(depth);
 
+    const spectating = kind === "player" && this.spectatingPlayerIds.has(entityId);
     if (entityId === this.sessionId && kind === "player") {
-      if (data.inInterior) {
+      if (data.inInterior || spectating) {
         this.playerOccludedGhost?.hide();
       } else {
         this.playerOccludedGhost?.update(
@@ -16605,6 +17446,7 @@ export class WorldScene extends Phaser.Scene {
         );
       }
     }
+    if (spectating) sprite.setVisible(false);
 
     if (entityId === this.sessionId && kind === "player") {
       this.cameras.main.centerOn(iso.x, iso.y);
@@ -17978,6 +18820,8 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private buybackSignId: string | null = null;
+
   private sendWireQuote(traderId: string) {
     if (!this.room || !traderId) return;
     const message: ClientMessage = { type: "wireQuote", payload: { traderId } };
@@ -17991,6 +18835,86 @@ export class WorldScene extends Phaser.Scene {
       payload: { traderId, notes },
     };
     this.room.send("action", message);
+  }
+
+  private sendBuybackQuote(traderId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = { type: "buybackQuote", payload: { traderId } };
+    this.room.send("action", message);
+  }
+
+  private sendBuybackPurchase(traderId: string, notes: number) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "buybackPurchase",
+      payload: { traderId, notes },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendBuybackCollect(traderId: string, claimId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "buybackCollect",
+      payload: { traderId, claimId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendBuybackCancel(traderId: string, claimId: string) {
+    if (!this.room || !traderId) return;
+    const message: ClientMessage = {
+      type: "buybackCancel",
+      payload: { traderId, claimId },
+    };
+    this.room.send("action", message);
+  }
+
+  private async beginBuybackTransfer(payload: {
+    traderId: string;
+    claimId: string;
+    unsignedTxBase64: string;
+  }) {
+    if (this.buybackSignId === payload.claimId) return;
+    this.buybackSignId = payload.claimId;
+    const finish = (text: string) => {
+      this.ashenTraderDialogUI?.noteBuyback(text, { busy: false, signing: false });
+      if (this.buybackSignId === payload.claimId) this.buybackSignId = null;
+    };
+    try {
+      const session = loadCachedAuthSession();
+      if (!session?.wallet) {
+        throw new DeadmarkWalletError("Connect the wallet on your ledger.", false);
+      }
+      const signature = await sendDeadmarkBuyback(payload.unsignedTxBase64, session.wallet);
+      if (this.room) {
+        const message: ClientMessage = {
+          type: "buybackSubmit",
+          payload: { traderId: payload.traderId, claimId: payload.claimId, signature },
+        };
+        this.room.send("action", message);
+      }
+      this.ashenTraderDialogUI?.markBuybackSent(payload.claimId);
+      finish(
+        "The marks are on the way. You can keep playing. Collect the notes here once the chain is final.",
+      );
+    } catch (err) {
+      const cancelled = err instanceof DeadmarkWalletError && err.cancelled;
+      const text = err instanceof Error ? err.message : "The wallet could not send the transfer.";
+      const dropHold =
+        cancelled ||
+        /isn't the one on your ledger|Connect the wallet on your ledger|No Solana wallet can send/i.test(
+          text,
+        );
+      if (dropHold && this.room) {
+        const message: ClientMessage = {
+          type: "buybackCancel",
+          payload: { traderId: payload.traderId, claimId: payload.claimId },
+        };
+        this.room.send("action", message);
+      }
+      finish(text);
+    }
   }
 
   private sendAshenMilitiaChooseLine(lineId: string) {
@@ -18376,9 +19300,21 @@ export class WorldScene extends Phaser.Scene {
 
     if (equippedSlot === hotbarIndex) {
       this.unequipWeapon();
-    } else {
-      this.equipWeaponBySlot(hotbarIndex);
+      return;
     }
+    if (
+      isBirchportWeaponEquipRestricted({
+        inInterior: !!me.inInterior,
+        buildingX: me.buildingX,
+        buildingY: me.buildingY,
+        x: me.x,
+        y: me.y,
+      })
+    ) {
+      this.lootPopup?.show([], { header: "You are not allowed to equip weapons here" });
+      return;
+    }
+    this.equipWeaponBySlot(hotbarIndex);
   }
 
   private sendConsumeStart(slotIndex: number) {

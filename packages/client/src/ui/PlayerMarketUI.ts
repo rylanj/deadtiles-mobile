@@ -6,12 +6,47 @@ import {
   traderSellPriceRange,
   getItemDefinition,
   isMarketListableSlot,
+  MARKET_LISTING_MS,
+  MARKET_PRICE_MAX,
+  wornGearEffectHint,
   type MarketDeskWire,
   type MarketListingWire,
   type MarketStatePayload,
 } from "@zombie/shared";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { appendItemIcon } from "./itemIcons";
+import { resetDialogScroll } from "./dialogScroll";
+import { usePhoneDialogSheet } from "./phoneDialog";
+import {
+  chip,
+  createSheet,
+  createStepper,
+  drawerHead,
+  filterChips,
+  kvCard,
+  markSheetOpen,
+  money,
+  openDrawer,
+  renderTabs,
+  sectionLabel,
+  sheetButton,
+  sheetRow,
+  showSheetMessage,
+  type Drawer,
+  type KvRow,
+  type Sheet,
+} from "./mobileSheet";
+import "./mobile/market.css";
+
+function eachPrice(price: number, quantity: number): string {
+  const each = price / Math.max(1, quantity);
+  return Number.isInteger(each) ? `$${each}` : `$${each.toFixed(2)}`;
+}
+
+function traderRangeText(itemId: string): string {
+  const range = traderSellPriceRange(itemId);
+  return range.low === range.high ? `$${range.low}` : `$${range.low} - $${range.high}`;
+}
 
 export type PlayerMarketUIHandlers = {
   onClose: () => void;
@@ -113,6 +148,11 @@ function timeLeft(expiresAt: number, now: number): string {
   const mins = Math.max(1, Math.ceil(ms / 60000));
   if (mins < 60) return `${mins}m left`;
   const hours = Math.floor(mins / 60);
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days}d ${remHours}h left` : `${days}d left`;
+  }
   const rem = mins % 60;
   return rem > 0 ? `${hours}h ${rem}m left` : `${hours}h left`;
 }
@@ -169,6 +209,23 @@ export class PlayerMarketUI {
   private qtyInput: HTMLInputElement;
   private priceInput: HTMLInputElement;
   private hintEl: HTMLElement;
+  private layoutEl: HTMLElement;
+  private ms: Sheet | null = null;
+  private msOn = false;
+  private msTab: "browse" | "sell" | "mine" = "browse";
+  private msDrawer: Drawer | null = null;
+  private msSearch: HTMLInputElement | null = null;
+  private msList: HTMLElement | null = null;
+  /** Board pages loaded so far on a phone, so the list grows as you scroll. */
+  private msPages = new Map<number, MarketListingWire[]>();
+  private msPagesKey = "";
+  private msLoadingPage = -1;
+  /** Ads with a Collect already sent, hidden until the server drops them. */
+  private msCollecting = new Set<number>();
+  private msSellQty = 1;
+  private msSellEach = 1;
+  private msSellKey = "";
+  private msListPending: number | null = null;
 
   constructor(private handlers: PlayerMarketUIHandlers) {
     this.overlay = document.createElement("div");
@@ -177,6 +234,7 @@ export class PlayerMarketUI {
 
     const layout = document.createElement("div");
     layout.className = "trader-layout market-layout";
+    this.layoutEl = layout;
 
     const toolbar = document.createElement("div");
     toolbar.className = "red-dialog-toolbar";
@@ -294,6 +352,7 @@ export class PlayerMarketUI {
     layout.append(toolbar, columns);
     this.overlay.appendChild(layout);
     this.overlay.addEventListener("click", (event) => {
+      if (this.msOn) return;
       if (event.target === this.overlay) this.handlers.onClose();
     });
     document.body.appendChild(this.overlay);
@@ -322,9 +381,21 @@ export class PlayerMarketUI {
     this.formKey = "";
     this.mineKey = "";
     this.boardSearch.value = "";
+    this.msTab = "browse";
+    this.msPages.clear();
+    this.msPagesKey = "";
+    this.msLoadingPage = -1;
+    this.msCollecting.clear();
+    this.msSellKey = "";
+    this.msListPending = null;
+    if (this.msSearch) this.msSearch.value = "";
+    if (this.ms) showSheetMessage(this.ms.snackSlot, "");
     this.overlay.hidden = false;
+    this.overlay.classList.remove("dialog-overflows");
     document.body.classList.add("market-open");
     this.apply(payload);
+    this.overlay.scrollTop = 0;
+    resetDialogScroll(this.overlay);
   }
 
   sync(payload: MarketStatePayload) {
@@ -353,7 +424,10 @@ export class PlayerMarketUI {
     window.clearTimeout(this.busyTimer);
     window.clearTimeout(this.expiryTimer);
     this.overlay.hidden = true;
+    this.overlay.classList.remove("dialog-overflows", "ms-host");
     document.body.classList.remove("market-open");
+    this.msCloseDrawer();
+    markSheetOpen("market", false);
     this.traderId = "";
   }
 
@@ -426,8 +500,11 @@ export class PlayerMarketUI {
     const delay = Math.min(Math.max(250, next - now + 50), 2_147_000_000);
     this.expiryTimer = window.setTimeout(() => {
       if (!this.visible) return;
-      this.renderMine();
-      this.renderBoard();
+      if (this.msOn) this.msRender();
+      else {
+        this.renderMine();
+        this.renderBoard();
+      }
       this.armExpiryRefresh();
     }, delay);
   }
@@ -469,6 +546,16 @@ export class PlayerMarketUI {
     this.boardPages = payload.boardPages ?? 0;
     this.boardSort = payload.boardSort === "cheap" ? "cheap" : "new";
     this.appliedQuery = payload.boardQuery ?? "";
+    this.msOn = usePhoneDialogSheet();
+    this.overlay.classList.toggle("ms-host", this.msOn);
+    this.layoutEl.hidden = this.msOn;
+    if (this.ms) this.ms.root.hidden = !this.msOn;
+    markSheetOpen("market", this.visible && this.msOn);
+    if (this.msOn) {
+      this.msApply(payload);
+      return;
+    }
+    this.msCloseDrawer();
     const formKey = `${payload.inventoryJson}|${payload.equippedInventorySlot}|${payload.deskJson}|${payload.ashenReputation}`;
     const displayKey = `${this.yoursMineKey()}|${this.pendingPayoutId ?? ""}`;
     if (this.formKey !== formKey) {
@@ -491,6 +578,7 @@ export class PlayerMarketUI {
     this.renderBoard();
     this.updateBoardChrome();
     this.armExpiryRefresh();
+    this.pinOverlayIfNeeded();
   }
 
   private setBoardSort(sort: "new" | "cheap") {
@@ -743,9 +831,11 @@ export class PlayerMarketUI {
         { signal, capture: true },
       );
       const scrollParent = this.formEl.closest(".market-yours-body");
-      scrollParent?.addEventListener("scroll", () => {
+      const placeIfOpen = () => {
         if (!list.hidden) placeList();
-      }, { signal });
+      };
+      scrollParent?.addEventListener("scroll", placeIfOpen, { signal });
+      this.overlay.addEventListener("scroll", placeIfOpen, { signal });
       window.addEventListener("resize", () => {
         if (!list.hidden) placeList();
       }, { signal });
@@ -817,11 +907,8 @@ export class PlayerMarketUI {
         : "Banknotes, worn clothes, and the weapon in your hands stay off the board.";
       return;
     }
-    const range = traderSellPriceRange(selected.itemId);
-    const charges =
-      range.low === range.high ? `$${range.low}` : `$${range.low}-${range.high}`;
     const traderLine = document.createElement("div");
-    traderLine.textContent = `Trader sells for ${charges}`;
+    traderLine.textContent = `Trader sells for ${traderRangeText(selected.itemId)}`;
     this.hintEl.replaceChildren(traderLine);
     const price = Number(this.priceInput.value);
     if (Number.isInteger(price) && price >= 1) {
@@ -880,21 +967,48 @@ export class PlayerMarketUI {
     this.revealExpanded(this.mineEl);
   }
 
+  /**
+   * On a phone the overlay is the scroller, so a tall sheet gets pinned to
+   * the top instead of staying centered and clipped.
+   */
+  private pinOverlayIfNeeded() {
+    const overlay = this.overlay;
+    requestAnimationFrame(() => {
+      if (!this.visible) return;
+      if (overlay.scrollHeight > overlay.clientHeight + 1) {
+        overlay.classList.add("dialog-overflows");
+      }
+    });
+  }
+
   /** Keep an open ad, including its action button, inside the scrolling list. */
   private revealExpanded(container: HTMLElement) {
     const row = container.querySelector(".market-row--expanded");
-    if (!(row instanceof HTMLElement) || container.clientHeight <= 0) return;
+    const scroller = row instanceof HTMLElement ? this.scrollingAncestor(container) : null;
+    if (!(row instanceof HTMLElement) || !scroller || scroller.clientHeight <= 0) return;
     const rowBox = row.getBoundingClientRect();
-    const view = container.getBoundingClientRect();
+    const view = scroller.getBoundingClientRect();
+    const target = scroller;
     if (rowBox.height >= view.height) {
-      container.scrollTop += rowBox.bottom - view.bottom;
+      target.scrollTop += rowBox.bottom - view.bottom;
       return;
     }
     if (rowBox.bottom > view.bottom) {
-      container.scrollTop += rowBox.bottom - view.bottom;
+      target.scrollTop += rowBox.bottom - view.bottom;
     } else if (rowBox.top < view.top) {
-      container.scrollTop -= view.top - rowBox.top;
+      target.scrollTop -= view.top - rowBox.top;
     }
+  }
+
+  /** Inner list on a wide layout, otherwise the dialog itself. */
+  private scrollingAncestor(start: HTMLElement): HTMLElement | null {
+    let node: HTMLElement | null = start;
+    while (node) {
+      if (node.scrollHeight > node.clientHeight + 1) return node;
+      if (node === this.overlay) break;
+      node = node.parentElement;
+    }
+    return null;
   }
 
   private renderBoard() {
@@ -1064,5 +1178,508 @@ export class PlayerMarketUI {
     }
     row.append(details);
     return row;
+  }
+
+  // ── Phone sheet (design/mobile-dialogs board 07) ─────────────────────────
+
+  private ensureMs(): Sheet {
+    if (this.ms) return this.ms;
+    const sheet = createSheet({ tone: "gold", onClose: () => this.handlers.onClose() });
+    sheet.root.classList.add("market-ms");
+    sheet.header.setTitle("Marketplace");
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "ms-search";
+    search.placeholder = "Search items";
+    search.autocomplete = "off";
+    search.spellcheck = false;
+    search.setAttribute("aria-label", "Search listings");
+    search.addEventListener("input", () => {
+      this.boardQuery = search.value;
+      window.clearTimeout(this.browseTimer);
+      this.browseTimer = window.setTimeout(() => this.requestBoard(0), 250);
+    });
+    this.msSearch = search;
+    this.msList = document.createElement("div");
+    sheet.body.addEventListener("scroll", () => this.msMaybeLoadMore(), { passive: true });
+    this.overlay.append(sheet.root);
+    this.ms = sheet;
+    return sheet;
+  }
+
+  private msCloseDrawer(): void {
+    const drawer = this.msDrawer;
+    this.msDrawer = null;
+    drawer?.close();
+  }
+
+  private msCarried(): number {
+    return countItemInInventory(parseInventory(this.inventoryJson), "banknote");
+  }
+
+  private msApply(payload: MarketStatePayload): void {
+    this.ensureMs();
+    const key = `${this.boardSort}|${this.appliedQuery}`;
+    const page = payload.boardPage ?? 0;
+    if (key !== this.msPagesKey || page === 0) {
+      this.msPages.clear();
+      this.msPagesKey = key;
+    }
+    this.msPages.set(
+      page,
+      this.listings.filter((listing) => listing.onBoard),
+    );
+    if (this.msLoadingPage === page) this.msLoadingPage = -1;
+    const now = Date.now();
+    for (const id of [...this.msCollecting]) {
+      const listing = this.listings.find((row) => row.id === id && row.yours);
+      if (!listing || (!listing.awaitingPayout && !listingIsExpired(listing, now))) {
+        this.msCollecting.delete(id);
+      }
+    }
+    if (this.msListPending != null) {
+      const live = this.listings.filter((row) => row.yours).length;
+      if (live > this.msListPending) {
+        this.msListPending = null;
+        this.msSellKey = "";
+        showSheetMessage(this.ms!.snackSlot, "Listed. It's on the board now.");
+      } else if (!this.busy) {
+        this.msListPending = null;
+      }
+    }
+    this.msRender();
+    this.armExpiryRefresh();
+  }
+
+  private msReady(now: number) {
+    const mine = this.listings.filter((row) => row.yours && !this.msCollecting.has(row.id));
+    const sold = mine.filter((row) => row.awaitingPayout);
+    const expired = mine.filter((row) => !row.awaitingPayout && listingIsExpired(row, now));
+    const live = mine.filter((row) => !row.awaitingPayout && !listingIsExpired(row, now));
+    return { sold, expired, live, deskNotes: this.desk.banknotes, returns: this.desk.returns };
+  }
+
+  private msRender(): void {
+    const sheet = this.ensureMs();
+    const now = Date.now();
+    const ready = this.msReady(now);
+    const readyCount =
+      ready.sold.length + ready.expired.length + ready.returns.length + (ready.deskNotes > 0 ? 1 : 0);
+    renderTabs(
+      sheet.tabsSlot,
+      [
+        { id: "browse", label: "Browse" },
+        { id: "sell", label: "Sell" },
+        readyCount > 0
+          ? { id: "mine", label: "My ads", count: readyCount, alert: true }
+          : { id: "mine", label: "My ads", count: ready.live.length || undefined },
+      ],
+      this.msTab,
+      (id) => {
+        if (id === this.msTab) return;
+        this.msTab = id === "sell" ? "sell" : id === "mine" ? "mine" : "browse";
+        this.msCloseDrawer();
+        this.msRender();
+        sheet.body.scrollTop = 0;
+      },
+    );
+    sheet.header.setSub(
+      this.msTab === "browse"
+        ? `You have ${money(this.msCarried())}`
+        : `Ads ${this.desk.activeCount} of ${this.desk.listingCap} used`,
+    );
+    sheet.bar.replaceChildren();
+    if (this.msTab === "sell") this.msRenderSell();
+    else if (this.msTab === "mine") this.msRenderMine(now, ready);
+    else this.msRenderBrowse(now);
+    sheet.syncBar();
+  }
+
+  private msBoardRows(): MarketListingWire[] {
+    const seen = new Set<number>();
+    const rows: MarketListingWire[] = [];
+    const now = Date.now();
+    for (const page of [...this.msPages.keys()].sort((a, b) => a - b)) {
+      for (const listing of this.msPages.get(page) ?? []) {
+        if (seen.has(listing.id)) continue;
+        if (listing.awaitingPayout || listing.expired || listing.expiresAt <= now) continue;
+        seen.add(listing.id);
+        rows.push(listing);
+      }
+    }
+    return rows;
+  }
+
+  private msRenderBrowse(now: number): void {
+    const sheet = this.ms!;
+    const list = this.msList!;
+    const search = this.msSearch!;
+    if (search.value !== this.boardQuery) search.value = this.boardQuery;
+    const sort = filterChips(
+      [
+        { id: "new", label: "Newest" },
+        { id: "cheap", label: "Cheapest each" },
+      ],
+      this.boardSort,
+      (id) => this.setBoardSort(id === "cheap" ? "cheap" : "new"),
+    );
+    const rows = this.msBoardRows();
+    const children: HTMLElement[] = [];
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint market-ms-empty";
+      empty.textContent = this.appliedQuery.trim() ? "No ads match." : "Nothing is listed right now.";
+      children.push(empty);
+    }
+    for (const listing of rows) {
+      const name = getItemDefinition(listing.itemId)?.name ?? listing.itemId;
+      const meta: (string | Node)[] = [];
+      if (listing.yours) meta.push(chip("Yours", "y"));
+      if (listing.condition < 100) meta.push(chip(`${listing.condition}%`));
+      const bits: string[] = [];
+      if (listing.quantity > 1) bits.push(`${eachPrice(listing.price, listing.quantity)} each`);
+      if (listing.durability != null) bits.push(`${listing.durability} uses`);
+      const effect = wornGearEffectHint(listing.itemId);
+      if (effect) bits.push(effect);
+      if (!listing.yours) bits.push(timeLeft(listing.expiresAt, now));
+      meta.push(bits.join(" · "));
+      children.push(
+        sheetRow({
+          iconItemId: listing.itemId,
+          qty: listing.quantity > 1 ? listing.quantity : undefined,
+          name: listing.quantity > 1 ? `${name} ×${listing.quantity}` : name,
+          meta,
+          end: money(listing.price),
+          onTap: () => this.msOpenBuy(listing),
+        }),
+      );
+    }
+    const morePages = this.msMorePages();
+    if (rows.length > 0 && morePages) {
+      const more = document.createElement("p");
+      more.className = "ms-hint market-ms-more";
+      more.textContent = "Loading more…";
+      children.push(more);
+    }
+    list.replaceChildren(...children);
+    if (sheet.body.firstChild !== search || !sheet.body.contains(list)) {
+      sheet.body.replaceChildren(search, sort, list);
+    } else {
+      sheet.body.children[1]?.replaceWith(sort);
+    }
+    requestAnimationFrame(() => this.msMaybeLoadMore());
+  }
+
+  private msMorePages(): boolean {
+    const loaded = Math.max(-1, ...this.msPages.keys());
+    return loaded + 1 < this.boardPages;
+  }
+
+  private msMaybeLoadMore(): void {
+    const body = this.ms?.body;
+    if (!body || !this.visible || this.msTab !== "browse" || !this.msMorePages()) return;
+    if (body.scrollTop + body.clientHeight < body.scrollHeight - 240) return;
+    const next = Math.max(-1, ...this.msPages.keys()) + 1;
+    if (this.msLoadingPage === next) return;
+    this.msLoadingPage = next;
+    this.requestBoard(next);
+  }
+
+  private msOpenBuy(listing: MarketListingWire): void {
+    this.msCloseDrawer();
+    const sheet = this.ms!;
+    const name = getItemDefinition(listing.itemId)?.name ?? listing.itemId;
+    const title = listing.quantity > 1 ? `${name} ×${listing.quantity}` : name;
+    const drawer = openDrawer(sheet.root, {
+      tone: "gold",
+      label: title,
+      onClose: () => {
+        if (this.msDrawer === drawer) this.msDrawer = null;
+      },
+    });
+    this.msDrawer = drawer;
+    const now = Date.now();
+    const sub = listing.yours
+      ? `Your ad · ${timeLeft(listing.expiresAt, now)}`
+      : timeLeft(listing.expiresAt, now);
+    const carried = this.msCarried();
+    const rows: KvRow[] = [];
+    if (listing.quantity > 1) rows.push({ label: "Price each", value: eachPrice(listing.price, listing.quantity) });
+    rows.push({ label: "Trader sells for", value: `${traderRangeText(listing.itemId)} each` });
+    rows.push({ label: "You pay", value: money(listing.price), total: true });
+    rows.push({ label: "Your notes after", value: money(carried - listing.price) });
+    const hint = document.createElement("p");
+    hint.className = "ms-hint market-ms-note";
+    const short = listing.price - carried;
+    let blocked = "";
+    if (listing.yours) blocked = "This is your ad. Cancel it from My ads.";
+    else if (short > 0) blocked = `You need ${money(short)} more.`;
+    hint.textContent = blocked || "Goes straight into your bag.";
+    if (blocked) hint.classList.add("ms-warn");
+    drawer.content.append(
+      drawerHead({ iconItemId: listing.itemId, title, sub }),
+      kvCard(rows, true),
+      hint,
+    );
+    const buy = sheetButton(
+      listing.yours ? "Yours" : short > 0 ? "Not enough notes" : `Buy for ${money(listing.price)}`,
+      "pri",
+      () => {
+        if (this.busy || blocked) return;
+        this.markBusy();
+        for (const rows of this.msPages.values()) {
+          const at = rows.findIndex((row) => row.id === listing.id);
+          if (at >= 0) rows.splice(at, 1);
+        }
+        this.msCloseDrawer();
+        this.handlers.onBuy(listing.id);
+        this.msRender();
+      },
+    );
+    buy.disabled = !!blocked || this.busy;
+    drawer.bar.append(buy);
+  }
+
+  private msRenderSell(): void {
+    const sheet = this.ms!;
+    const rows = this.listableSlots();
+    this.ensureSelection();
+    const selected = rows.find((row) => row.index === this.selectedIndex) ?? null;
+    const full = this.desk.activeCount >= this.desk.listingCap;
+    const body: HTMLElement[] = [];
+    const note = (text: string, warn = false) => {
+      const p = document.createElement("p");
+      p.className = warn ? "ms-hint ms-warn market-ms-note" : "ms-hint market-ms-note";
+      p.textContent = text;
+      body.push(p);
+    };
+    if (full) note("Collect a sold or expired ad, or cancel one, before posting another.", true);
+    if (!selected) {
+      note("Nothing you can list. Banknotes, worn clothes, and the weapon in your hands stay off the board.");
+      sheet.body.replaceChildren(...body);
+      return;
+    }
+    const sellKey = `${selected.index}:${selected.itemId}:${selected.quantity}`;
+    if (sellKey !== this.msSellKey) {
+      this.msSellKey = sellKey;
+      this.msSellQty = selected.quantity;
+      this.msSellEach = Math.max(1, traderSellPriceRange(selected.itemId).low);
+    }
+    this.msSellQty = Math.max(1, Math.min(selected.quantity, this.msSellQty));
+    const name = getItemDefinition(selected.itemId)?.name ?? selected.itemId;
+
+    body.push(sectionLabel("Item"));
+    body.push(
+      sheetRow({
+        iconItemId: selected.itemId,
+        name: itemLabel(selected.itemId, 1, selected.condition, selected.durability),
+        meta: [`You have ${selected.quantity}`],
+        chevron: rows.length > 1,
+        onTap: rows.length > 1 ? () => this.msOpenPicker() : undefined,
+      }),
+    );
+    if (selected.quantity > 1) {
+      body.push(sectionLabel("How many"));
+      body.push(
+        createStepper({
+          value: this.msSellQty,
+          min: 1,
+          max: selected.quantity,
+          onChange: (value) => {
+            this.msSellQty = value;
+            this.msRender();
+          },
+        }).el,
+      );
+    }
+    body.push(sectionLabel("Price each", `Trader sells for ${traderRangeText(selected.itemId)}`));
+    const maxEach = Math.max(1, Math.floor(MARKET_PRICE_MAX / this.msSellQty));
+    body.push(
+      createStepper({
+        value: Math.min(this.msSellEach, maxEach),
+        min: 1,
+        max: maxEach,
+        prefix: "$",
+        onChange: (value) => {
+          this.msSellEach = value;
+          this.msRender();
+        },
+      }).el,
+    );
+    const total = Math.min(MARKET_PRICE_MAX, this.msSellEach * this.msSellQty);
+    const payout = marketSalePayout(total, this.ashenReputation);
+    const pay = kvCard(
+      [
+        { label: "Buyer pays", value: money(total) },
+        { label: `Market fee (${this.desk.feePercent}%)`, value: `−${money(total - payout)}`, tone: "bad" },
+        { label: "You get", value: money(payout), total: true },
+      ],
+      true,
+    );
+    pay.classList.add("market-ms-pay");
+    body.push(pay);
+    const days = Math.round(MARKET_LISTING_MS / 86_400_000);
+    note(`Expires in ${days} days. Unsold items come back to My ads.`);
+    sheet.body.replaceChildren(...body);
+
+    const list = sheetButton(
+      full ? "Your ads are full" : `List ${this.msSellQty} ${name} for ${money(total)}`,
+      "pri",
+      () => {
+        if (this.busy || full) return;
+        this.markBusy();
+        this.msListPending = this.listings.filter((row) => row.yours).length;
+        this.handlers.onList({
+          slotIndex: selected.index,
+          itemId: selected.itemId,
+          quantity: this.msSellQty,
+          price: total,
+        });
+        this.msRender();
+      },
+    );
+    list.disabled = full || this.busy;
+    sheet.bar.append(list);
+  }
+
+  private msOpenPicker(): void {
+    this.msCloseDrawer();
+    const sheet = this.ms!;
+    const drawer = openDrawer(sheet.root, {
+      tone: "gold",
+      label: "Pick an item",
+      onClose: () => {
+        if (this.msDrawer === drawer) this.msDrawer = null;
+      },
+    });
+    this.msDrawer = drawer;
+    drawer.content.append(drawerHead({ title: "Pick an item", sub: "From your pockets and backpack" }));
+    for (const row of this.listableSlots()) {
+      drawer.content.append(
+        sheetRow({
+          iconItemId: row.itemId,
+          qty: row.quantity > 1 ? row.quantity : undefined,
+          name: itemLabel(row.itemId, 1, row.condition, row.durability),
+          meta: [`Trader sells for ${traderRangeText(row.itemId)}`],
+          state: row.index === this.selectedIndex ? "on" : undefined,
+          onTap: () => {
+            this.selectedIndex = row.index;
+            this.msSellKey = "";
+            this.msCloseDrawer();
+            this.msRender();
+          },
+        }),
+      );
+    }
+    drawer.bar.hidden = true;
+  }
+
+  private msRenderMine(now: number, ready: ReturnType<PlayerMarketUI["msReady"]>): void {
+    const sheet = this.ms!;
+    const body: HTMLElement[] = [];
+    const anyReady =
+      ready.sold.length > 0 || ready.expired.length > 0 || ready.returns.length > 0 || ready.deskNotes > 0;
+    if (anyReady) {
+      body.push(sectionLabel("Ready to collect"));
+      if (ready.deskNotes > 0) {
+        body.push(
+          sheetRow({
+            iconItemId: "banknote",
+            name: `${money(ready.deskNotes)} in notes`,
+            meta: ["Waiting at the desk"],
+            state: "on",
+          }),
+        );
+      }
+      for (const listing of ready.sold) {
+        body.push(this.msMineRow(listing, [chip("Sold", "y"), `You get ${money(listing.payout)}`], "on"));
+      }
+      for (const listing of ready.expired) {
+        body.push(this.msMineRow(listing, [chip("Expired", "r"), "Comes back to your bag"], "on"));
+      }
+      for (const row of ready.returns) {
+        const name = getItemDefinition(row.itemId)?.name ?? row.itemId;
+        body.push(
+          sheetRow({
+            iconItemId: row.itemId,
+            qty: row.quantity > 1 ? row.quantity : undefined,
+            name: row.quantity > 1 ? `${name} ×${row.quantity}` : name,
+            meta: [chip("Returned", "r"), "Waiting at the desk"],
+            state: "on",
+          }),
+        );
+      }
+    }
+    if (ready.live.length > 0) {
+      body.push(sectionLabel("Live"));
+      for (const listing of ready.live) {
+        const bits: string[] = [];
+        if (listing.quantity > 1) bits.push(`${eachPrice(listing.price, listing.quantity)} each`);
+        else bits.push(money(listing.price));
+        bits.push(timeLeft(listing.expiresAt, now));
+        const cancel = sheetButton("Cancel", "sec", () => {
+          if (this.busy) return;
+          this.markBusy();
+          this.handlers.onCancel(listing.id);
+          this.msRender();
+        }, { small: true });
+        cancel.disabled = this.busy;
+        body.push(this.msMineRow(listing, [bits.join(" · ")], undefined, cancel));
+      }
+    }
+    if (!anyReady && ready.live.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint market-ms-empty";
+      empty.textContent = "You have nothing listed.";
+      body.push(empty);
+      sheet.bar.append(
+        sheetButton("Sell something", "sec", () => {
+          this.msTab = "sell";
+          this.msRender();
+        }),
+      );
+    }
+    sheet.body.replaceChildren(...body);
+    if (!anyReady) return;
+
+    const notes =
+      ready.deskNotes + ready.sold.reduce((sum, listing) => sum + listing.payout, 0);
+    const items = ready.expired.length + ready.returns.length;
+    const parts: string[] = [];
+    if (notes > 0) parts.push(money(notes));
+    if (items > 0) parts.push(items === 1 ? "1 item" : `${items} items`);
+    const collect = sheetButton(`Collect ${parts.join(" and ")}`, "pri", () => {
+      if (this.busy) return;
+      this.markBusy();
+      for (const listing of ready.sold) {
+        this.msCollecting.add(listing.id);
+        this.handlers.onCollectPayout(listing.id);
+      }
+      for (const listing of ready.expired) {
+        this.msCollecting.add(listing.id);
+        this.handlers.onCollectExpired(listing.id);
+      }
+      if (ready.deskNotes > 0 || ready.returns.length > 0) this.handlers.onCollect();
+      this.msRender();
+    });
+    collect.disabled = this.busy;
+    sheet.bar.append(collect);
+  }
+
+  private msMineRow(
+    listing: MarketListingWire,
+    meta: (string | Node)[],
+    state?: "on",
+    end?: HTMLElement,
+  ): HTMLElement {
+    const name = getItemDefinition(listing.itemId)?.name ?? listing.itemId;
+    return sheetRow({
+      iconItemId: listing.itemId,
+      qty: listing.quantity > 1 ? listing.quantity : undefined,
+      name: listing.quantity > 1 ? `${name} ×${listing.quantity}` : name,
+      meta,
+      state,
+      end,
+    });
   }
 }

@@ -1,0 +1,191 @@
+/* Mobile bag (design/mobile-dialogs board 01). */
+.ms-bag-vitals {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--ms-line);
+}
+.ms-bag-vital {
+  font: 650 11px/1 system-ui, sans-serif;
+  color: var(--ms-muted);
+}
+.ms-bag-vital b {
+  float: right;
+  color: var(--ms-text);
+  font-size: 12px;
+}
+.ms-bag-vital b.ms-warn {
+  color: var(--ms-warn);
+}
+.ms-bag-vital b.ms-bad {
+  color: var(--ms-bad);
+}
+.ms-bag-vital .ms-meter {
+  margin-top: 6px;
+  height: 6px;
+}
+
+.ms-bag-cancel {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 16px;
+}
+
+.ms-bag-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ms-bag-cell {
+  position: relative;
+  aspect-ratio: 1;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 220, 100, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.ms-bag-cell > img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.ms-bag-cell-txt {
+  padding: 0 3px;
+  font: 600 10px/1.1 system-ui, sans-serif;
+  color: var(--ms-text, #e7f6e7);
+  text-align: center;
+  word-break: break-word;
+}
+.ms-bag-cell--empty {
+  background: rgba(0, 0, 0, 0.18);
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.ms-bag-cell--ghost > img {
+  width: 56%;
+  height: 56%;
+  margin-top: -10px;
+  filter: grayscale(1) brightness(1.6);
+  opacity: 0.16;
+}
+.ms-bag-cell-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4px;
+  text-align: center;
+  font: 600 10px/1 system-ui, sans-serif;
+  color: var(--ms-dim, #6f8a6f);
+}
+.ms-bag-cell-q {
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+  font: 800 12px/1 system-ui, sans-serif;
+  color: #e8ffe8;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.ms-bag-cell-tag {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  font: 800 9px/1 system-ui, sans-serif;
+  color: var(--ms-accent, #7ecf7e);
+}
+.ms-bag-cell-tag--freq {
+  color: #f0c040;
+}
+.ms-bag-cell .inventory-cell-durability,
+.ms-bag-cell .inventory-cell-wetness {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 3px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.ms-bag-cell .inventory-cell-wetness {
+  bottom: 8px;
+}
+.ms-bag-cell .inventory-cell-durability-fill,
+.ms-bag-cell .inventory-cell-wetness-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: #3dcf5a;
+}
+.ms-bag-cell .inventory-cell-wetness-fill {
+  background: #5a9cc4;
+}
+.ms-bag-cell--eq {
+  border-color: rgba(100, 220, 100, 0.85);
+}
+.ms-bag-cell--held {
+  box-shadow: inset 0 0 0 2px rgba(100, 220, 100, 0.5);
+}
+.ms-bag-cell--sel {
+  border-color: var(--ms-lime, #9fe830);
+  box-shadow: 0 0 0 2px rgba(159, 232, 48, 0.45);
+  background: rgba(94, 200, 94, 0.14);
+  /* The selected item is the only one that can be dragged. */
+  touch-action: none;
+}
+.ms-bag-cell--target {
+  border: 2px dashed rgba(159, 232, 48, 0.75);
+  background: rgba(159, 232, 48, 0.07);
+}
+.ms-bag-cell--lift {
+  opacity: 0.4;
+}
+.ms-bag-cell--dim {
+  opacity: 0.35;
+}
+.ms-bag-cell.inventory-cell--dragging {
+  opacity: 0.35;
+}
+.ms-bag-cell.inventory-cell--drag-over {
+  border: 2px dashed rgba(159, 232, 48, 0.9);
+  background: rgba(159, 232, 48, 0.12);
+}
+.ms-bag-cell.inventory-cell--drag-invalid {
+  border-color: rgba(230, 110, 110, 0.7);
+}
+.ms-bag-cell.inventory-cell--keepsake {
+  border-color: rgba(230, 193, 90, 0.8);
+}
+.inventory-slot-ghost.ms-bag-cell {
+  background: rgba(20, 32, 20, 0.95);
+  border-color: var(--ms-lime, #9fe830);
+}
+
+.ms-bag-drawer {
+  transition: transform 0.18s ease-out, opacity 0.18s ease-out;
+}
+.ms-bag-drawer--away {
+  transform: translateY(85%);
+  opacity: 0.25;
+  pointer-events: none;
+}
+body.is-mobile #inventory-overlay .item-read-overlay {
+  z-index: 40;
+}
+.ms-bag .ms-drawer .ms-stepper {
+  margin-bottom: 10px;
+}

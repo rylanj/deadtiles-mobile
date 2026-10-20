@@ -33,6 +33,16 @@ export const ASHEN_TALK_REFUSE_REP_LINE =
 export const ASHEN_TALK_REFUSE_WEAPON_LINE =
   "Holster your weapon if you want to talk.";
 
+/** Doctor Clark / Captain Davis when a player slams a nearby door. */
+export const DOOR_SLAM_SCOLD_LINES = [
+  "Quit slamming that door!",
+  "If you break the door you'll be scrubbing the floor.",
+  "That's a door, not a drum. Knock it off.",
+  "Open it or close it. Stop playing with it.",
+  "You break that hinge, you're fixing it.",
+  "One more slam and you're on floor duty.",
+] as const;
+
 export type AshenMilitiaDialogLine = {
   id: string;
   /** Player speech option. */

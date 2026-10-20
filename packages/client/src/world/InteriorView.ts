@@ -496,10 +496,10 @@ const DINNERTABLE_BOTTOM_PAD = Math.round(DINNERTABLE_RENDER_HEIGHT * 0.05);
 const CANTEENTABLE_RENDER_HEIGHT = Math.round(DINNERTABLE_RENDER_HEIGHT * 1.2);
 const CANTEENTABLE_BOTTOM_PAD =
   DINNERTABLE_BOTTOM_PAD + Math.round(CANTEENTABLE_RENDER_HEIGHT * 0.075);
-/** Range1 — 20% smaller than Counter1, then raise by 5% + 5%. */
-const RANGE_RENDER_HEIGHT = Math.round(COUNTER_RENDER_HEIGHT * 0.8);
+/** Range1 — 20% smaller than Counter1, then 10% smaller, then raise by 5% + 5% + 5%. */
+const RANGE_RENDER_HEIGHT = Math.round(COUNTER_RENDER_HEIGHT * 0.7);
 const RANGE_BOTTOM_PAD =
-  COUNTER_BOTTOM_PAD - Math.round(RANGE_RENDER_HEIGHT * 0.1);
+  COUNTER_BOTTOM_PAD - Math.round(RANGE_RENDER_HEIGHT * 0.16);
 /** HotDisplay1 — counter pad, then raise by 5%. */
 const HOTDISPLAY_BOTTOM_PAD =
   COUNTER_BOTTOM_PAD - Math.round(COUNTER_RENDER_HEIGHT * 0.05);

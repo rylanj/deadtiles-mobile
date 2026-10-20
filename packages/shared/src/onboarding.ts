@@ -459,7 +459,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
       "National Guard: posts across the country. Birchport is their hub in Ashen County, with a few smaller outposts besides. Captain Davis at the barracks and Doctor Clark at the hospital post jobs.",
       "Ashen Traders: run caravans and the Birchport market. They buy, sell, and keep medicine and ammo moving.",
       "The Red Order: hold city blocks and want the Ashen gone. They run Birchport's supermarket and post their own work. Their furniture and their dead are protected. If they see you finish a search, that squad turns hostile.",
-      "Standing runs Exiled, Hostile, Wary, Neutral, Warm, Friendly, Allied. Everyone starts Wary. Jobs raise it. Attacking a faction or stealing from it drops it a full level. Hostile groups refuse to talk and may shoot. Ashen standing recovers slowly from Hostile, but Exiled is permanent.",
+      "Standing runs Exiled, Hostile, Wary, Neutral, Warm, Friendly, Allied. Everyone starts Wary. Jobs raise it. Attacking a faction or stealing from it drops it a full level. Hostile groups refuse to talk and may shoot. Hostile standing climbs back toward Wary over real time, online or offline. Exiled is permanent.",
       "For now you can work for both the Ashen and the Red Order. Later jobs will force you to pick a side.",
     ],
   },

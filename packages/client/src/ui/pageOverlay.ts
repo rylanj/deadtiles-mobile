@@ -1,3 +1,4 @@
+import { resetSheetOpen } from "./mobileSheet";
 import { cancelAllSlotDrags } from "./slotPointerDnD";
 
 /**
@@ -72,4 +73,5 @@ export function clearWorldPageUi(): void {
   for (const id of PAGE_OVERLAY_IDS) claimPageOverlay(id);
   document.querySelectorAll(".market-pick-list").forEach((node) => node.remove());
   document.body.classList.remove(...PAGE_BODY_CLASSES);
+  resetSheetOpen();
 }

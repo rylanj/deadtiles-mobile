@@ -8,7 +8,6 @@ import {
   countItemInInventory,
   getItemDefinition,
   isQuestKeepsakeItem,
-  lootCategoryItemIds,
   maxStackForItem,
   rollWatchVariant,
   WATCH_ITEM_ID,
@@ -28,6 +27,9 @@ import {
   FACTION_REP_START,
   FACTION_REP_WARM,
   FACTION_REP_WARY,
+  FACTION_HOSTILE_RECOVERY_MS,
+  FACTION_HOSTILE_RECOVERY_PER_INTERVAL,
+  applyFactionHostileRecovery,
   dropFactionReputationLevel,
   factionStanding,
   factionStandingLabel,
@@ -204,10 +206,12 @@ export type AshenDialogLine = {
   npcMan: readonly string[];
   /** Reply variants from TraderGuard when different from the man. */
   npcGuard?: readonly string[];
-  /** Opens the trader shop, the Birchport player board, the safe deposit box, or the wire. */
-  action?: "trade" | "board" | "deposit" | "wire";
+  /** Opens the trader shop, the Birchport player board, the safe deposit box, the wire, or the buyback. */
+  action?: "trade" | "board" | "deposit" | "wire" | "buyback";
   /** Kevin at the Birchport market, when he should not sound like a road caravan. */
   npcMarket?: readonly string[];
+  /** Kevin's buyback reply for Allied standing, when the rate is one for one. */
+  npcMarketAllied?: readonly string[];
   /** Speech shown once the safe deposit fee is already paid. */
   playerRented?: string;
 };
@@ -290,6 +294,25 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
       "That's Kevin's book. Talk to the man with the ledger.",
     ],
     action: "wire",
+  },
+  {
+    id: "buyback",
+    player: "Can I trade in my Deadmarks?",
+    npcMan: [
+      "That's Kevin, at the Birchport market. He sells paper for marks.",
+    ],
+    npcMarket: [
+      "Two marks buy one note. I can only offer the banknotes that have already been put aside to be shipped east. When that paper is gone, I have nothing to sell until more is set aside.",
+      "Yes. Those are the notes waiting on the eastbound shipment. Two Deadmarks for one banknote, and I can't sell any that haven't been put aside.",
+    ],
+    npcMarketAllied: [
+      "For an ally, one mark buys one note. I can only offer the banknotes that have already been put aside to be shipped east. When that paper is gone, I wait until more is set aside.",
+      "Yes. You get those notes one for one. They're the banknotes already put aside for the eastbound shipment, and I don't have any others to sell.",
+    ],
+    npcGuard: [
+      "That's Kevin's book. Talk to the man with the ledger.",
+    ],
+    action: "buyback",
   },
   {
     id: "jobs",
@@ -429,8 +452,9 @@ export const ASHEN_REP_PER_DOLLAR_GIVEN = 0.1;
 export const ASHEN_REP_PER_DOLLAR_TAKEN = 0.1;
 
 /** Hostile band recovers +1 toward 0 every this many wall-clock ms. */
-export const ASHEN_HOSTILE_RECOVERY_MS = 30 * 60 * 1000;
-export const ASHEN_HOSTILE_RECOVERY_PER_INTERVAL = 1;
+export const ASHEN_HOSTILE_RECOVERY_MS = FACTION_HOSTILE_RECOVERY_MS;
+export const ASHEN_HOSTILE_RECOVERY_PER_INTERVAL =
+  FACTION_HOSTILE_RECOVERY_PER_INTERVAL;
 
 export type AshenStanding = FactionStanding;
 
@@ -472,35 +496,15 @@ export function dropAshenReputationLevel(reputation: number): number {
 }
 
 /**
- * Apply Hostile passive recovery toward 0 (+1 per 30 real-life minutes).
- * Exiled never recovers. Returns updated reputation + check timestamp.
+ * Apply Hostile passive recovery toward 0 (+1 per 10 real-life minutes).
+ * Uses wall-clock time, online or offline. Exiled never recovers.
  */
 export function applyAshenHostileRecovery(
   reputation: number,
   lastCheckMs: number,
   nowMs: number,
 ): { reputation: number; lastCheckMs: number } {
-  if (!Number.isFinite(nowMs) || nowMs <= 0) {
-    return { reputation, lastCheckMs };
-  }
-  // Exiled and all non-Hostile bands — no passive change.
-  if (!isAshenHostileBand(reputation)) {
-    return { reputation, lastCheckMs };
-  }
-  const anchor = lastCheckMs > 0 ? lastCheckMs : nowMs;
-  const elapsed = nowMs - anchor;
-  if (elapsed < ASHEN_HOSTILE_RECOVERY_MS) {
-    return { reputation, lastCheckMs: anchor };
-  }
-  const steps = Math.floor(elapsed / ASHEN_HOSTILE_RECOVERY_MS);
-  const nextRep = Math.min(
-    ASHEN_REP_WARY,
-    reputation + steps * ASHEN_HOSTILE_RECOVERY_PER_INTERVAL,
-  );
-  return {
-    reputation: nextRep,
-    lastCheckMs: anchor + steps * ASHEN_HOSTILE_RECOVERY_MS,
-  };
+  return applyFactionHostileRecovery(reputation, lastCheckMs, nowMs);
 }
 
 /**
@@ -762,33 +766,203 @@ export function isAshenMarketTraderId(traderId: string): boolean {
   return traderId.startsWith("ashen-market:") && traderId.endsWith(":man");
 }
 
-/** Categories eligible for shop stock, with per-category quantity ranges. */
-const TRADER_SHOP_CATEGORIES: {
-  category: string;
-  minQty: number;
-  maxQty: number;
-}[] = [
-  { category: "ammo_lite", minQty: 1, maxQty: 50 },
-  { category: "medical_lite", minQty: 1, maxQty: 5 },
-  { category: "medical_heavy", minQty: 1, maxQty: 3 },
-  { category: "guns_lite", minQty: 1, maxQty: 1 },
-  { category: "melee_lite", minQty: 1, maxQty: 1 },
-  { category: "melee_heavy", minQty: 1, maxQty: 1 },
-  { category: "crafting_lite", minQty: 1, maxQty: 10 },
-  { category: "junk", minQty: 1, maxQty: 3 },
-  { category: "consumables", minQty: 1, maxQty: 3 },
-];
+/**
+ * Minimum Ashen standing required to buy an item from a trader.
+ * A min and max quantity means the item can roll into fresh stock.
+ * Without them, it only returns to the shelf after a player sells it.
+ * Higher standings include every item from the bands below.
+ * Player marketplace listings do not use this table.
+ */
+const TRADER_CATALOG: Readonly<
+  Record<string, { standing: FactionStanding; minQty?: number; maxQty?: number }>
+> = (() => {
+  const row = (standing: FactionStanding, minQty?: number, maxQty?: number) => ({
+    standing,
+    minQty,
+    maxQty,
+  });
+  const entries: Record<string, { standing: FactionStanding; minQty?: number; maxQty?: number }> = {
+    // Wary. Food, tools, scrap, and valuables.
+    water: row("wary", 1, 3),
+    cola: row("wary", 1, 3),
+    lemonada: row("wary", 1, 3),
+    canned_beans: row("wary", 1, 3),
+    canned_tuna: row("wary", 1, 3),
+    canned_peaches: row("wary", 1, 3),
+    hot_chips: row("wary", 1, 3),
+    onion_chips: row("wary", 1, 3),
+    salted_chips: row("wary", 1, 3),
+    weapon_hammer: row("wary", 1, 1),
+    weapon_hatchet: row("wary", 1, 1),
+    weapon_bat: row("wary", 1, 1),
+    rags: row("wary", 1, 5),
+    screws: row("wary", 1, 10),
+    bolts: row("wary", 1, 10),
+    duct_tape: row("wary", 1, 10),
+    scrap_metal: row("wary", 1, 10),
+    lighter: row("wary", 1, 3),
+    blue_cigarettes: row("wary", 1, 3),
+    white_tshirt: row("wary", 1, 1),
+    black_tshirt: row("wary", 1, 1),
+    map: row("wary", 1, 3),
+    old_teddy: row("wary", 1, 3),
+    teddy: row("wary", 1, 3),
+    dogtag: row("wary", 1, 3),
+    gold_chain: row("wary", 1, 3),
+    gold_earrings: row("wary", 1, 3),
+    gold_ring: row("wary", 1, 3),
+    silver_chain: row("wary", 1, 3),
+    silver_ring: row("wary", 1, 3),
+    [WATCH_ITEM_ID]: row("wary", 1, 3),
+    wood: row("wary"),
+    raw_bear_meat: row("wary"),
+    cooked_bear_meat: row("wary"),
+    burnt_bear_meat: row("wary"),
+    raw_coyote_meat: row("wary"),
+    cooked_coyote_meat: row("wary"),
+    burnt_coyote_meat: row("wary"),
+    raw_chicken_meat: row("wary"),
+    cooked_chicken_meat: row("wary"),
+    burnt_chicken_meat: row("wary"),
+    raw_rabbit_meat: row("wary"),
+    cooked_rabbit_meat: row("wary"),
+    burnt_rabbit_meat: row("wary"),
+    raw_bird_meat: row("wary"),
+    cooked_bird_meat: row("wary"),
+    burnt_bird_meat: row("wary"),
+
+    // Neutral. A sidearm, basic medicine, and a small pack.
+    weapon_pistol: row("neutral", 1, 1),
+    ammo_9x19: row("neutral", 1, 50),
+    bandages: row("neutral", 1, 3),
+    alcohol: row("neutral", 1, 3),
+    multivitamins: row("neutral", 1, 5),
+    backpack_fanny: row("neutral", 1, 1),
+    backpack_utility: row("neutral", 1, 1),
+    handheld_radio: row("neutral", 1, 1),
+    pistol_frame: row("neutral", 1, 2),
+    pistol_slide: row("neutral", 1, 2),
+    pistol_trigger: row("neutral", 1, 2),
+    small_spring: row("neutral", 1, 2),
+    blueprint_pistol: row("neutral"),
+
+    // Warm. Civilian guns and the tools they would not hand a stranger.
+    weapon_revolver: row("warm", 1, 1),
+    weapon_shotgun: row("warm", 1, 1),
+    ammo_44: row("warm", 1, 50),
+    ammo_buckshot: row("warm", 8, 24),
+    antibiotics: row("warm", 1, 3),
+    lockpick: row("warm", 1, 1),
+    backpack_small: row("warm", 1, 1),
+    revolver_frame: row("warm", 1, 2),
+    revolver_cylinder: row("warm", 1, 2),
+    revolver_barrel: row("warm", 1, 2),
+    revolver_trigger: row("warm", 1, 2),
+    shotgun_receiver: row("warm", 1, 2),
+    shotgun_barrel: row("warm", 1, 2),
+    shotgun_stock: row("warm", 1, 2),
+    shotgun_trigger: row("warm", 1, 2),
+    large_spring: row("warm", 1, 2),
+    blueprint_revolver: row("warm"),
+    blueprint_shotgun: row("warm"),
+
+    // Friendly. Hunting rifle only returns if a player sold one. 7.62 still rolls.
+    weapon_hunting_rifle: row("friendly"),
+    ammo_762x39: row("friendly", 8, 24),
+    backpack_hunting: row("friendly", 1, 1),
+    backpack_leather: row("friendly", 1, 1),
+    rifle_receiver: row("friendly", 1, 2),
+    rifle_barrel: row("friendly", 1, 2),
+    rifle_stock: row("friendly", 1, 2),
+    rifle_trigger: row("friendly", 1, 2),
+    scope: row("friendly", 1, 2),
+    blueprint_hunting_rifle: row("friendly"),
+    magazine_melee: row("friendly"),
+    magazine_harvesting: row("friendly"),
+    magazine_carrying: row("friendly"),
+    magazine_construction: row("friendly"),
+    magazine_fitness: row("friendly"),
+    magazine_immunity: row("friendly"),
+    magazine_recovery: row("friendly"),
+    magazine_crafting: row("friendly"),
+    magazine_cooking: row("friendly"),
+    magazine_medicine: row("friendly"),
+    magazine_reading: row("friendly"),
+    magazine_persuasion: row("friendly"),
+    magazine_bartering: row("friendly"),
+
+    // Allied. Military parts and rounds. Whole rifles only come back if a player sold one.
+    ammo_556x45: row("allied", 8, 24),
+    backpack_hiking: row("allied", 1, 1),
+    ak_receiver: row("allied", 1, 2),
+    ak_barrel: row("allied", 1, 2),
+    ak_stock: row("allied", 1, 2),
+    m4_receiver: row("allied", 1, 2),
+    m4_barrel: row("allied", 1, 2),
+    m4_stock: row("allied", 1, 2),
+    blueprint_ak: row("allied"),
+    blueprint_m4: row("allied"),
+    magazine_accuracy: row("allied"),
+    magazine_scavenging: row("allied"),
+    magazine_stealth: row("allied"),
+    magazine_lockpicking: row("allied"),
+    weapon_assault_rifle: row("allied"),
+    weapon_m4a1: row("allied"),
+  };
+  for (const watch of WATCH_LOOT) {
+    entries[watch.id] = row("wary");
+  }
+  return entries;
+})();
+
+const TRADER_STANDING_RANK: Record<FactionStanding, number> = {
+  exiled: 0,
+  hostile: 1,
+  wary: 2,
+  neutral: 3,
+  warm: 4,
+  friendly: 5,
+  allied: 6,
+};
+
+/** Standing required to buy this from an Ashen trader, or null when they will not sell it. */
+export function traderItemMinStanding(itemId: string): FactionStanding | null {
+  const id = getItemDefinition(itemId)?.id ?? itemId;
+  return TRADER_CATALOG[id]?.standing ?? null;
+}
+
+/** True when this player's Ashen standing is high enough to buy the item. */
+export function canPurchaseFromTrader(itemId: string, reputation: number): boolean {
+  const need = traderItemMinStanding(itemId);
+  if (!need) return false;
+  const have = ashenStanding(reputation);
+  return TRADER_STANDING_RANK[have] >= TRADER_STANDING_RANK[need];
+}
+
+/** Empty when the purchase is allowed. Otherwise the reason to show the player. */
+export function traderPurchaseLock(itemId: string, reputation: number): string {
+  if (canPurchaseFromTrader(itemId, reputation)) return "";
+  const need = traderItemMinStanding(itemId);
+  if (!need) return "Traders will not sell this.";
+  return `They will not sell that. Requires ${factionStandingLabel(need)} standing.`;
+}
+
+/** Tradeable items missing a buy standing. Banknotes and quest papers are excluded. */
+export function traderCatalogUnassignedItemIds(): string[] {
+  return INVENTORY_ITEMS.map((item) => item.id).filter((id) => {
+    if (id === "banknote" || isQuestKeepsakeItem(id)) return false;
+    return traderItemMinStanding(id) == null;
+  });
+}
 
 type ShopPoolEntry = { id: string; minQty: number; maxQty: number };
 
 function traderShopItemPool(): ShopPoolEntry[] {
   const pool: ShopPoolEntry[] = [];
-  for (const row of TRADER_SHOP_CATEGORIES) {
-    for (const id of lootCategoryItemIds(row.category)) {
-      // Banknotes are the trader's float, not a stock line.
-      if (id === "banknote") continue;
-      pool.push({ id, minQty: row.minQty, maxQty: row.maxQty });
-    }
+  for (const [id, row] of Object.entries(TRADER_CATALOG)) {
+    if (row.minQty == null || row.maxQty == null) continue;
+    if (id === "banknote") continue;
+    pool.push({ id, minQty: row.minQty, maxQty: row.maxQty });
   }
   return pool;
 }
@@ -1083,6 +1257,7 @@ export function applyTradeOffer(
       return null;
     }
     if (!getItemDefinition(line.itemId)) return null;
+    if (!canPurchaseFromTrader(line.itemId, reputation)) return null;
   }
 
   const { sellTotal, buyTotal, net } = tradeOfferTotals(

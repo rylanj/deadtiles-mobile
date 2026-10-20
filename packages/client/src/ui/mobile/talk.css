@@ -1,0 +1,258 @@
+/* Mobile talk (design/mobile-dialogs board 03). */
+.talk-sheet.ms-sheet {
+  padding-bottom: 0;
+  background: var(--ms-sheet);
+  color: var(--ms-text);
+}
+.talk-sheet.ms-sheet .ms-bar {
+  padding-bottom: calc(16px + max(var(--ms-bottom-safe), var(--talk-keyboard-inset, 0px)));
+}
+
+.talk-name {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.talk-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.talk-title > * {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font: 750 18px/1.2 system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ms-strong);
+}
+.talk-standing {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.talk-standing:empty {
+  display: none;
+}
+.talk-av img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+
+.talk-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.talk-scroll {
+  display: flex;
+  flex-direction: column;
+}
+.talk-log {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.talk-bub {
+  max-width: 88%;
+  padding: 11px 14px;
+  border-radius: 16px;
+  font: 15px/1.45 system-ui, sans-serif;
+}
+.talk-bub--me {
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+  background: var(--ms-pri);
+  border: 1px solid var(--ms-pri-line);
+  color: var(--ms-strong);
+}
+.talk-bub--npc {
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+  background: var(--ms-raise);
+  border: 1px solid var(--ms-line);
+}
+.talk-bub--npc > * {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0;
+}
+.talk-who {
+  display: block;
+  margin-bottom: 4px;
+  font: 700 12px/1 system-ui, sans-serif;
+  color: var(--ms-accent);
+}
+.talk-waiting {
+  text-align: center;
+  margin: 0 0 8px;
+}
+.talk-log .talk-sheet-reopen {
+  align-self: flex-start;
+  min-height: 44px;
+  border-radius: 12px;
+}
+
+.talk-cards {
+  max-height: none;
+  padding: 12px 0 0;
+  overflow: visible;
+}
+.talk-cards-bar {
+  padding: 0;
+}
+
+.talk-bar {
+  gap: 12px;
+}
+.talk-tiles-lbl {
+  margin: 2px 0 -2px;
+}
+.talk-bar .ms-tile {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
+}
+.talk-bar .ms-tile--on {
+  border-color: var(--ms-pri-line);
+}
+.talk-bye {
+  flex: 0 0 96px !important;
+}
+.talk-ask--story {
+  border-color: rgba(230, 193, 90, 0.7);
+}
+
+.talk-sub .talk-sheet-sub-body {
+  padding: 12px calc(16px + env(safe-area-inset-right, 0px)) 16px calc(16px + env(safe-area-inset-left, 0px));
+}
+.talk-sub .talk-sheet-sub-lead {
+  font: italic 500 15px/1.45 system-ui, sans-serif;
+  color: var(--ms-muted);
+}
+.talk-sub-title {
+  font: 750 18px/1.2 system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+}
+
+/* Wire and Deadmarks desks (board 05) */
+.ms-wire {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ms-wire .ms-lbl {
+  margin: 8px 0 -2px;
+}
+.ms-wire .ashen-wire-note {
+  margin: 0;
+  font-style: normal;
+}
+.ms-wire-trade b {
+  display: block;
+  font: 750 17px/1.25 system-ui, sans-serif;
+  color: var(--ms-strong);
+}
+.talk-sub-bar .ms-btn.red-dialog-complete-btn {
+  width: 100%;
+  min-height: 52px;
+  font-size: 16px;
+}
+.talk-sub-bar .ashen-wire-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ms-warn);
+}
+
+/* Jobs page (board 04) */
+.talk-sub .ms-chips {
+  margin: 0 0 12px;
+}
+.talk-sub .craft-recipe.talk-job {
+  margin: 0 0 8px;
+  border-radius: 14px;
+  border: 1px solid var(--ms-line);
+  background: var(--ms-raise);
+  padding: 0;
+}
+.talk-sub .ms-body > .talk-job:last-child {
+  margin-bottom: 0;
+}
+.talk-sub .craft-recipe.talk-job[hidden] {
+  display: none !important;
+}
+.talk-sub .talk-job .craft-recipe-summary {
+  min-height: 68px;
+  padding: 10px 12px;
+  gap: 12px;
+}
+.talk-sub .talk-job.craft-recipe--ready {
+  border-color: var(--ms-pri-line);
+  background: rgba(36, 110, 48, 0.18);
+}
+.talk-sub .talk-job .craft-recipe-summary-name {
+  font: 700 16px/1.25 system-ui, sans-serif;
+}
+.talk-sub .talk-job .craft-recipe-summary-meta {
+  font-size: 13px;
+  color: var(--ms-muted);
+}
+.talk-sub .quest-status-chip--ready {
+  background: rgba(159, 232, 48, 0.18);
+  border-color: rgba(159, 232, 48, 0.6);
+  color: var(--ms-lime);
+}
+.talk-sub .talk-job--detail {
+  border: none;
+  background: none;
+}
+.talk-sub .talk-job--detail .craft-recipe-chevron {
+  display: none;
+}
+.talk-sub .talk-job--detail .craft-recipe-details {
+  padding: 4px 2px 8px;
+}
+.talk-sub .talk-job--detail .craft-recipe-hint {
+  font-size: 15px;
+  line-height: 1.45;
+}
+.talk-sub .talk-job--detail .red-dialog-task-heading {
+  margin: 16px 0 8px;
+  font: 750 12px/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ms-dim);
+}
+.talk-sub-bar .red-dialog-complete-btn.ms-btn {
+  width: 100%;
+  min-height: 52px;
+}
+
+@media (orientation: landscape) and (max-height: 540px) {
+  .talk-main {
+    flex-direction: row;
+  }
+  .talk-main > .talk-scroll {
+    flex: 1 1 50%;
+  }
+  .talk-main > .talk-bar {
+    flex: 0 0 50%;
+    border-top: none;
+    border-left: 1px solid var(--ms-line);
+    overflow-y: auto;
+    justify-content: flex-end;
+  }
+}

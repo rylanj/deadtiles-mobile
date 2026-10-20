@@ -7,7 +7,11 @@ import {
   ASHEN_TRADER_QUESTS,
   ASHEN_TRADERS_FACTION,
   isAshenMarketTraderId,
+  deadmarkBuybackClosedReason,
+  deadmarkBuybackWalletNotes,
+  deadmarkMarksForNotes,
   deadmarkWireClosedReason,
+  type BuybackDeskPayload,
   type WireDeskPayload,
   GUARD_NPC_TRADER_GUARD,
   GUARD_NPC_TRADER_MAN,
@@ -41,8 +45,9 @@ import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } 
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
+import { createStepper, kvCard, quickAmounts, sectionLabel } from "./mobileSheet";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
-import { PhoneTalkNav, TalkSheet, syncTalkSheet, type TalkPush } from "./talkSheet";
+import { PhoneTalkNav, TalkSheet, syncTalkSheet, talkJobReward, type TalkPush } from "./talkSheet";
 
 export type AshenTraderDialogUIHandlers = {
   onClose: () => void;
@@ -58,6 +63,14 @@ export type AshenTraderDialogUIHandlers = {
   onRequestWire: (traderId: string) => void;
   /** Ship this many notes. The server refuses if the book moved. */
   onConfirmWire: (traderId: string, notes: number) => void;
+  /** Kevin checks what paper the coast will still sell for marks. */
+  onRequestBuyback: (traderId: string) => void;
+  /** Buy this many notes. The server holds them, then the wallet sends the marks. */
+  onPurchaseBuyback: (traderId: string, notes: number) => void;
+  /** Collect notes whose Deadmark transfer has finalized. */
+  onCollectBuyback: (traderId: string, claimId: string) => void;
+  /** Drop a hold whose wallet prompt was closed before the marks were sent. */
+  onCancelBuyback: (traderId: string, claimId: string) => void;
   onAcceptQuest: (questId: string) => void;
   onCompleteTask: (taskId: string) => void;
   onChooseLine?: (lineId: string) => void;
@@ -109,6 +122,12 @@ export class AshenTraderDialogUI {
   private wireBusy = false;
   private wireAmountDraft = "";
   private wireWaitTimer: number | null = null;
+  private buybackDesk: BuybackDeskPayload | null = null;
+  private buybackNotice = "";
+  private buybackBusy = false;
+  private buybackSigning = false;
+  private buybackAmountDraft = "";
+  private buybackWaitTimer: number | null = null;
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -286,6 +305,12 @@ export class AshenTraderDialogUI {
     this.wireBusy = false;
     this.wireAmountDraft = "";
     this.clearWireWait();
+    this.buybackDesk = null;
+    this.buybackNotice = "";
+    this.buybackBusy = false;
+    this.buybackSigning = false;
+    this.buybackAmountDraft = "";
+    this.clearBuybackWait();
     this.playerTitleEl.textContent = opts.playerName?.trim() || "You";
     this.playerAvatarEl.src = playerAvatarSrc(opts.clothingSkin);
     this.ashenReputation = opts.ashenReputation ?? ASHEN_REP_START;
@@ -318,6 +343,12 @@ export class AshenTraderDialogUI {
     this.wireBusy = false;
     this.wireAmountDraft = "";
     this.clearWireWait();
+    this.buybackDesk = null;
+    this.buybackNotice = "";
+    this.buybackBusy = false;
+    this.buybackSigning = false;
+    this.buybackAmountDraft = "";
+    this.clearBuybackWait();
   }
 
   destroy() {
@@ -359,6 +390,65 @@ export class AshenTraderDialogUI {
       this.wireNotice = "";
     }
     if (this.activeLineId === "wire") this.render();
+  }
+
+  applyBuyback(
+    payload: BuybackDeskPayload,
+    result?: { ok: boolean; reason: string },
+  ) {
+    if (!this.visible || !this.isMarketTrader()) return;
+    this.buybackDesk = payload;
+    if (payload.inventoryJson) this.inventoryJson = payload.inventoryJson;
+    if (this.buybackSigning) {
+      if (this.activeLineId === "buyback") this.render();
+      return;
+    }
+    this.buybackBusy = false;
+    this.clearBuybackWait();
+    if (result) this.buybackNotice = result.reason;
+    else if (
+      this.buybackNotice === "Checking the drawer." ||
+      this.buybackNotice === "Holding the paper."
+    ) {
+      this.buybackNotice = "";
+    }
+    if (this.activeLineId === "buyback") this.render();
+  }
+
+  /** The wallet accepted this hold, so the desk should stop offering cancel. */
+  markBuybackSent(claimId: string) {
+    if (!this.buybackDesk) return;
+    this.buybackDesk = {
+      ...this.buybackDesk,
+      claims: this.buybackDesk.claims.map((claim) =>
+        claim.id === claimId ? { ...claim, status: "submitted" as const } : claim,
+      ),
+    };
+  }
+
+  /** Local wallet step. Keeps the desk from wiping the prompt while it is open. */
+  noteBuyback(text: string, opts?: { busy?: boolean; signing?: boolean }) {
+    this.buybackNotice = text;
+    if (opts?.busy != null) this.buybackBusy = opts.busy;
+    if (opts?.signing != null) this.buybackSigning = opts.signing;
+    this.clearBuybackWait();
+    if (this.visible && this.activeLineId === "buyback") this.render();
+  }
+
+  private clearBuybackWait() {
+    if (this.buybackWaitTimer == null) return;
+    window.clearTimeout(this.buybackWaitTimer);
+    this.buybackWaitTimer = null;
+  }
+
+  private armBuybackWait() {
+    this.clearBuybackWait();
+    this.buybackWaitTimer = window.setTimeout(() => {
+      if (!this.buybackBusy || this.buybackSigning) return;
+      this.buybackBusy = false;
+      this.buybackNotice = "Kevin didn't answer. Try the purchase again.";
+      if (this.visible && this.activeLineId === "buyback") this.render();
+    }, 20_000);
   }
 
   private clearWireWait() {
@@ -416,7 +506,9 @@ export class AshenTraderDialogUI {
         ? "jobs"
         : this.activeLineId === "wire"
           ? "wire"
-          : this.activeLineId === "deposit" && !this.safeDepositRented
+          : this.activeLineId === "buyback"
+            ? "buyback"
+            : this.activeLineId === "deposit" && !this.safeDepositRented
             ? "deposit"
             : null;
     syncTalkSheet({
@@ -444,7 +536,10 @@ export class AshenTraderDialogUI {
     this.speechListEl.replaceChildren();
     for (const line of ASHEN_TRADER_DIALOG_LINES) {
       if (
-        (line.action === "board" || line.action === "deposit" || line.action === "wire") &&
+        (line.action === "board" ||
+          line.action === "deposit" ||
+          line.action === "wire" ||
+          line.action === "buyback") &&
         !this.isMarketTrader()
       ) {
         continue;
@@ -458,14 +553,18 @@ export class AshenTraderDialogUI {
       }
       const iconId =
         this.isTraderMan() && line.action === "trade"
-          ? "backpack"
-          : this.isTraderMan() && (line.action === "board" || line.action === "wire")
-            ? "banknote"
-            : this.isTraderMan() && line.action === "deposit"
-              ? "safe"
-              : line.id === "jobs"
-                ? "journal"
-                : undefined;
+          ? "scales"
+          : this.isTraderMan() && line.action === "board"
+            ? "price_tag"
+            : this.isTraderMan() && line.action === "wire"
+              ? "wallet"
+              : this.isTraderMan() && line.action === "buyback"
+                ? "banknote"
+              : this.isTraderMan() && line.action === "deposit"
+                ? "safe"
+                : line.id === "jobs"
+                  ? "journal"
+                  : undefined;
       const speech =
         line.action === "deposit" && this.safeDepositRented && line.playerRented
           ? line.playerRented
@@ -479,6 +578,12 @@ export class AshenTraderDialogUI {
           this.wireNotice = "Checking today's book.";
           this.wireBusy = false;
           this.clearWireWait();
+        }
+        if (line.action === "buyback" && this.isMarketTrader() && !this.buybackSigning) {
+          this.buybackDesk = null;
+          this.buybackNotice = "Checking the drawer.";
+          this.buybackBusy = false;
+          this.clearBuybackWait();
         }
         this.render();
         if (line.action === "trade" && this.isTraderMan() && this.npcId) {
@@ -504,6 +609,9 @@ export class AshenTraderDialogUI {
         }
         if (line.action === "wire" && this.isMarketTrader() && this.npcId) {
           this.handlers.onRequestWire(this.npcId);
+        }
+        if (line.action === "buyback" && this.isMarketTrader() && this.npcId) {
+          this.handlers.onRequestBuyback(this.npcId);
         }
       });
       this.speechListEl.appendChild(btn);
@@ -552,7 +660,11 @@ export class AshenTraderDialogUI {
       !this.isTraderMan() && active.npcGuard
         ? active.npcGuard
         : this.isMarketTrader() && active.npcMarket
-          ? active.npcMarket
+          ? active.id === "buyback" &&
+            ashenStanding(this.ashenReputation) === "allied" &&
+            active.npcMarketAllied
+            ? active.npcMarketAllied
+            : active.npcMarket
           : active.npcMan;
     const reply = document.createElement("div");
     reply.className = "red-dialog-response-text";
@@ -570,6 +682,9 @@ export class AshenTraderDialogUI {
     }
     if (this.isMarketTrader() && active.id === "wire") {
       this.appendWirePanel();
+    }
+    if (this.isMarketTrader() && active.id === "buyback") {
+      this.appendBuybackPanel();
     }
   }
 
@@ -614,7 +729,292 @@ export class AshenTraderDialogUI {
     return notes;
   }
 
+  private deskNote(
+    text: string,
+    flag?: "wireBlocked" | "buybackBlocked" | "wireHint" | "buybackHint",
+  ): HTMLElement {
+    const note = document.createElement("p");
+    note.className = "ms-hint ashen-wire-note";
+    if (flag) note.dataset[flag] = "1";
+    note.textContent = text;
+    return note;
+  }
+
+  private marksLabel(marks: number): string {
+    return `${marks.toLocaleString("en-US")} ${marks === 1 ? "Deadmark" : "Deadmarks"}`;
+  }
+
+  private shortWallet(address: string): string {
+    return address.length > 12 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
+  }
+
+  private appendWirePanelPhone() {
+    const section = document.createElement("div");
+    section.className = "ashen-wire ms-wire";
+    section.dataset.talkSheet = "wire";
+    section.dataset.talkSub = "1 note = 1 Deadmark";
+    const desk = this.wireDesk;
+    if (!desk) {
+      section.append(this.deskNote(this.wireNotice || "Checking today's book."));
+      this.responseEl.appendChild(section);
+      return;
+    }
+    const floor = this.wireFloor(desk);
+    const penalty = desk.penaltyDue ?? 0;
+    section.append(
+      kvCard([
+        { label: "Notes in your pack", value: desk.notesInPack.toLocaleString("en-US") },
+        {
+          label: "You can still wire today",
+          value: Math.min(desk.personalLeft, desk.coastLeft).toLocaleString("en-US"),
+        },
+        { label: "Smallest wire", value: floor.toLocaleString("en-US") },
+      ]),
+    );
+    if (desk.pendingNotes > 0) {
+      section.append(
+        this.deskNote(`A wire for ${desk.pendingNotes.toLocaleString("en-US")} notes is still on the book.`),
+      );
+    }
+    if (penalty > 0) {
+      section.append(
+        this.deskNote(
+          "You closed the account the coast paid for and kept the deposit. The penalty comes out with your next wire.",
+        ),
+      );
+    }
+    const blocked = this.wireBlockReason(desk);
+    if (blocked) {
+      if (this.wireNotice) section.append(this.deskNote(this.wireNotice));
+      if (!this.wireBusy) section.append(this.deskNote(blocked, "wireBlocked"));
+      this.responseEl.appendChild(section);
+      return;
+    }
+    const hi = Math.max(floor, desk.max);
+    const amount = Math.min(hi, Math.max(floor, this.readWireAmount() ?? floor));
+    if (this.wireAmountDraft !== String(amount)) this.wireAmountDraft = String(amount);
+    const pick = (next: number) => {
+      this.wireAmountDraft = String(next);
+      this.wireNotice = "";
+      this.render();
+    };
+    const stepper = createStepper({ value: amount, min: floor, max: hi, step: 50, onChange: pick });
+    stepper.input.disabled = this.wireBusy;
+    const presets = [250, 500]
+      .filter((value) => value > floor && value < desk.max)
+      .map((value) => ({ label: value.toLocaleString("en-US"), value }));
+    presets.unshift({ label: floor.toLocaleString("en-US"), value: floor });
+    if (desk.max > floor) presets.push({ label: "Max", value: desk.max });
+    section.append(sectionLabel("Amount"), stepper.el, quickAmounts(presets, amount, pick));
+    const outcome: { label: string; value: string; tone?: "bad"; total?: boolean }[] = [
+      { label: "Leaves your pack", value: `${(amount + penalty).toLocaleString("en-US")} notes` },
+    ];
+    if (penalty > 0) {
+      outcome.push({
+        label: "Coast penalty, once",
+        value: `${penalty.toLocaleString("en-US")} notes`,
+        tone: "bad",
+      });
+    }
+    outcome.push(
+      { label: "Arrives in", value: this.shortWallet(desk.destination) },
+      { label: "You get", value: this.marksLabel(amount), total: true },
+    );
+    section.append(sectionLabel("What happens"), kvCard(outcome, true));
+    if (this.wireNotice) section.append(this.deskNote(this.wireNotice));
+    const ship = document.createElement("button");
+    ship.type = "button";
+    ship.className = "red-dialog-complete-btn ms-btn ms-btn--pri";
+    ship.dataset.wireShip = "1";
+    ship.disabled = this.wireBusy;
+    ship.textContent = this.shipLabel(amount, penalty);
+    ship.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const current = this.wireDesk;
+      const notes = this.readWireAmount();
+      if (!this.npcId || !current || this.wireBusy) return;
+      if (notes == null || notes < this.wireFloor(current) || notes > current.max) {
+        this.wireNotice =
+          this.wireAmountHint(notes, current.max, this.wireFloor(current)) || "Pick an amount first.";
+        this.render();
+        return;
+      }
+      this.wireBusy = true;
+      this.wireNotice = "Counting the notes.";
+      this.render();
+      this.armWireWait();
+      this.handlers.onConfirmWire(this.npcId, notes);
+    });
+    section.append(ship);
+    this.responseEl.appendChild(section);
+  }
+
+  private appendBuybackPanelPhone() {
+    const section = document.createElement("div");
+    section.className = "ashen-wire ms-wire";
+    section.dataset.talkSheet = "buyback";
+    const desk = this.buybackDesk;
+    if (!desk) {
+      section.append(this.deskNote(this.buybackNotice || "Checking the drawer."));
+      this.responseEl.appendChild(section);
+      return;
+    }
+    section.dataset.talkSub = `${this.marksLabel(desk.rateMarks)} = 1 note`;
+    const marksHeld = desk.marksHeld ?? 0;
+    const claim = desk.claims[0];
+    if (claim) {
+      const card = document.createElement("div");
+      card.className = "ms-card ms-card--hl ms-card--pad ms-wire-trade";
+      const title = document.createElement("b");
+      title.textContent = `${claim.notes.toLocaleString("en-US")} notes for ${this.marksLabel(claim.marks)}`;
+      card.append(title);
+      section.append(card, sectionLabel("Progress"));
+      const reserved = claim.status === "reserved";
+      const ready = claim.status === "ready";
+      const step = (label: string, state: "done" | "now" | "later", value = "") => ({
+        label: `${state === "done" ? "✓" : state === "now" ? "●" : "○"} ${label}`,
+        value,
+        tone: state === "done" ? ("ok" as const) : state === "now" ? ("warn" as const) : undefined,
+      });
+      section.append(
+        kvCard([
+          step(`Kevin is holding ${claim.notes.toLocaleString("en-US")} notes`, "done"),
+          step(
+            `Approve ${this.marksLabel(claim.marks)} in your wallet`,
+            reserved ? "now" : "done",
+            reserved ? "Waiting" : "",
+          ),
+          step("Notes go into your pack", ready ? "now" : "later", ready ? "Ready" : reserved ? "" : "Waiting"),
+        ]),
+      );
+      if (this.buybackNotice) section.append(this.deskNote(this.buybackNotice));
+      section.append(
+        this.deskNote(
+          reserved
+            ? "You can close this and keep playing. Nothing leaves your wallet until you approve."
+            : ready
+              ? "The chain is final. Collect the notes."
+              : "The chain is settling. You can keep playing and collect here later.",
+        ),
+      );
+      if (ready) {
+        const collect = document.createElement("button");
+        collect.type = "button";
+        collect.className = "red-dialog-complete-btn ms-btn ms-btn--pri";
+        collect.dataset.buybackCollect = claim.id;
+        collect.disabled = this.buybackBusy;
+        collect.textContent = `Collect ${claim.notes.toLocaleString("en-US")} notes`;
+        collect.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!this.npcId || this.buybackBusy) return;
+          this.buybackBusy = true;
+          this.buybackNotice = "Counting the notes into your pack.";
+          this.render();
+          this.armBuybackWait();
+          this.handlers.onCollectBuyback(this.npcId, claim.id);
+        });
+        section.append(collect);
+      } else if (reserved && !this.buybackSigning) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "red-dialog-complete-btn ms-btn";
+        cancel.dataset.buybackCancel = claim.id;
+        cancel.disabled = this.buybackBusy;
+        cancel.textContent = "Cancel trade";
+        cancel.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!this.npcId || this.buybackBusy) return;
+          this.buybackBusy = true;
+          this.buybackNotice = "Dropping the hold.";
+          this.render();
+          this.armBuybackWait();
+          this.handlers.onCancelBuyback(this.npcId, claim.id);
+        });
+        section.append(cancel);
+      }
+      this.responseEl.appendChild(section);
+      return;
+    }
+    section.append(
+      kvCard([
+        { label: "Your Deadmarks", value: marksHeld.toLocaleString("en-US") },
+        { label: "Kevin has set aside", value: `${desk.max.toLocaleString("en-US")} notes` },
+      ]),
+    );
+    const blocked = this.buybackBlockReason(desk);
+    const affordable = deadmarkBuybackWalletNotes(marksHeld, desk.rateMarks);
+    const cap = Math.min(affordable, desk.max);
+    if (blocked || cap < 1) {
+      if (this.buybackNotice) section.append(this.deskNote(this.buybackNotice));
+      if (!this.buybackBusy) {
+        section.append(
+          this.deskNote(blocked ?? `You need ${this.marksLabel(desk.rateMarks)} for one note.`, "buybackBlocked"),
+        );
+      }
+      this.responseEl.appendChild(section);
+      return;
+    }
+    const amount = Math.min(cap, Math.max(1, this.readBuybackAmount() ?? Math.min(cap, 100)));
+    if (this.buybackAmountDraft !== String(amount)) this.buybackAmountDraft = String(amount);
+    const pick = (next: number) => {
+      this.buybackAmountDraft = String(next);
+      this.buybackNotice = "";
+      this.render();
+    };
+    const stepper = createStepper({ value: amount, min: 1, max: cap, step: 10, onChange: pick });
+    stepper.input.disabled = this.buybackBusy;
+    const presets = [100, 250, 500]
+      .filter((value) => value < cap)
+      .map((value) => ({ label: value.toLocaleString("en-US"), value }));
+    presets.push({ label: "Max", value: cap });
+    section.append(sectionLabel("Notes to buy"), stepper.el, quickAmounts(presets, amount, pick));
+    const cost = deadmarkMarksForNotes(amount, desk.rateMarks);
+    section.append(
+      sectionLabel("What happens"),
+      kvCard(
+        [
+          { label: "Leaves your wallet", value: this.marksLabel(cost) },
+          { label: "You get", value: `${amount.toLocaleString("en-US")} notes`, total: true },
+        ],
+        true,
+      ),
+    );
+    if (this.buybackNotice) section.append(this.deskNote(this.buybackNotice));
+    const buy = document.createElement("button");
+    buy.type = "button";
+    buy.className = "red-dialog-complete-btn ms-btn ms-btn--pri";
+    buy.dataset.buybackShip = "1";
+    buy.disabled = this.buybackBusy;
+    buy.textContent = `Buy ${amount.toLocaleString("en-US")} notes`;
+    buy.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const current = this.buybackDesk;
+      const notes = this.readBuybackAmount();
+      if (!this.npcId || !current || this.buybackBusy || notes == null) return;
+      const marks = deadmarkMarksForNotes(notes, current.rateMarks);
+      if (notes > current.max || marks > (current.marksHeld ?? 0)) {
+        this.buybackNotice =
+          notes > current.max
+            ? `I only have ${current.max.toLocaleString("en-US")} notes set aside.`
+            : `You only have ${this.marksLabel(current.marksHeld ?? 0)}.`;
+        this.render();
+        return;
+      }
+      this.buybackBusy = true;
+      this.buybackNotice = "Holding the paper.";
+      this.render();
+      this.armBuybackWait();
+      this.handlers.onPurchaseBuyback(this.npcId, notes);
+    });
+    section.append(buy);
+    this.responseEl.appendChild(section);
+  }
+
   private appendWirePanel() {
+    if (usePhoneDialogSheet()) {
+      this.appendWirePanelPhone();
+      return;
+    }
     const section = document.createElement("div");
     section.className = "ashen-wire";
     section.dataset.talkSheet = "wire";
@@ -772,6 +1172,240 @@ export class AshenTraderDialogUI {
     this.responseEl.appendChild(section);
   }
 
+  private readBuybackAmount(): number | null {
+    if (!/^[0-9]+$/.test(this.buybackAmountDraft)) return null;
+    const notes = Number(this.buybackAmountDraft);
+    if (!Number.isSafeInteger(notes) || notes < 1) return null;
+    return notes;
+  }
+
+  private buybackBlockReason(desk: BuybackDeskPayload): string | null {
+    if (desk.claims.some((claim) => claim.status !== "ready")) {
+      return "Finish the trade already on the book before you start another.";
+    }
+    if (desk.configured && desk.max > 0) return null;
+    return deadmarkBuybackClosedReason({
+      configured: desk.configured,
+      outage: desk.outage,
+      poolLeft: desk.poolLeft,
+    });
+  }
+
+  private appendBuybackPanel() {
+    if (usePhoneDialogSheet()) {
+      this.appendBuybackPanelPhone();
+      return;
+    }
+    const section = document.createElement("div");
+    section.className = "ashen-wire";
+    section.dataset.talkSheet = "buyback";
+    const desk = this.buybackDesk;
+
+    const addRow = (label: string, value: string) => {
+      const row = document.createElement("div");
+      row.className = "ashen-wire-row";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const amount = document.createElement("span");
+      amount.textContent = value;
+      row.append(name, amount);
+      section.appendChild(row);
+    };
+
+    if (!desk) {
+      const waiting = document.createElement("div");
+      waiting.className = "ashen-wire-note";
+      waiting.textContent = this.buybackNotice || "Checking the drawer.";
+      section.appendChild(waiting);
+      this.responseEl.appendChild(section);
+      return;
+    }
+
+    const rateWord = desk.rateMarks === 1 ? "mark" : "marks";
+    const marksHeld = desk.marksHeld ?? 0;
+    const walletNotes = deadmarkBuybackWalletNotes(marksHeld, desk.rateMarks);
+    const fillNotes = desk.max > 0 ? Math.min(walletNotes, desk.max) : walletNotes;
+    addRow("Rate", `${desk.rateMarks} ${rateWord} = 1 note`);
+    addRow(
+      "Your Deadmarks",
+      `${marksHeld.toLocaleString("en-US")} ${marksHeld === 1 ? "mark" : "marks"}`,
+    );
+    addRow("Purchase limit", `${desk.max.toLocaleString("en-US")} notes`);
+
+    for (const claim of desk.claims) {
+      if (claim.status === "ready") {
+        const collect = document.createElement("button");
+        collect.type = "button";
+        collect.className = "red-dialog-complete-btn";
+        collect.dataset.buybackCollect = claim.id;
+        collect.disabled = this.buybackBusy;
+        collect.textContent = `Collect ${claim.notes.toLocaleString("en-US")} notes`;
+        collect.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!this.npcId || this.buybackBusy) return;
+          this.buybackBusy = true;
+          this.buybackNotice = "Counting the notes into your pack.";
+          this.render();
+          this.armBuybackWait();
+          this.handlers.onCollectBuyback(this.npcId, claim.id);
+        });
+        section.appendChild(collect);
+        continue;
+      }
+      const pending = document.createElement("div");
+      pending.className = "ashen-wire-note";
+      pending.textContent =
+        claim.status === "reserved"
+          ? `Approve ${claim.marks.toLocaleString("en-US")} marks in your wallet for ${claim.notes.toLocaleString("en-US")} notes. Cancel this if that prompt is already closed.`
+          : `${claim.marks.toLocaleString("en-US")} marks are on the way for ${claim.notes.toLocaleString("en-US")} notes. You can keep playing. Collect them here once the chain is final.`;
+      section.appendChild(pending);
+      if (claim.status === "reserved" && !this.buybackSigning) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "red-dialog-complete-btn";
+        cancel.dataset.buybackCancel = claim.id;
+        cancel.disabled = this.buybackBusy;
+        cancel.textContent = "Cancel trade";
+        cancel.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!this.npcId || this.buybackBusy) return;
+          this.buybackBusy = true;
+          this.buybackNotice = "Dropping the hold.";
+          this.render();
+          this.armBuybackWait();
+          this.handlers.onCancelBuyback(this.npcId, claim.id);
+        });
+        section.appendChild(cancel);
+      }
+    }
+
+    if (this.buybackNotice) {
+      const notice = document.createElement("div");
+      notice.className = "ashen-wire-note";
+      notice.textContent = this.buybackNotice;
+      section.appendChild(notice);
+    }
+
+    const blocked = this.buybackBlockReason(desk);
+    const amount = this.readBuybackAmount();
+    const marks = amount == null ? 0 : deadmarkMarksForNotes(amount, desk.rateMarks);
+    const canBuy =
+      !this.buybackBusy &&
+      blocked == null &&
+      amount != null &&
+      marks > 0 &&
+      amount <= desk.max &&
+      marks <= marksHeld;
+    if (blocked && !this.buybackBusy) {
+      const line = document.createElement("div");
+      line.className = "ashen-wire-note";
+      line.dataset.buybackBlocked = "1";
+      line.textContent = blocked;
+      section.appendChild(line);
+    } else if (!blocked) {
+      const hint = document.createElement("div");
+      hint.className = "ashen-wire-note";
+      hint.dataset.buybackHint = "1";
+      const showHint = (next: number | null) => {
+        if (next == null) {
+          hint.textContent = "";
+        } else if (next > desk.max) {
+          hint.textContent = `I only have ${desk.max.toLocaleString("en-US")} notes set aside.`;
+        } else {
+          const cost = deadmarkMarksForNotes(next, desk.rateMarks);
+          const costWord = cost === 1 ? "mark" : "marks";
+          if (cost > marksHeld) {
+            hint.textContent = `You only have ${marksHeld.toLocaleString("en-US")} ${marksHeld === 1 ? "mark" : "marks"}.`;
+          } else {
+            hint.textContent =
+              cost > 0
+                ? `${next.toLocaleString("en-US")} notes cost ${cost.toLocaleString("en-US")} ${costWord}.`
+                : "";
+          }
+        }
+        hint.hidden = hint.textContent.length === 0;
+      };
+      const amountRow = document.createElement("div");
+      amountRow.className = "ashen-wire-amount-row";
+      const input = document.createElement("input");
+      input.className = "ashen-wire-amount";
+      input.inputMode = "numeric";
+      input.autocomplete = "off";
+      input.placeholder = "Notes to buy";
+      input.value = this.buybackAmountDraft;
+      input.disabled = this.buybackBusy;
+      input.addEventListener("input", () => {
+        this.buybackAmountDraft = input.value.replace(/\D/g, "").slice(0, 10);
+        if (input.value !== this.buybackAmountDraft) input.value = this.buybackAmountDraft;
+        const purchase =
+          section.querySelector<HTMLButtonElement>("[data-buyback-ship]") ??
+          this.overlay.querySelector<HTMLButtonElement>("[data-buyback-ship]");
+        const next = this.readBuybackAmount();
+        showHint(next);
+        if (purchase && this.buybackDesk) {
+          const cost = next == null ? 0 : deadmarkMarksForNotes(next, this.buybackDesk.rateMarks);
+          const fits =
+            next != null &&
+            next >= 1 &&
+            next <= this.buybackDesk.max &&
+            cost > 0 &&
+            cost <= (this.buybackDesk.marksHeld ?? 0);
+          purchase.disabled = this.buybackBusy || !fits;
+          purchase.textContent =
+            fits && next != null ? `Purchase ${next.toLocaleString("en-US")} notes` : "Purchase";
+        }
+      });
+      const maxBtn = document.createElement("button");
+      maxBtn.type = "button";
+      maxBtn.className = "ashen-wire-max";
+      maxBtn.textContent = "Max";
+      maxBtn.disabled = this.buybackBusy || fillNotes < 1;
+      maxBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.buybackAmountDraft = String(fillNotes);
+        this.render();
+      });
+      amountRow.append(input, maxBtn);
+      section.appendChild(amountRow);
+      showHint(amount);
+      section.appendChild(hint);
+
+      const purchase = document.createElement("button");
+      purchase.type = "button";
+      purchase.className = "red-dialog-complete-btn";
+      purchase.dataset.buybackShip = "1";
+      purchase.disabled = !canBuy;
+      purchase.textContent =
+        canBuy && amount != null ? `Purchase ${amount.toLocaleString("en-US")} notes` : "Purchase";
+      purchase.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const notes = this.readBuybackAmount();
+        const cost =
+          notes == null || !this.buybackDesk
+            ? 0
+            : deadmarkMarksForNotes(notes, this.buybackDesk.rateMarks);
+        if (
+          !this.npcId ||
+          !this.buybackDesk ||
+          notes == null ||
+          notes < 1 ||
+          notes > this.buybackDesk.max ||
+          cost > (this.buybackDesk.marksHeld ?? 0)
+        ) {
+          return;
+        }
+        this.buybackBusy = true;
+        this.buybackNotice = "Holding the paper.";
+        this.render();
+        this.armBuybackWait();
+        this.handlers.onPurchaseBuyback(this.npcId, notes);
+      });
+      section.appendChild(purchase);
+    }
+
+    this.responseEl.appendChild(section);
+  }
+
   private appendSafeDepositOffer() {
     const banknotes = this.itemCount("banknote");
     const canPay = banknotes >= SAFE_DEPOSIT_COST;
@@ -867,6 +1501,7 @@ export class AshenTraderDialogUI {
 
     const section = document.createElement("div");
     section.className = "craft-recipe";
+    section.dataset.jobReward = talkJobReward(notes, rep, remaining);
     if (expanded) section.classList.add("craft-recipe--expanded");
     if (canComplete) section.classList.add("craft-recipe--ready");
     if (accepted) section.classList.add("craft-recipe--accepted");

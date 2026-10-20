@@ -1257,6 +1257,9 @@ function isBuildingFrontFootprintEdge(
 /**
  * Shared front/behind building pin for living sprites, trees, and fences.
  * Preserves relative iso order inside the lift/sink band (see ENTITY_BUILDING_*).
+ * Tiles south of a lot that the cuboid does not cover, and that
+ * {@link buildingPinsTile} does not pin, stay on their natural depth so a
+ * fringe sprite cannot jump over the neighbour just outside the search.
  */
 function applyBuildingObjectDepth(
   depth: number,
@@ -1289,11 +1292,25 @@ function applyBuildingObjectDepth(
 
   for (const bld of nearby) {
     const buildingDepth = buildingWallDepth(bld);
-    const lift =
+    const pinned =
+      buildingPinsTile(tx, ty, bld) ||
+      isBuildingFrontFootprintEdge(tx, ty, bld);
+    let lift =
       opts.shouldLift?.(tx, ty, bld) ??
       (isInFrontOfBuilding(tx, ty, bld) ||
         isBuildingSwApronTile(tx, ty, bld) ||
-        isBuildingFrontFootprintEdge(tx, ty, bld));
+        pinned);
+    // South of a lot with no X limit marks tiles the cuboid never covers.
+    // Lifting those above the search radius paints them over a neighbour the
+    // lift did not reach (the south Birchport grave, over the player).
+    if (
+      lift &&
+      opts.shouldLift === undefined &&
+      !pinned &&
+      !buildingCuboidCoversSprite(tx, ty, bld)
+    ) {
+      lift = false;
+    }
     if (lift) {
       frontFloor = Math.max(
         frontFloor,

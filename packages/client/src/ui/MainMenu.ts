@@ -23,6 +23,7 @@ import {
   type AuthSession,
   type PlayerPreview,
 } from "../network/ColyseusClient";
+import { ensureCountyRadio, forgetCountyRadio } from "../network/countyRadio";
 import { getWallets } from "@wallet-standard/app";
 import { shortWallet } from "../network/solanaWallet";
 import { listWalletOptions, rememberWallet } from "../network/walletOptions";
@@ -415,6 +416,7 @@ export class MainMenu {
 
   private setSession(session: AuthSession) {
     storeAuthSession(session);
+    ensureCountyRadio(session.sessionToken);
     this.session = session;
     this.walletLabel.hidden = false;
     this.walletLabel.textContent = shortWallet(session.wallet);
@@ -465,6 +467,7 @@ export class MainMenu {
 
   private handleSignOut() {
     if (this.busy) return;
+    forgetCountyRadio();
     clearStoredSession();
     this.session = null;
     this.nameInput.value = "";

@@ -64,8 +64,11 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   scrap_metal: "/assets/UI/UI_scrap_metal.png",
   wood: "/assets/UI/UI_wood.png",
   banknote: "/assets/UI/UI_banknote.png",
+  price_tag: "/assets/UI/UI_price_tag.png",
+  wallet: "/assets/UI/UI_wallet.png",
   safe: "/assets/UI/UI_safe.png",
   dogtag: "/assets/UI/UI_dogtag.png",
+  scales: "/assets/UI/UI_scales.png",
   lighter: "/assets/UI/UI_lighter.png",
   blue_cigarettes: "/assets/UI/UI_blue_cigarettes.png",
   gold_chain: "/assets/UI/UI_gold_chain.png",
@@ -189,6 +192,8 @@ export function fillSpeechButton(
   iconItemId?: string,
 ): void {
   button.replaceChildren();
+  if (iconItemId) button.dataset.iconId = iconItemId;
+  else delete button.dataset.iconId;
   if (iconItemId) appendItemIcon(button, iconItemId, "red-dialog-speech-icon");
   const text = document.createElement("span");
   text.className = "red-dialog-speech-label";

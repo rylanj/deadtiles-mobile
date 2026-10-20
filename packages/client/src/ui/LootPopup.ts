@@ -1,4 +1,5 @@
 import { appendItemIcon } from "./itemIcons";
+import { useMobileSheet } from "./mobileSheet";
 
 export type LootItem = {
   name: string;
@@ -108,7 +109,9 @@ export class LootPopup {
         qty.className = "loot-item-qty";
         // Reputation rewards use the rep icon and a +N label.
         qty.textContent =
-          item.id === "rep" ? `+${item.quantity}` : `×${item.quantity}`;
+          item.id === "rep"
+            ? `${item.quantity > 0 ? "+" : ""}${item.quantity}`
+            : `×${item.quantity}`;
         row.appendChild(qty);
       }
       card.appendChild(row);
@@ -119,12 +122,30 @@ export class LootPopup {
     // Trigger entrance animation on next frame
     requestAnimationFrame(() => card.classList.add("loot-card--visible"));
 
-    const SHOW_MS = lootPopupDurationMs(card.textContent ?? "", opts?.durationMs);
     const FADE_MS = 400;
-    setTimeout(() => {
+    let hidden = false;
+    const hide = () => {
+      if (hidden) return;
+      hidden = true;
       card.classList.add("loot-card--hiding");
       setTimeout(() => card.remove(), FADE_MS);
-    }, SHOW_MS);
+    };
+    card.addEventListener("click", (event) => {
+      event.stopPropagation();
+      hide();
+    });
+    (card as HTMLElement & { dismissLoot?: () => void }).dismissLoot = hide;
+
+    // Phones keep two cards so the stack never climbs over the HUD.
+    if (useMobileSheet()) {
+      const live = [...this.container.children].filter(
+        (el) => !el.classList.contains("loot-card--hiding"),
+      ) as (HTMLElement & { dismissLoot?: () => void })[];
+      for (const old of live.slice(0, Math.max(0, live.length - 2))) old.dismissLoot?.();
+    }
+
+    const SHOW_MS = lootPopupDurationMs(card.textContent ?? "", opts?.durationMs);
+    setTimeout(hide, SHOW_MS);
   }
 
   destroy() {

@@ -1,4 +1,5 @@
 import bs58 from "bs58";
+import { DeadmarkWalletError } from "./solanaWallet";
 import { isNativeApp, SolanaMWA } from "../native";
 
 /**
@@ -190,5 +191,56 @@ export async function signInWithMobileWallet(opts: {
     });
   } catch (err) {
     throw mapMwaError(err);
+  }
+}
+
+function transferSignature(value: string): string {
+  try {
+    if (bs58.decode(value).length === 64) return value;
+  } catch {
+    /* base64 below */
+  }
+  const bytes = base64ToBytes(value);
+  if (bytes.length !== 64) throw new Error("Wallet did not return a transfer signature");
+  return bs58.encode(bytes);
+}
+
+/** One Phantom session: send the coast's unsigned buyback and return its base58 signature. */
+export async function sendMobileDeadmarkBuyback(
+  unsignedTxBase64: string,
+  expectedWallet: string,
+  packageName?: string | null,
+): Promise<string> {
+  if (!isNativeApp()) {
+    throw new Error("Mobile Wallet Adapter is only available in the Android app.");
+  }
+  const { transact } = await import("@solana-mobile/mobile-wallet-adapter-protocol");
+  try {
+    await setPreferredMobileWallet(packageName ?? null);
+    return await transact(async (wallet) => {
+      const auth = await wallet.authorize({
+        chain: "solana:mainnet",
+        identity: APP_IDENTITY,
+      });
+      const account = auth.accounts?.[0];
+      if (!account?.address) throw new Error("Wallet did not return an account");
+      if (mwaAddressToBase58(account.address) !== expectedWallet) {
+        throw new DeadmarkWalletError(
+          "That wallet isn't the one on your ledger. Connect the wallet you signed in with.",
+          false,
+        );
+      }
+      const result = await wallet.signAndSendTransactions({
+        payloads: [unsignedTxBase64],
+      });
+      const signature = result.signatures?.[0];
+      if (!signature) throw new Error("Wallet did not return a transfer signature");
+      return transferSignature(signature);
+    });
+  } catch (err) {
+    if (err instanceof DeadmarkWalletError) throw err;
+    const mapped = mapMwaError(err);
+    const cancelled = /cancelled/i.test(mapped.message);
+    throw new DeadmarkWalletError(mapped.message, cancelled);
   }
 }

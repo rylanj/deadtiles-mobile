@@ -31,7 +31,7 @@ import {
 } from "./items.js";
 
 /** How long a player listing stays on the board. */
-export const MARKET_LISTING_MS = 48 * 60 * 60 * 1000;
+export const MARKET_LISTING_MS = 168 * 60 * 60 * 1000;
 /** Survivor ads loaded at once. The rest stay in the database until the next page. */
 export const MARKET_BOARD_PAGE_SIZE = 20;
 export type MarketBoardSort = "new" | "cheap";

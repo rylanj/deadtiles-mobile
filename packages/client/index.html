@@ -364,6 +364,7 @@
       }
       .journal-tabs {
         display: flex;
+        flex-wrap: wrap;
         gap: 6px;
         padding: 8px 16px 0;
         border-bottom: 1px solid rgba(100, 220, 100, 0.22);
@@ -374,7 +375,7 @@
         border: 1px solid transparent;
         border-bottom: none;
         border-radius: 4px 4px 0 0;
-        padding: 8px 12px;
+        padding: 8px 10px;
         background: transparent;
         color: #a8c8a8;
         font: 600 13px/1.2 system-ui, sans-serif;
@@ -1864,9 +1865,10 @@
         color: #ffe8e8;
       }
       .red-dialog-speech-icon {
-        width: 22px;
-        height: 22px;
-        flex: 0 0 22px;
+        width: 24px;
+        height: 24px;
+        flex: 0 0 24px;
+        margin: -1px 0;
         object-fit: contain;
         image-rendering: pixelated;
       }
@@ -2425,6 +2427,24 @@
       }
       .trader-cell--offered {
         outline: 1px solid rgba(180, 220, 100, 0.75);
+      }
+      .trader-cell--locked {
+        filter: saturate(0.4);
+        opacity: 0.72;
+      }
+      .trader-cell-lock {
+        position: absolute;
+        bottom: 2px;
+        left: 2px;
+        right: 2px;
+        padding: 1px 3px;
+        border-radius: 2px;
+        background: rgba(40, 28, 8, 0.92);
+        color: #f0d090;
+        font: 600 9px/1.2 system-ui, sans-serif;
+        pointer-events: none;
+        z-index: 2;
+        text-align: center;
       }
       .trader-cell-offer {
         position: absolute;
@@ -3036,6 +3056,66 @@
       }
       .inventory-use-btn {
         border-color: rgba(100, 220, 100, 0.55);
+      }
+      .inventory-read-btn {
+        border-color: rgba(180, 190, 120, 0.55);
+        color: #e8e8c8;
+      }
+      .inventory-read-btn:hover:not(:disabled) {
+        background: rgba(180, 180, 80, 0.14);
+        border-color: rgba(200, 200, 120, 0.8);
+      }
+      .item-read-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      .item-read-overlay[hidden] {
+        display: none;
+      }
+      .item-read-panel {
+        width: min(360px, 92vw);
+        max-height: min(62vh, 480px);
+        background: rgba(10, 14, 10, 0.96);
+        border: 1px solid rgba(100, 220, 100, 0.45);
+        border-radius: 4px;
+        color: #d4f0d4;
+        font: 14px/1.45 system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
+      }
+      .item-read-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid rgba(100, 220, 100, 0.22);
+        flex: 0 0 auto;
+      }
+      .item-read-title {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+        font: 600 15px/1.2 system-ui, sans-serif;
+        text-align: left;
+      }
+      .item-read-body {
+        margin: 0;
+        padding: 12px 16px 16px;
+        overflow-y: auto;
+        flex: 1 1 auto;
+        min-height: 0;
+        color: #c8e0c8;
+        white-space: pre-wrap;
+        -webkit-overflow-scrolling: touch;
       }
       .inventory-unload-btn {
         border-color: rgba(200, 170, 80, 0.5);
@@ -4558,6 +4638,23 @@
       body.main-menu-open #world-clock {
         display: none !important;
       }
+      /* /hud: clear the screen of persistent chrome. Chat stays so it can be toggled back. */
+      body.hud-hidden #player-hud,
+      body.hud-hidden #weapon-hotbar,
+      body.hud-hidden #world-clock,
+      body.hud-hidden #mobile-hud-stack,
+      body.hud-hidden #move-stick,
+      body.hud-hidden #search-progress,
+      body.hud-hidden #structure-build-hud,
+      body.hud-hidden #combat-lock-banner,
+      body.hud-hidden #loot-popup-container,
+      body.hud-hidden #radio-caption,
+      body.hud-hidden #tutorial-stack,
+      body.hud-hidden #damage-overlay,
+      body.hud-hidden #temperature-fx,
+      body.hud-hidden #infection-fx {
+        display: none !important;
+      }
       body:not(.game-ready) #player-hud,
       body:not(.game-ready) #chat-bar,
       body:not(.game-ready) #weapon-hotbar,
@@ -5031,6 +5128,7 @@
         #inventory-overlay,
         #container-loot-overlay,
         #trader-overlay,
+        #market-overlay,
         #red-order-dialog-overlay,
         #ashen-dialog-overlay,
         #ashen-militia-dialog-overlay,
@@ -5257,6 +5355,65 @@
           overflow: hidden;
           flex-direction: column;
           touch-action: pan-y;
+        }
+        /*
+          The shared trader sheet is a fixed-height clip. Market panels wrap
+          under that, so Your ads sits below the fold and a swipe never
+          reaches it. Let this dialog grow and scroll instead.
+        */
+        #market-overlay {
+          touch-action: pan-y;
+        }
+        #market-overlay .market-layout {
+          width: min(920px, 100%);
+          max-height: none;
+          height: auto;
+          overflow: visible;
+          flex: 0 0 auto;
+        }
+        #market-overlay.dialog-overflows .red-dialog-toolbar {
+          position: sticky;
+          top: 0;
+          z-index: 4;
+          background: rgba(12, 16, 12, 0.94);
+        }
+        #market-overlay .market-form input,
+        #market-overlay .market-board-search {
+          font-size: 16px;
+        }
+        #market-overlay .market-row-summary,
+        #market-overlay .market-action,
+        #market-overlay .market-sort {
+          touch-action: pan-y;
+        }
+        /*
+          Phone portrait wraps the columns and each panel was its own
+          scroller, so a swipe on the board never moved down to Your ads.
+          One column, and the overlay is the only scroller.
+        */
+        @media (max-width: 720px) {
+          #market-overlay .market-columns {
+            flex-direction: column;
+            flex-wrap: nowrap;
+          }
+          #market-overlay .inventory-panel.trader-panel.market-panel {
+            width: 100%;
+            max-width: none;
+            flex: 0 0 auto;
+            height: auto;
+            max-height: none;
+            min-height: min-content;
+            overflow: visible;
+          }
+          #market-overlay .market-yours-body,
+          #market-overlay .inventory-panel.trader-panel.market-panel > .market-scroll,
+          #market-overlay .inventory-panel.trader-panel.market-panel .market-scroll--mine {
+            flex: 0 0 auto;
+            height: auto;
+            max-height: none;
+            min-height: min-content;
+            overflow: visible;
+          }
         }
         .trader-footer {
           flex: 0 1 auto;
@@ -5505,7 +5662,6 @@
         --talk-keyboard-inset: 0px;
         padding-bottom: max(
           var(--talk-keyboard-inset),
-          var(--browser-bottom-inset, 0px),
           env(safe-area-inset-bottom, 0px)
         );
         overflow: hidden;
@@ -6035,6 +6191,510 @@
         flex: 1 1 0;
         min-height: 48px;
         font-size: 16px !important;
+      }
+
+      .talk-sheet-cards[hidden],
+      .talk-sheet-cards-bar[hidden],
+      .loot-sheet[hidden],
+      .loot-sheet-tabs[hidden],
+      .loot-sheet-pane[hidden],
+      .inventory-vitals[hidden],
+      .inventory-hint[hidden] {
+        display: none !important;
+      }
+
+      .inventory-header-top .inventory-count {
+        flex: 0 0 auto;
+        min-width: 3.2em;
+        padding: 4px 8px;
+        border: 1px solid rgba(100, 220, 100, 0.35);
+        border-radius: 999px;
+        background: rgba(8, 16, 8, 0.85);
+        color: #b8e0b8;
+        font: 700 11px/1 system-ui, sans-serif;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
+        text-align: center;
+      }
+      .inventory-worn {
+        display: contents;
+      }
+      .inventory-vitals {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        margin-bottom: 8px;
+      }
+      .inventory-vital {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .inventory-vital-label {
+        flex: 0 0 46px;
+        font: 700 10px/1 system-ui, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8fb88f;
+      }
+      .inventory-vital-track {
+        flex: 1 1 auto;
+        height: 6px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .inventory-vital-fill {
+        height: 100%;
+        width: 0;
+      }
+
+      #inventory-overlay.phone-sheet:not([hidden]),
+      #container-loot-overlay.phone-sheet:not([hidden]) {
+        padding: 0;
+        align-items: stretch;
+        justify-content: flex-start;
+        overflow: hidden;
+        background: rgba(0, 0, 0, 0.72);
+        height: 100dvh;
+        max-height: 100dvh;
+        touch-action: manipulation;
+      }
+      #inventory-overlay.phone-sheet .inventory-panel {
+        width: 100%;
+        max-width: none;
+        height: 100%;
+        max-height: 100%;
+        margin: 0;
+        border-radius: 0;
+        border: none;
+        background:
+          linear-gradient(180deg, rgba(22, 36, 22, 0.45) 0%, transparent 72px),
+          rgba(8, 12, 8, 0.98);
+        box-shadow: none;
+      }
+      #inventory-overlay.phone-sheet .inventory-header {
+        text-align: left;
+        padding: calc(10px + env(safe-area-inset-top, 0px))
+          calc(12px + env(safe-area-inset-right, 0px)) 10px
+          calc(12px + env(safe-area-inset-left, 0px));
+        border-bottom: 1px solid rgba(120, 220, 120, 0.28);
+        background: rgba(6, 10, 6, 0.92);
+      }
+      #inventory-overlay.phone-sheet .inventory-title {
+        font-size: 20px;
+        letter-spacing: 0.02em;
+      }
+      #inventory-overlay.phone-sheet .inventory-grid-wrap {
+        padding: 10px 12px 8px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      #inventory-overlay.phone-sheet .inventory-worn {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+        margin: 0 0 12px;
+        padding: 0 0 12px;
+        border-bottom: 1px solid rgba(100, 220, 100, 0.22);
+      }
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-section,
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-weapon-row,
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-grid {
+        display: contents;
+      }
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-section-label,
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-weapon-row-labels,
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-equipment-labels,
+      #inventory-overlay.phone-sheet .inventory-cell-key,
+      #inventory-overlay.phone-sheet .inventory-cell-label {
+        display: none;
+      }
+      #inventory-overlay.phone-sheet .inventory-worn .inventory-cell {
+        min-height: 0;
+        aspect-ratio: 1;
+      }
+      #inventory-overlay.phone-sheet .inventory-carry-scroll {
+        max-height: none;
+        overflow: visible;
+      }
+      #inventory-overlay.phone-sheet .inventory-grid--pockets {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+      }
+      #inventory-overlay.phone-sheet .inventory-section-label {
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        color: #9fe09f;
+      }
+      #inventory-overlay.phone-sheet .inventory-footer {
+        padding: 10px calc(12px + env(safe-area-inset-right, 0px))
+          calc(12px + max(env(safe-area-inset-bottom, 0px), var(--browser-bottom-inset, 0px)))
+          calc(12px + env(safe-area-inset-left, 0px));
+        border-top: 1px solid rgba(120, 220, 120, 0.3);
+        background: linear-gradient(180deg, rgba(10, 16, 10, 0.92), rgba(6, 10, 6, 0.98));
+        box-shadow: 0 -16px 28px rgba(0, 0, 0, 0.35);
+      }
+      #inventory-overlay.phone-sheet .inventory-detail {
+        font-size: 14px;
+        line-height: 1.35;
+        color: #d8f0d8;
+      }
+      #inventory-overlay.phone-sheet .inventory-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      #inventory-overlay.phone-sheet .inventory-action-btn {
+        min-height: 48px;
+        min-width: 0;
+        width: 100%;
+        font-size: 15px;
+      }
+      #inventory-overlay.phone-sheet .inventory-equip-btn,
+      #inventory-overlay.phone-sheet .inventory-wear-btn,
+      #inventory-overlay.phone-sheet .inventory-use-btn {
+        grid-column: 1 / -1;
+        background: rgba(36, 110, 48, 0.95);
+        border-color: rgba(140, 230, 140, 0.85);
+        color: #f3fff3;
+      }
+
+      .loot-sheet {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        background:
+          linear-gradient(180deg, rgba(22, 36, 22, 0.4) 0%, transparent 80px),
+          rgba(8, 12, 8, 0.98);
+        color: #e7f6e7;
+      }
+      #container-loot-overlay.phone-sheet {
+        display: flex;
+        flex-direction: column;
+      }
+      .loot-sheet-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 0 0 auto;
+        padding: calc(10px + env(safe-area-inset-top, 0px))
+          calc(12px + env(safe-area-inset-right, 0px)) 10px
+          calc(12px + env(safe-area-inset-left, 0px));
+        border-bottom: 1px solid rgba(120, 220, 120, 0.28);
+      }
+      .loot-sheet-titles {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .loot-sheet-header .inventory-title {
+        text-align: left;
+        font-size: 20px;
+        letter-spacing: 0.02em;
+      }
+      .loot-sheet-meta {
+        margin-top: 2px;
+        font: 600 12px/1.2 system-ui, sans-serif;
+        color: #8fd48f;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .loot-sheet-tabs,
+      .loot-sheet-footer {
+        display: flex;
+        gap: 8px;
+        flex: 0 0 auto;
+        padding: 8px calc(12px + env(safe-area-inset-right, 0px)) 8px
+          calc(12px + env(safe-area-inset-left, 0px));
+      }
+      .loot-sheet-tab,
+      .loot-sheet-take,
+      .loot-sheet-primary,
+      .loot-sheet-peek {
+        appearance: none;
+        -webkit-appearance: none;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .loot-sheet-tab {
+        flex: 1 1 0;
+        min-height: 44px;
+        border: 1px solid rgba(100, 220, 100, 0.4);
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.28);
+        color: #d4f0d4;
+        font: 700 14px/1 system-ui, sans-serif;
+      }
+      .loot-sheet-tab--on {
+        background: rgba(28, 72, 32, 0.95);
+        border-color: rgba(120, 220, 120, 0.85);
+        color: #f3fff3;
+      }
+      .loot-sheet-pane {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 8px calc(12px + env(safe-area-inset-right, 0px)) 12px
+          calc(12px + env(safe-area-inset-left, 0px));
+      }
+      .loot-sheet-pane--bag {
+        padding-top: 4px;
+      }
+      .loot-sheet-pane--bag .inventory-worn {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      .loot-sheet-pane--bag .inventory-worn .inventory-section,
+      .loot-sheet-pane--bag .inventory-worn .inventory-weapon-row,
+      .loot-sheet-pane--bag .inventory-worn .inventory-grid {
+        display: contents;
+      }
+      .loot-sheet-pane--bag .inventory-section-label,
+      .loot-sheet-pane--bag .inventory-weapon-row-labels,
+      .loot-sheet-pane--bag .inventory-equipment-labels,
+      .loot-sheet-pane--bag .inventory-cell-key {
+        display: none;
+      }
+      .loot-sheet-pane--bag .inventory-grid--pockets {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+      .loot-sheet-pane--bag .inventory-carry-scroll {
+        max-height: none;
+        overflow: visible;
+      }
+      .loot-sheet-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .loot-sheet-pile {
+        margin: 6px 0 0;
+        font: 700 11px/1 system-ui, sans-serif;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #9fe09f;
+      }
+      .loot-sheet-row {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 64px;
+        padding: 8px 8px 8px 8px;
+        border: 1px solid rgba(100, 220, 100, 0.28);
+        border-radius: 10px;
+        background: rgba(16, 24, 16, 0.88);
+      }
+      .loot-sheet-icon {
+        width: 52px;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .loot-sheet-icon-img {
+        max-width: 40px;
+        max-height: 40px;
+        object-fit: contain;
+        image-rendering: pixelated;
+      }
+      .loot-sheet-name {
+        font: 700 16px/1.25 system-ui, sans-serif;
+        color: #f2fff2;
+      }
+      .loot-sheet-qty {
+        margin-top: 2px;
+        font: 600 12px/1.2 system-ui, sans-serif;
+        color: #9cc89c;
+      }
+      .loot-sheet-take {
+        min-height: 44px;
+        min-width: 72px;
+        padding: 0 14px;
+        border: 1px solid rgba(140, 230, 140, 0.8);
+        border-radius: 8px;
+        background: rgba(36, 110, 48, 0.95);
+        color: #f3fff3;
+        font: 700 14px/1 system-ui, sans-serif;
+      }
+      .loot-sheet-take:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .loot-sheet-empty {
+        padding: 28px 8px;
+        text-align: center;
+        color: #8fb88f;
+        font: 600 15px/1.4 system-ui, sans-serif;
+      }
+      .loot-sheet-footer {
+        align-items: center;
+        padding-bottom: calc(10px + max(env(safe-area-inset-bottom, 0px), var(--browser-bottom-inset, 0px)));
+        border-top: 1px solid rgba(120, 220, 120, 0.3);
+        background: rgba(6, 10, 6, 0.96);
+      }
+      .loot-sheet-primary {
+        flex: 1 1 auto;
+        min-height: 48px;
+        border: 1px solid rgba(140, 230, 140, 0.85);
+        border-radius: 8px;
+        background: rgba(36, 110, 48, 0.95);
+        color: #f3fff3;
+        font: 700 16px/1 system-ui, sans-serif;
+      }
+      .loot-sheet-primary:disabled {
+        opacity: 0.4;
+      }
+      .loot-sheet-peek {
+        flex: 0 0 auto;
+        min-height: 48px;
+        padding: 0 14px;
+        border: 1px solid rgba(100, 220, 100, 0.4);
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.28);
+        color: #d4f0d4;
+        font: 700 13px/1 system-ui, sans-serif;
+      }
+
+      .talk-sheet-reply {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .talk-sheet-reply > *:not(.talk-sheet-reopen),
+      .talk-sheet-reply .red-dialog-response-text,
+      .talk-sheet-reply .ashen-dialog-response {
+        background: rgba(18, 32, 18, 0.92);
+        border: 1px solid rgba(100, 220, 100, 0.22);
+        border-radius: 14px 14px 14px 4px;
+        padding: 12px 14px;
+      }
+      .talk-sheet--red .talk-sheet-reply > *,
+      .talk-sheet--red .talk-sheet-reply .red-dialog-response-text {
+        background: rgba(36, 16, 16, 0.92);
+        border-color: rgba(180, 80, 80, 0.28);
+      }
+      .talk-sheet-cards {
+        flex: 0 1 auto;
+        max-height: 42%;
+        min-height: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 0 calc(12px + env(safe-area-inset-right, 0px)) 8px
+          calc(12px + env(safe-area-inset-left, 0px));
+      }
+      .talk-sheet-cards .craft-recipe {
+        margin: 0 0 8px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .talk-sheet-cards-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: 0 0 auto;
+        padding: 8px calc(12px + env(safe-area-inset-right, 0px));
+      }
+      .talk-sheet-cards-bar .red-dialog-complete-btn {
+        width: 100%;
+        min-height: 48px;
+        font-size: 16px;
+      }
+      .talk-sheet-choices {
+        background: rgba(6, 10, 6, 0.55);
+      }
+      .talk-sheet-mode .red-dialog-speech-btn {
+        border-radius: 10px;
+        text-align: left;
+        background: rgba(16, 28, 16, 0.95);
+      }
+
+      .trader-sheet-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .trader-sheet-row {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr) auto auto;
+        gap: 8px;
+        align-items: center;
+        min-height: 64px;
+        padding: 8px;
+        border: 1px solid rgba(100, 220, 100, 0.28);
+        border-radius: 10px;
+        background: rgba(16, 24, 16, 0.88);
+      }
+      .trader-sheet-row--on {
+        border-color: rgba(140, 230, 140, 0.7);
+        box-shadow: inset 0 0 0 1px rgba(94, 200, 94, 0.25);
+        background: rgba(22, 42, 22, 0.95);
+      }
+      .trader-sheet-row-icon {
+        width: 48px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .trader-sheet-row-img {
+        max-width: 36px;
+        max-height: 36px;
+        object-fit: contain;
+        image-rendering: pixelated;
+      }
+      .trader-sheet-row-name {
+        font: 700 15px/1.25 system-ui, sans-serif;
+        color: #f2fff2;
+      }
+      .trader-sheet-row-meta {
+        margin-top: 2px;
+        font: 600 12px/1.2 system-ui, sans-serif;
+        color: #9cc89c;
+      }
+      .trader-sheet-row-price {
+        font: 700 13px/1 system-ui, sans-serif !important;
+        padding: 6px 8px !important;
+      }
+      .trader-sheet-row-step {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .trader-sheet-row-step .trader-cell-step-btn {
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        opacity: 1;
+        pointer-events: auto;
+        border-radius: 8px;
+        font-size: 18px;
+      }
+      .trader-sheet-row-qty {
+        min-width: 1.6em;
+        text-align: center;
+        font: 700 16px/1 system-ui, sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      .trader-sheet-strip {
+        min-height: 60px;
+      }
+      .trader-sheet .trader-empty {
+        padding: 24px 8px;
+        text-align: center;
       }
 
     </style>

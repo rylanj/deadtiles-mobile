@@ -1,0 +1,27 @@
+/* Phone survivor market (design/mobile-dialogs board 07) */
+.market-ms .ms-search {
+  margin-bottom: 10px;
+}
+.market-ms .ms-chips {
+  margin-bottom: 8px;
+}
+.market-ms-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 15px;
+}
+.market-ms-more {
+  padding: 14px 0 4px;
+  text-align: center;
+}
+.market-ms-note {
+  margin: 4px 2px 10px;
+}
+.market-ms-pay {
+  margin-top: 16px;
+}
+.market-ms .ms-row .ms-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 84px;
+}

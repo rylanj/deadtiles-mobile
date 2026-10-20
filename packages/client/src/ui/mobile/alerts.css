@@ -1,0 +1,324 @@
+/* Warnings, death, chat and tutorial (design/mobile-dialogs board 13) */
+
+/* Faction attack warning */
+.faction-attack-warning-actions {
+  gap: 8px;
+}
+.faction-attack-warning-close.faction-attack-warning-attack {
+  border-color: rgba(230, 100, 100, 0.6);
+  background: rgba(40, 14, 14, 0.9);
+  color: #f2c0c0;
+}
+.faction-attack-warning-close.faction-attack-warning-attack:hover {
+  border-color: rgba(240, 120, 120, 0.9);
+  background: rgba(60, 18, 18, 0.95);
+  color: #fff0f0;
+}
+.faw-card {
+  border-top-color: rgba(230, 110, 110, 0.55);
+}
+.faw-title {
+  margin: 0 0 6px;
+  font: 800 21px/1.2 system-ui, sans-serif;
+  color: #f8e8e8;
+}
+.faw-lead {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: #e8d8d8;
+}
+.faw-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.faw-bar .ms-btn {
+  width: 100%;
+}
+
+/* Phone chat: panel above the keyboard with tabs, ✕ and recent lines */
+body.is-mobile #chat-bar.chat-bar--phone.chat-bar--open {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: max(var(--hud-bottom), var(--chat-kb, 0px)) !important;
+  padding: 8px max(12px, env(safe-area-inset-right, 0px)) 10px max(12px, env(safe-area-inset-left, 0px));
+  border: 0;
+  border-top: 1px solid rgba(100, 220, 100, 0.35);
+  border-radius: 18px 18px 0 0;
+  background: rgba(8, 12, 8, 0.96);
+}
+.chat-phone-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-phone-tabs {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.chat-phone-tabs .ms-tab:disabled {
+  opacity: 0.45;
+}
+.chat-phone-log {
+  font: 14px/1.5 system-ui, sans-serif;
+  color: #e7f6e7;
+  overflow-wrap: anywhere;
+}
+.chat-phone-log b {
+  color: #9fd2f2;
+}
+.chat-phone-log b.chat-phone-you {
+  color: #e7f6e7;
+}
+.chat-phone-line--action {
+  font-style: italic;
+  color: #a8b8a8;
+}
+.chat-phone-row {
+  display: flex;
+  gap: 8px;
+}
+.chat-phone-row #chat-input {
+  flex: 1 1 auto;
+  min-height: 46px;
+}
+.chat-phone-row #chat-send {
+  min-height: 46px;
+  min-width: 72px;
+}
+
+/* Tutorial tracker: one 44px line under the HUD, expands for the step and actions */
+body.is-mobile.game-ready:not(.main-menu-open) #tutorial-stack {
+  top: calc(max(10px, env(safe-area-inset-top, 0px)) + 84px);
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  width: auto;
+  transform: none;
+  align-items: stretch;
+}
+.tutorial-tracker.tutorial-tracker--phone {
+  padding: 0;
+  gap: 0;
+  border-radius: 22px;
+  background: rgba(10, 14, 10, 0.9);
+}
+.tutorial-tracker--phone > .tutorial-tracker-head {
+  display: none;
+}
+.tutorial-tracker--phone:not(.tutorial-tracker--open) > :not(.tutorial-line) {
+  display: none;
+}
+.tutorial-tracker--phone.tutorial-tracker--open {
+  border-radius: 18px;
+  padding-bottom: 10px;
+}
+.tutorial-tracker--phone.tutorial-tracker--open > .tutorial-tracker-title,
+.tutorial-tracker--phone.tutorial-tracker--open > .tutorial-tracker-body,
+.tutorial-tracker--phone.tutorial-tracker--open > .tutorial-tracker-actions {
+  padding: 0 14px;
+}
+.tutorial-tracker--phone .tutorial-tracker-title {
+  display: none;
+}
+.tutorial-tracker--phone .tutorial-tracker-body {
+  font-size: 14px;
+}
+.tutorial-tracker--phone .tutorial-tracker-actions .tutorial-btn {
+  min-height: 40px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+}
+.tutorial-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 6px 0 12px;
+  border: 0;
+  background: none;
+  color: #e8f8e8;
+  text-align: left;
+  touch-action: manipulation;
+}
+.tutorial-line-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 650 14px/1.2 system-ui, sans-serif;
+}
+.tutorial-line-chev {
+  flex: 0 0 36px;
+  text-align: center;
+  font-size: 20px;
+  color: #a8c8a8;
+}
+
+/* Tip card: above the joystick, with one action and Got it */
+.tutorial-tip.tutorial-tip--phone {
+  position: fixed;
+  z-index: 72;
+  left: max(14px, env(safe-area-inset-left, 0px));
+  right: max(14px, env(safe-area-inset-right, 0px));
+  bottom: calc(var(--hud-bottom) + var(--move-stick-size, 120px) + 16px);
+  width: auto;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(24, 20, 8, 0.95);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.tutorial-tip--phone .tutorial-tracker-title {
+  font-size: 16px;
+}
+.tutorial-tip--phone .tutorial-tracker-body {
+  font-size: 14px;
+  color: #e6dcc0;
+}
+.tutorial-tip--phone .tutorial-tracker-actions {
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.tutorial-tip--phone .tutorial-btn {
+  min-height: 42px;
+  font-size: 14px;
+}
+.tutorial-tip--phone .tutorial-btn--do {
+  flex: 1 1 auto;
+  border-color: rgba(230, 193, 90, 0.7);
+  background: rgba(60, 48, 14, 0.95);
+  color: #f6e7b8;
+}
+.tutorial-btn--do[hidden] {
+  display: none;
+}
+body:not(.game-ready) #tutorial-tip,
+body.main-menu-open #tutorial-tip,
+body.hud-hidden #tutorial-tip,
+html.hud-hidden #tutorial-tip,
+body.is-mobile.sheet-open #tutorial-tip,
+body.chat-open #tutorial-tip {
+  display: none !important;
+}
+
+/* Controls legend: full sheet with ✕ and wrapping rows */
+#onboarding-controls-legend.onboarding-legend--phone .onboarding-legend-panel {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: max(14px, env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  border: 0;
+  border-radius: 0;
+  overflow-y: auto;
+}
+.onboarding-legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.onboarding-legend-head .onboarding-title {
+  margin: 0;
+}
+#onboarding-controls-legend.onboarding-legend--phone .onboarding-legend-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  white-space: normal;
+}
+#onboarding-controls-legend.onboarding-legend--phone .onboarding-legend-list kbd {
+  flex: 0 0 auto;
+  max-width: 45%;
+  white-space: normal;
+}
+#onboarding-controls-legend.onboarding-legend--phone .onboarding-legend-list span {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14.5px;
+  line-height: 1.4;
+}
+
+/* Loot toast: above the hotbar, tap to dismiss */
+body.is-mobile.game-ready:not(.main-menu-open) #loot-popup-container {
+  z-index: 75;
+}
+body.is-mobile #loot-popup-container .loot-card {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* Weapon hotbar keeps a 52px touch target in landscape */
+@media (orientation: landscape) and (max-height: 540px) {
+  body.is-mobile.game-ready:not(.main-menu-open) #weapon-hotbar .weapon-hotbar-slot {
+    width: max(52px, var(--mobile-action-size));
+    max-width: max(52px, var(--mobile-action-size));
+    min-height: max(52px, var(--mobile-action-size));
+    flex-basis: max(52px, var(--mobile-action-size));
+  }
+}
+
+/* Death */
+.death-screen-facts {
+  margin: 4px 0 14px;
+  text-align: left;
+}
+.death-screen-facts .ms-card {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(230, 110, 110, 0.3);
+}
+#death-screen-overlay.death-phone {
+  background: linear-gradient(#1a0909, #0b0606 60%);
+}
+#death-screen-overlay.death-phone .death-screen-panel {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: max(24px, env(safe-area-inset-top, 0px)) 26px
+    calc(86px + env(safe-area-inset-bottom, 0px));
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  text-align: center;
+}
+#death-screen-overlay.death-phone .death-screen-title {
+  font: 900 42px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f0a0a0;
+}
+#death-screen-overlay.death-phone .death-screen-message {
+  margin: 12px 0 22px;
+  font-size: 15px;
+  color: #d8c8c8;
+}
+#death-screen-overlay.death-phone .death-screen-actions {
+  position: fixed;
+  left: max(16px, env(safe-area-inset-left, 0px));
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+}
+#death-screen-overlay.death-phone .death-screen-respawn {
+  flex: 1 1 auto;
+  min-height: 54px;
+  border-radius: 14px;
+  font: 800 17px/1.2 system-ui, sans-serif;
+}

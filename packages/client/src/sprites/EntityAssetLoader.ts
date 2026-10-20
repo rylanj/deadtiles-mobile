@@ -31,7 +31,8 @@ import {
 
 /**
  * Proximity lazy-load for NPC / clothing sprite packs.
- * Boot keeps PlayerMan1 + ZombieMan1 + MilitiaGuard1 (fallbacks).
+ * Boot keeps PlayerMan1 + ZombieMan1 + MilitiaGuard1.
+ * NPCs whose own sheet is not loaded yet draw PlaceholderMan1.
  * Other skins load when an entity is within render radius + preload margin,
  * and unload after staying outside a wider keep radius for a grace period.
  *
@@ -444,7 +445,7 @@ export function collectNeededEntityPacks(opts: {
 
 /**
  * One-shot parallel load of nearby NPC packs for world join.
- * Avoids the MilitiaGuard1 fallback flash without changing steady-state lazy loading.
+ * Avoids the unloaded-sheet flash without changing steady-state lazy loading.
  */
 export function preloadNearbyEntityPacks(
   scene: Phaser.Scene,

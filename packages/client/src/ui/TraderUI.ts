@@ -24,6 +24,8 @@ import {
   tradeOfferTotals,
   tradeOfferCashSettlement,
   tradeOfferStockFitProblem,
+  traderItemMinStanding,
+  traderPurchaseLock,
   TRADER_SHOP_CAPACITY,
   traderBuyPrice,
   traderSellPrice,
@@ -38,6 +40,28 @@ import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import {
+  chip,
+  createSheet,
+  createStepper,
+  drawerHead,
+  kvCard,
+  markSheetOpen,
+  money,
+  openDrawer,
+  quickAmounts,
+  renderTabs,
+  sectionLabel,
+  setButtonLabel,
+  sheetButton,
+  sheetRow,
+  showSheetMessage,
+  type Drawer,
+  type KvRow,
+  type Sheet,
+  type Stepper,
+} from "./mobileSheet";
+import "./mobile/trader.css";
 
 export type TraderUIHandlers = {
   onConfirm: (
@@ -53,6 +77,12 @@ const OFFER_DOUBLE_CLICK_MS = 500;
 
 function formatNotes(amount: number): string {
   return `$${amount}`;
+}
+
+function formatRep(value: number): string {
+  return Number.isInteger(value) || Math.abs(value - Math.round(value)) < 1e-9
+    ? String(Math.round(value))
+    : value.toFixed(1);
 }
 
 function makeAmountPill(
@@ -103,23 +133,26 @@ export class TraderUI {
   private confirmPending = false;
   private layoutEl!: HTMLElement;
   private phoneOn = false;
-  private phoneTab: "player" | "trader" = "player";
-  private phoneItemOpen = false;
-  private phoneReviewOpen = false;
-  private phoneDraftQty = 1;
-  private phoneDraftKey = "";
   private unbindPhoneResize: () => void = () => {};
-  private phoneRoot!: HTMLElement;
-  private phoneStandingEl!: HTMLElement;
-  private phoneYouNotes!: HTMLElement;
-  private phoneThemNotes!: HTMLElement;
-  private phonePackTab!: HTMLButtonElement;
-  private phoneStockTab!: HTMLButtonElement;
-  private phoneGridEl!: HTMLElement;
-  private phoneStripEl!: HTMLElement;
-  private phoneStripText!: HTMLElement;
-  private phoneItemEl!: HTMLElement;
-  private phoneReviewEl!: HTMLElement;
+  private sheet!: Sheet;
+  private sheetPill!: HTMLElement;
+  private sheetAvatar!: HTMLImageElement;
+  private sheetSearch!: HTMLInputElement;
+  private sheetList!: HTMLElement;
+  private sheetTab: "buy" | "sell" = "buy";
+  private sheetView: "shop" | "review" | "done" = "shop";
+  private sheetQuery = "";
+  private drawer: Drawer | null = null;
+  private drawerStepper: Stepper | null = null;
+  /** Lines sent with the last Confirm, for the success state. */
+  private confirmedDeal: {
+    sells: TradeOfferSellLine[];
+    buys: TradeOfferBuyLine[];
+    net: number;
+    paid: number;
+    received: number;
+    repGain: number;
+  } | null = null;
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -271,8 +304,8 @@ export class TraderUI {
     );
 
     layout.append(toolbar, columns, this.footerEl);
-    this.buildPhoneSheet();
-    this.overlay.append(layout, this.phoneRoot);
+    this.buildSheet();
+    this.overlay.append(layout, this.sheet.root);
 
     this.overlay.addEventListener("click", (e) => {
       if (usePhoneDialogSheet()) return;
@@ -281,7 +314,7 @@ export class TraderUI {
 
     this.unbindPhoneResize = bindPhoneDialogResize(
       () => this.visible,
-      () => this.overlay.classList.contains("trader-sheet-mode"),
+      () => this.overlay.classList.contains("ms-host"),
       () => this.render(),
       this.overlay,
     );
@@ -331,16 +364,19 @@ export class TraderUI {
     this.selection = null;
     this.lastOfferClick = null;
     this.confirmPending = false;
-    this.phoneTab = "player";
-    this.phoneItemOpen = false;
-    this.phoneReviewOpen = false;
-    this.phoneDraftQty = 1;
-    this.phoneDraftKey = "";
+    this.sheetTab = "buy";
+    this.sheetView = "shop";
+    this.sheetQuery = "";
+    this.sheetSearch.value = "";
+    this.confirmedDeal = null;
+    this.closeDrawer();
+    showSheetMessage(this.sheet.snackSlot, "");
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("trader-open");
     this.render();
     resetDialogScroll(this.overlay);
+    this.sheet.body.scrollTop = 0;
   }
 
   sync(opts: {
@@ -352,23 +388,30 @@ export class TraderUI {
     inventoryJson: string;
     ashenReputation?: number;
     barterT?: number;
+    completed?: boolean;
   }) {
     if (!this.visible || opts.traderId !== this.traderId) return;
     const completedConfirm = this.confirmPending;
     this.confirmPending = false;
     this.applySync(opts);
+    if (this.phoneOn) {
+      this.syncSheet(completedConfirm, opts.completed === true);
+      return;
+    }
     if (completedConfirm) {
       // Successful Confirm — wipe the offer so leftover badges don't stick.
       this.clearOffer();
       this.selection = null;
-      this.phoneItemOpen = false;
-      this.phoneReviewOpen = false;
-      this.phoneDraftKey = "";
       this.render();
       return;
     }
     this.pruneOffers();
-    // Keep selection if still valid (re-resolve stock index by item id after splices).
+    this.resolveSelection();
+    this.render();
+  }
+
+  /** Keep the selection if still valid (re-resolve stock index by item id after splices). */
+  private resolveSelection() {
     if (this.selection?.side === "player") {
       const slot = this.playerInventory[this.selection.slotIndex];
       if (!slot || slot.id !== this.selection.id) this.selection = null;
@@ -395,7 +438,6 @@ export class TraderUI {
         };
       }
     }
-    this.render();
   }
 
   private applySync(opts: {
@@ -435,14 +477,15 @@ export class TraderUI {
   close() {
     this.visible = false;
     this.overlay.hidden = true;
-    this.overlay.classList.remove("trader-sheet-mode");
+    this.overlay.classList.remove("ms-host");
     document.body.classList.remove("trader-open");
+    markSheetOpen("trader", false);
+    this.closeDrawer();
     this.traderId = "";
     this.selection = null;
     this.lastOfferClick = null;
-    this.phoneItemOpen = false;
-    this.phoneReviewOpen = false;
-    this.phoneDraftKey = "";
+    this.sheetView = "shop";
+    this.confirmedDeal = null;
     this.clearOffer();
     this.footerEl.hidden = true;
   }
@@ -451,6 +494,7 @@ export class TraderUI {
     this.close();
     this.unbindPhoneResize();
     this.unbindPhoneResize = () => {};
+    this.sheet.dispose();
     this.overlay.remove();
   }
 
@@ -464,9 +508,6 @@ export class TraderUI {
   private resetOffer() {
     this.clearOffer();
     this.selection = null;
-    this.phoneItemOpen = false;
-    this.phoneReviewOpen = false;
-    this.phoneDraftKey = "";
     this.render();
   }
 
@@ -490,7 +531,20 @@ export class TraderUI {
       if (line.quantity > entry.quantity) {
         line.quantity = entry.quantity;
       }
+      if (this.traderOfferLock(line.itemId)) this.buyOffers.delete(stockIndex);
     }
+  }
+
+  private traderOfferLock(itemId: string): string {
+    return traderPurchaseLock(itemId, this.ashenReputation);
+  }
+
+  /** Standing label for a buy the trader is holding back. Empty when they will sell it. */
+  private traderRepRequirement(itemId: string): string {
+    if (!this.traderOfferLock(itemId)) return "";
+    const standing = traderItemMinStanding(itemId);
+    if (!standing) return "";
+    return `Requires ${ashenStandingLabel(standing)} reputation`;
   }
 
   private offeredSellQty(slotIndex: number): number {
@@ -507,20 +561,21 @@ export class TraderUI {
 
   private render() {
     this.phoneOn = usePhoneDialogSheet();
-    this.overlay.classList.toggle("trader-sheet-mode", this.phoneOn);
+    this.overlay.classList.toggle("ms-host", this.phoneOn);
     this.layoutEl.hidden = this.phoneOn;
-    this.phoneRoot.hidden = !this.phoneOn;
+    this.sheet.root.hidden = !this.phoneOn;
+    markSheetOpen("trader", this.visible && this.phoneOn);
     if (this.phoneOn) {
-      this.renderPhone();
+      this.renderSheet();
       return;
     }
-    this.phoneKeepGridScroll = true;
+    this.closeDrawer();
 
     this.playerNotesEl.textContent = formatNotes(this.playerBanknotes);
     this.traderNotesEl.textContent = formatNotes(this.traderBanknotes);
     this.updateStandingPill();
-    this.fillGrid(this.playerGridEl, "player", false);
-    this.fillGrid(this.traderGridEl, "trader", false);
+    this.fillGrid(this.playerGridEl, "player");
+    this.fillGrid(this.traderGridEl, "trader");
     this.updateDetail();
     this.updateSettlement();
     this.updateActionButtons();
@@ -530,17 +585,14 @@ export class TraderUI {
     const standing = ashenStanding(this.ashenReputation);
     const label = ashenStandingLabel(standing);
     const title = `${ASHEN_TRADERS_FACTION}: ${Number(this.ashenReputation.toFixed(1))}`;
-    for (const el of [this.standingPillEl, this.phoneStandingEl]) {
-      el.textContent = label;
-      el.className = `trader-standing-pill trader-standing-pill--${standing}`;
-      el.title = title;
-    }
+    this.standingPillEl.textContent = label;
+    this.standingPillEl.className = `trader-standing-pill trader-standing-pill--${standing}`;
+    this.standingPillEl.title = title;
   }
 
   private fillGrid(
     grid: HTMLElement,
     side: "player" | "trader",
-    phone: boolean,
   ): void {
     grid.replaceChildren();
     let count = 0;
@@ -551,9 +603,8 @@ export class TraderUI {
         const def = getItemDefinition(slot.id);
         if (!def) continue;
         count++;
-        grid.appendChild(
-          this.makeCell({
-            side: "player",
+        const opts = {
+            side: "player" as const,
             slotIndex: i,
             id: slot.id,
             quantity: slot.quantity,
@@ -561,9 +612,8 @@ export class TraderUI {
             category: def.category,
             selected:
               this.selection?.side === "player" && this.selection.slotIndex === i,
-            phone,
-          }),
-        );
+          };
+        grid.appendChild(this.makeCell(opts));
       }
     } else {
       for (let i = 0; i < this.stock.length; i++) {
@@ -571,9 +621,8 @@ export class TraderUI {
         const def = getItemDefinition(entry.id);
         if (!def) continue;
         count++;
-        grid.appendChild(
-          this.makeCell({
-            side: "trader",
+        const opts = {
+            side: "trader" as const,
             stockIndex: i,
             id: entry.id,
             quantity: entry.quantity,
@@ -581,9 +630,8 @@ export class TraderUI {
             category: def.category,
             selected:
               this.selection?.side === "trader" && this.selection.stockIndex === i,
-            phone,
-          }),
-        );
+          };
+        grid.appendChild(this.makeCell(opts));
       }
     }
     if (count === 0) {
@@ -603,7 +651,6 @@ export class TraderUI {
     offered: number;
     category: string;
     selected: boolean;
-    phone?: boolean;
   }) {
     const cell = document.createElement("div");
     cell.className = "inventory-cell inventory-cell--filled trader-cell";
@@ -616,6 +663,8 @@ export class TraderUI {
       this.isEquippedSellSlot(opts.slotIndex, opts.id);
     if (equipped) cell.classList.add("inventory-cell--equipped");
     if (opts.selected) cell.classList.add("inventory-cell--selected");
+    const buyLock = opts.side === "trader" ? this.traderOfferLock(opts.id) : "";
+    if (buyLock) cell.classList.add("trader-cell--locked");
     if (opts.offered > 0) cell.classList.add("trader-cell--offered");
     cell.style.setProperty(
       "--slot-accent",
@@ -632,7 +681,13 @@ export class TraderUI {
       cell.appendChild(qty);
     }
 
-    if (opts.offered > 0) {
+    if (buyLock) {
+      const lockBadge = document.createElement("span");
+      lockBadge.className = "trader-cell-lock";
+      const standing = traderItemMinStanding(opts.id);
+      lockBadge.textContent = standing ? ashenStandingLabel(standing) : "Held";
+      cell.appendChild(lockBadge);
+    } else if (opts.offered > 0) {
       const offerBadge = document.createElement("span");
       offerBadge.className = "trader-cell-offer";
       offerBadge.textContent =
@@ -652,12 +707,13 @@ export class TraderUI {
     const titleBits = [itemName];
     if (effect) titleBits.push(effect);
     if (equipped) titleBits.push("Equipped");
-    if (effect || equipped) cell.title = titleBits.join(" · ");
+    if (buyLock) titleBits.push(buyLock);
+    if (effect || equipped || buyLock) cell.title = titleBits.join(" · ");
     cell.setAttribute(
       "aria-label",
       `${itemName}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}${
         effect ? ` · ${effect}` : ""
-      }${equipped ? " · equipped" : ""}`,
+      }${equipped ? " · equipped" : ""}${buyLock ? ` · ${buyLock}` : ""}`,
     );
 
     const selectCell = () => {
@@ -677,21 +733,6 @@ export class TraderUI {
         };
       }
     };
-    if (opts.phone) {
-      cell.addEventListener("click", () => {
-        selectCell();
-        this.phoneReviewOpen = false;
-        this.phoneItemOpen = true;
-        this.render();
-      });
-      cell.addEventListener("keydown", (event) => {
-        if (event.target !== cell) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        cell.click();
-      });
-      return cell;
-    }
     cell.addEventListener("click", () => {
       selectCell();
       const key =
@@ -716,7 +757,7 @@ export class TraderUI {
     const lock =
       opts.side === "player"
         ? this.playerOfferLock(opts.slotIndex!, opts.id)
-        : "";
+        : buyLock;
     const steps = document.createElement("div");
     steps.className = "trader-cell-step";
     steps.append(
@@ -807,6 +848,10 @@ export class TraderUI {
         id: opts.id,
         quantity: opts.quantity,
       };
+      if (delta > 0 && this.traderOfferLock(opts.id)) {
+        this.render();
+        return;
+      }
       const next = Math.max(
         0,
         Math.min(opts.quantity, this.offeredBuyQty(stockIndex) + delta),
@@ -844,6 +889,10 @@ export class TraderUI {
     const effect = wornGearEffectHint(this.selection.id);
     const bits = [equipped ? `${label} · Equipped` : label];
     if (effect) bits.push(effect);
+    if (this.selection.side === "trader") {
+      const lock = this.traderOfferLock(this.selection.id);
+      if (lock) bits.push(lock);
+    }
     this.detailEl.textContent = bits.join(" · ");
   }
 
@@ -954,6 +1003,10 @@ export class TraderUI {
     buys: TradeOfferBuyLine[],
   ): string {
     if (this.confirmPending) return "Confirming…";
+    for (const line of buys) {
+      const lock = this.traderOfferLock(line.itemId);
+      if (lock) return lock;
+    }
     const problem = tradeOfferStockFitProblem(
       this.stock,
       sells,
@@ -998,11 +1051,15 @@ export class TraderUI {
       this.sellAllBtn.title = lock;
     }
     if (buy && this.selection?.side === "trader") {
+      const lock = this.traderOfferLock(this.selection.id);
       const remaining =
         this.selection.quantity - this.offeredBuyQty(this.selection.stockIndex);
-      this.buyBtn.disabled = remaining < 1;
-      this.buy5Btn.disabled = remaining < 5;
-      this.buy10Btn.disabled = remaining < 10;
+      this.buyBtn.disabled = !!lock || remaining < 1;
+      this.buy5Btn.disabled = !!lock || remaining < 5;
+      this.buy10Btn.disabled = !!lock || remaining < 10;
+      this.buyBtn.title = lock;
+      this.buy5Btn.title = lock;
+      this.buy10Btn.title = lock;
     }
   }
 
@@ -1033,6 +1090,10 @@ export class TraderUI {
         quantity: nextQty,
       });
     } else {
+      if (this.traderOfferLock(this.selection.id)) {
+        this.render();
+        return;
+      }
       const already = this.offeredBuyQty(this.selection.stockIndex);
       const add = Math.min(quantity, this.selection.quantity - already);
       if (add <= 0) return;
@@ -1054,7 +1115,6 @@ export class TraderUI {
     const buys = [...this.buyOffers.values()];
     this.confirmPending = true;
     this.updateSettlement();
-    if (this.phoneOn) this.renderPhone();
     this.handlers.onConfirm(sells, buys);
   }
 
@@ -1085,191 +1145,334 @@ export class TraderUI {
     };
   }
 
-  private buildPhoneSheet(): void {
-    this.phoneRoot = document.createElement("div");
-    this.phoneRoot.className = "trader-sheet";
-    this.phoneRoot.hidden = true;
+  private buildSheet(): void {
+    this.sheet = createSheet({ onClose: () => this.handlers.onClose() });
+    this.sheet.root.classList.add("trader-ms");
+    this.sheet.root.hidden = true;
+    this.sheetAvatar = document.createElement("img");
+    this.sheetAvatar.src = TRADER_AVATAR;
+    this.sheetAvatar.alt = "";
+    this.sheet.header.avatarSlot.append(this.sheetAvatar);
+    this.sheet.header.avatarSlot.hidden = false;
+    this.sheetPill = document.createElement("span");
+    this.sheet.header.pillSlot.append(this.sheetPill);
+    this.sheetSearch = document.createElement("input");
+    this.sheetSearch.type = "search";
+    this.sheetSearch.className = "ms-search trader-ms-search";
+    this.sheetSearch.autocomplete = "off";
+    this.sheetSearch.addEventListener("input", () => {
+      this.sheetQuery = this.sheetSearch.value.trim().toLowerCase();
+      this.fillSheetList();
+    });
+    this.sheetList = document.createElement("div");
+    this.sheetList.className = "trader-ms-list";
+  }
 
-    const header = document.createElement("div");
-    header.className = "trader-sheet-header";
-    const avatar = document.createElement("img");
-    avatar.className = "trader-avatar";
-    avatar.src = TRADER_AVATAR;
-    avatar.alt = "Trader";
-    const nameCol = document.createElement("div");
-    nameCol.className = "trader-sheet-name";
-    const title = document.createElement("h2");
-    title.className = "inventory-title";
-    title.textContent = ASHEN_TRADERS_FACTION;
-    this.phoneStandingEl = document.createElement("div");
-    this.phoneStandingEl.className = "trader-standing-pill trader-standing-pill--neutral";
-    this.phoneStandingEl.textContent = "Neutral";
-    nameCol.append(title, this.phoneStandingEl);
-    const wallets = document.createElement("div");
-    wallets.className = "trader-sheet-wallets";
-    this.phoneYouNotes = document.createElement("span");
-    this.phoneThemNotes = document.createElement("span");
-    wallets.append(
-      this.walletPill("You", this.phoneYouNotes),
-      this.walletPill("Them", this.phoneThemNotes),
-    );
-    header.append(
-      avatar,
-      nameCol,
-      wallets,
-      createDialogCloseButton(() => this.handlers.onClose()),
-    );
+  private closeDrawer(): void {
+    const drawer = this.drawer;
+    this.drawer = null;
+    this.drawerStepper = null;
+    drawer?.close();
+  }
 
-    const stage = document.createElement("div");
-    stage.className = "trader-sheet-stage";
-    const browse = document.createElement("div");
-    browse.className = "trader-sheet-browse";
-    const tabs = document.createElement("div");
-    tabs.className = "trader-sheet-tabs";
-    tabs.setAttribute("role", "tablist");
-    this.phonePackTab = this.phoneTabButton("Your pack", "player");
-    this.phoneStockTab = this.phoneTabButton("Their stock", "trader");
-    tabs.append(this.phonePackTab, this.phoneStockTab);
-    const gridWrap = document.createElement("div");
-    gridWrap.className = "trader-sheet-grid-wrap";
-    this.phoneGridEl = document.createElement("div");
-    this.phoneGridEl.className = "trader-sheet-grid";
-    gridWrap.append(this.phoneGridEl);
-    this.phoneStripEl = document.createElement("div");
-    this.phoneStripEl.className = "trader-sheet-strip";
-    this.phoneStripEl.hidden = true;
-    this.phoneStripText = document.createElement("span");
-    this.phoneStripText.className = "trader-sheet-strip-text";
-    const reviewBtn = document.createElement("button");
-    reviewBtn.type = "button";
-    reviewBtn.className = "trader-sheet-review-btn";
-    reviewBtn.textContent = "Review";
-    reviewBtn.addEventListener("click", () => {
-      this.phoneReviewOpen = true;
-      this.phoneItemOpen = false;
+  private syncSheet(completedConfirm: boolean, completed: boolean): void {
+    if (completed && this.confirmedDeal) {
+      this.closeDrawer();
+      this.clearOffer();
+      this.selection = null;
+      this.sheetView = "done";
+      this.render();
+      return;
+    }
+    this.pruneOffers();
+    this.resolveSelection();
+    if (completedConfirm) {
+      this.closeDrawer();
+      this.selection = null;
+      this.sheetView = this.hasOffer() ? "review" : "shop";
+      showSheetMessage(this.sheet.snackSlot, "The trade did not go through. Check the offer and try again.", "bad");
+    }
+    if (this.drawer && !this.selection) this.closeDrawer();
+    this.render();
+    if (this.drawer && this.drawer.el.dataset.key !== this.drawerKey()) this.fillDrawer();
+  }
+
+  private drawerKey(): string {
+    const sel = this.selection;
+    if (!sel) return "";
+    const index = sel.side === "player" ? sel.slotIndex : sel.stockIndex;
+    return `${sel.side}:${index}:${sel.id}:${sel.quantity}`;
+  }
+
+  private renderSheet(): void {
+    if (this.sheetView === "review" && !this.hasOffer() && !this.confirmPending) this.sheetView = "shop";
+    if (this.sheetView === "done" && !this.confirmedDeal) this.sheetView = "shop";
+    const header = this.sheet.header;
+    const standing = ashenStanding(this.ashenReputation);
+    this.sheetPill.className = `ms-pill trader-standing-pill trader-standing-pill--${standing}`;
+    this.sheetPill.textContent = ashenStandingLabel(standing);
+    const shop = this.sheetView === "shop";
+    header.avatarSlot.hidden = !shop;
+    this.sheetPill.hidden = !shop;
+    this.sheet.root.classList.toggle("trader-ms--shop", shop);
+    if (this.sheetView === "review") this.renderReview();
+    else if (this.sheetView === "done") this.renderDone();
+    else this.renderShop();
+    this.sheet.syncBar();
+  }
+
+  private renderShop(): void {
+    const header = this.sheet.header;
+    header.setTitle(ASHEN_TRADERS_FACTION);
+    header.setBack(null);
+    header.setSub(`You ${money(this.playerBanknotes)} · Them ${money(this.traderBanknotes)}`);
+    const buyCount = [...this.buyOffers.values()].reduce((sum, line) => sum + line.quantity, 0);
+    const sellCount = [...this.sellOffers.values()].reduce((sum, line) => sum + line.quantity, 0);
+    renderTabs(
+      this.sheet.tabsSlot,
+      [
+        { id: "buy", label: "Buy", count: buyCount || undefined },
+        { id: "sell", label: "Sell", count: sellCount || undefined },
+      ],
+      this.sheetTab,
+      (id) => {
+        if (id === this.sheetTab) return;
+        this.sheetTab = id === "sell" ? "sell" : "buy";
+        this.sheetQuery = "";
+        this.sheetSearch.value = "";
+        this.closeDrawer();
+        this.selection = null;
+        this.render();
+        this.sheet.body.scrollTop = 0;
+      },
+    );
+    if (this.sheetSearch.parentElement !== this.sheet.body || this.sheetList.parentElement !== this.sheet.body) {
+      this.sheet.body.replaceChildren(this.sheetSearch, this.sheetList);
+    }
+    this.sheetSearch.placeholder = this.sheetTab === "buy" ? "Search stock" : "Search your pack";
+    this.fillSheetList();
+
+    const summary = document.createElement("div");
+    summary.className = "trader-ms-sum";
+    const line = document.createElement("b");
+    const hint = document.createElement("span");
+    hint.className = "ms-hint";
+    if (this.hasOffer()) {
+      const parts: string[] = [];
+      if (buyCount > 0) parts.push(`Buy ${buyCount}`);
+      if (sellCount > 0) parts.push(`Sell ${sellCount}`);
+      line.textContent = parts.join(" · ");
+      hint.textContent = this.cashText(this.offerFacts());
+    } else {
+      line.textContent = "No offer yet";
+      hint.textContent = "Tap an item to add it";
+    }
+    summary.append(line, hint);
+    const review = sheetButton("Review deal", "pri", () => {
+      if (!this.hasOffer()) return;
+      this.closeDrawer();
+      this.selection = null;
+      this.sheetView = "review";
+      this.render();
+      this.sheet.body.scrollTop = 0;
+    });
+    review.disabled = !this.hasOffer();
+    this.sheet.bar.className = "ms-bar trader-ms-bar";
+    this.sheet.bar.replaceChildren(summary, review);
+  }
+
+  private fillSheetList(): void {
+    const scroll = this.sheet.body.scrollTop;
+    const rows: HTMLElement[] = [];
+    let total = 0;
+    const query = this.sheetQuery;
+    const matches = (id: string) =>
+      !query || (getItemDefinition(id)?.name ?? id).toLowerCase().includes(query);
+    if (this.sheetTab === "buy") {
+      this.stock.forEach((entry, stockIndex) => {
+        if (!getItemDefinition(entry.id)) return;
+        total++;
+        if (!matches(entry.id)) return;
+        rows.push(
+          this.shopRow({ side: "trader", stockIndex, id: entry.id, quantity: entry.quantity }),
+        );
+      });
+    } else {
+      this.playerInventory.forEach((slot, slotIndex) => {
+        if (!slot || slot.id === "banknote" || !getItemDefinition(slot.id)) return;
+        total++;
+        if (!matches(slot.id)) return;
+        rows.push(this.shopRow({ side: "player", slotIndex, id: slot.id, quantity: slot.quantity }));
+      });
+    }
+    this.sheetSearch.hidden = total <= 8 && !query;
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint trader-ms-empty";
+      empty.textContent = query
+        ? "Nothing matches that."
+        : this.sheetTab === "buy"
+          ? "Sold out."
+          : "Nothing to sell.";
+      rows.push(empty);
+    }
+    this.sheetList.replaceChildren(...rows);
+    this.sheet.body.scrollTop = scroll;
+  }
+
+  private shopRow(selection: Selection): HTMLElement {
+    const def = getItemDefinition(selection.id);
+    const player = selection.side === "player";
+    const offered = player
+      ? this.offeredSellQty(selection.slotIndex)
+      : this.offeredBuyQty(selection.stockIndex);
+    const each = player
+      ? traderBuyPrice(selection.id, this.ashenReputation, this.barterT)
+      : traderSellPrice(selection.id, this.ashenReputation, this.barterT);
+    const lock = player
+      ? this.playerOfferLock(selection.slotIndex, selection.id)
+      : this.traderOfferLock(selection.id);
+    const repNeed = player ? "" : this.traderRepRequirement(selection.id);
+    const meta: (string | Node)[] = [];
+    if (offered > 0) meta.push(chip(`In offer ×${offered}`, "lime"));
+    const bits: string[] = [];
+    if (repNeed) meta.push(this.repLockBadge(repNeed));
+    else if (lock) bits.push(lock);
+    else {
+      if (player && this.isEquippedSellSlot(selection.slotIndex, selection.id)) bits.push("Worn");
+      if (!player) bits.push(`${selection.quantity} in stock`);
+    }
+    if (bits.length) meta.push(bits.join(" · "));
+    const row = sheetRow({
+      iconItemId: selection.id,
+      qty: player && selection.quantity > 1 ? selection.quantity : undefined,
+      name: def?.name ?? selection.id,
+      meta,
+      metaTone: !repNeed && lock ? "warn" : undefined,
+      end: money(each),
+      state: offered > 0 ? "on" : !repNeed && lock ? "dim" : undefined,
+      onTap: () => this.openItem(selection),
+    });
+    if (repNeed) row.classList.add("ms-row--rep");
+    markQuestKeepsake(row, selection.id);
+    return row;
+  }
+
+  private repLockBadge(text: string): HTMLElement {
+    const badge = document.createElement("span");
+    badge.className = "trader-rep-lock";
+    badge.textContent = text;
+    return badge;
+  }
+
+  private cashText(facts: ReturnType<TraderUI["offerFacts"]>): string {
+    if (facts.net > 0) return `You get ${money(facts.cash.playerReceives)}`;
+    if (facts.net < 0) return `You pay ${money(facts.cash.playerPays)}`;
+    return "Even trade";
+  }
+
+  private openItem(selection: Selection): void {
+    this.closeDrawer();
+    this.selection = selection;
+    const name = getItemDefinition(selection.id)?.name ?? selection.id;
+    const drawer = openDrawer(this.sheet.root, {
+      label: name,
+      onClose: () => {
+        if (this.drawer !== drawer) return;
+        this.drawer = null;
+        this.drawerStepper = null;
+        this.selection = null;
+      },
+    });
+    this.drawer = drawer;
+    this.fillDrawer();
+  }
+
+  private fillDrawer(): void {
+    const sel = this.selection;
+    const drawer = this.drawer;
+    if (!sel || !drawer) return;
+    drawer.el.dataset.key = this.drawerKey();
+    const player = sel.side === "player";
+    const def = getItemDefinition(sel.id);
+    const name = def?.name ?? sel.id;
+    const each = player
+      ? traderBuyPrice(sel.id, this.ashenReputation, this.barterT)
+      : traderSellPrice(sel.id, this.ashenReputation, this.barterT);
+    const offered = player ? this.offeredSellQty(sel.slotIndex) : this.offeredBuyQty(sel.stockIndex);
+    const lock = player ? this.playerOfferLock(sel.slotIndex, sel.id) : this.traderOfferLock(sel.id);
+    const repNeed = player ? "" : this.traderRepRequirement(sel.id);
+    const subBits = [`${money(each)} each`];
+    const effect = wornGearEffectHint(sel.id);
+    if (effect) subBits.push(effect);
+    if (!player) subBits.push(`${sel.quantity} in stock`);
+    else if (this.isEquippedSellSlot(sel.slotIndex, sel.id)) subBits.push("Worn");
+    else if (sel.quantity > 1) subBits.push(`You have ${sel.quantity}`);
+    drawer.content.replaceChildren(drawerHead({ iconItemId: sel.id, title: name, sub: subBits.join(" · ") }));
+    drawer.bar.replaceChildren();
+
+    if (lock) {
+      const note = document.createElement("p");
+      if (repNeed) {
+        note.className = "trader-rep-lock";
+        note.textContent = repNeed;
+      } else {
+        note.className = "ms-hint ms-warn";
+        note.textContent = lock;
+      }
+      drawer.content.append(note);
+      drawer.bar.append(sheetButton("Close", "sec", () => this.closeDrawer()));
+      return;
+    }
+
+    let draft = Math.max(1, Math.min(sel.quantity, offered > 0 ? offered : 1));
+    const quickSlot = document.createElement("div");
+    const totalSlot = document.createElement("div");
+    const commit = sheetButton("", "pri", () => {
+      if (this.confirmPending) return;
+      this.setOfferQuantity(draft);
+      this.closeDrawer();
+      this.selection = null;
+      showSheetMessage(this.sheet.snackSlot, `${name} ×${draft} ${player ? "to sell" : "to buy"}`);
+    });
+    const remove = sheetButton("Remove from offer", "sec", () => {
+      if (this.confirmPending) return;
+      this.setOfferQuantity(0);
+      this.closeDrawer();
+      this.selection = null;
       this.render();
     });
-    this.phoneStripEl.append(this.phoneStripText, reviewBtn);
-    browse.append(tabs, gridWrap, this.phoneStripEl);
-    this.phoneItemEl = document.createElement("div");
-    this.phoneItemEl.className = "trader-sheet-item";
-    this.phoneItemEl.hidden = true;
-    stage.append(browse, this.phoneItemEl);
-    this.phoneReviewEl = document.createElement("div");
-    this.phoneReviewEl.className = "trader-sheet-review";
-    this.phoneReviewEl.hidden = true;
-    this.phoneRoot.append(header, stage, this.phoneReviewEl);
-  }
-
-  private walletPill(label: string, amount: HTMLElement): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.className = "trader-sheet-wallet";
-    const kicker = document.createElement("span");
-    kicker.className = "trader-sheet-wallet-label";
-    kicker.textContent = label;
-    amount.className = "trader-notes-pill";
-    wrap.append(kicker, amount);
-    return wrap;
-  }
-
-  private phoneTabButton(
-    label: string,
-    tab: "player" | "trader",
-  ): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "trader-sheet-tab";
-    btn.textContent = label;
-    btn.setAttribute("role", "tab");
-    btn.addEventListener("click", () => this.setPhoneTab(tab));
-    return btn;
-  }
-
-  private setPhoneTab(tab: "player" | "trader"): void {
-    if (this.phoneTab === tab) return;
-    this.phoneTab = tab;
-    this.phoneItemOpen = false;
-    this.selection = null;
-    this.phoneDraftKey = "";
-    this.phoneKeepGridScroll = false;
-    this.render();
-  }
-
-  private phoneKeepGridScroll = true;
-
-  private renderPhone(): void {
-    this.phoneYouNotes.textContent = formatNotes(this.playerBanknotes);
-    this.phoneThemNotes.textContent = formatNotes(this.traderBanknotes);
-    this.updateStandingPill();
-    const packOn = this.phoneTab === "player";
-    this.phonePackTab.classList.toggle("trader-sheet-tab--on", packOn);
-    this.phoneStockTab.classList.toggle("trader-sheet-tab--on", !packOn);
-    this.phonePackTab.setAttribute("aria-selected", packOn ? "true" : "false");
-    this.phoneStockTab.setAttribute("aria-selected", packOn ? "false" : "true");
-
-    const wrap = this.phoneGridEl.parentElement;
-    const scroll = this.phoneKeepGridScroll ? (wrap?.scrollTop ?? 0) : 0;
-    this.phoneKeepGridScroll = true;
-    this.fillGrid(this.phoneGridEl, this.phoneTab, true);
-    if (wrap) wrap.scrollTop = scroll;
-
-    if (this.phoneReviewOpen && !this.hasOffer()) this.phoneReviewOpen = false;
-    const showReview = this.phoneReviewOpen && this.hasOffer();
-    const showItem = this.phoneItemSheetVisible() && !showReview;
-    this.phoneReviewEl.hidden = !showReview;
-    this.phoneItemEl.hidden = !showItem;
-    this.phoneRoot.classList.toggle("trader-sheet--review", showReview);
-    this.phoneRoot.classList.toggle("trader-sheet--item", showItem);
-    if (showItem) this.fillItemSheet();
-
-    const showStrip = this.hasOffer() && !showReview;
-    this.phoneStripEl.hidden = !showStrip;
-    if (showStrip) this.phoneStripText.textContent = this.offerStripText();
-    if (showReview) this.fillReview();
-    this.updateSettlement();
-  }
-
-  private phoneItemSheetVisible(): boolean {
-    if (!this.phoneItemOpen || !this.selection) return false;
-    return this.selection.side === this.phoneTab;
-  }
-
-  private offerStripText(): string {
-    const facts = this.offerFacts();
-    let count = 0;
-    for (const line of facts.sells) count += line.quantity;
-    for (const line of facts.buys) count += line.quantity;
-    const itemWord = count === 1 ? "item" : "items";
-    let cash = "Even trade";
-    if (facts.net > 0) cash = `You receive ${formatNotes(facts.cash.playerReceives)}`;
-    else if (facts.net < 0) cash = `You pay ${formatNotes(facts.cash.playerPays)}`;
-    return `Offer · ${count} ${itemWord} · ${cash}`;
-  }
-
-  private syncPhoneDraft(): void {
-    const selection = this.selection;
-    if (!selection) return;
-    const key =
-      selection.side === "player"
-        ? `p:${selection.slotIndex}:${selection.id}`
-        : `t:${selection.stockIndex}:${selection.id}`;
-    if (key !== this.phoneDraftKey) {
-      this.phoneDraftKey = key;
-      const offered =
-        selection.side === "player"
-          ? this.offeredSellQty(selection.slotIndex)
-          : this.offeredBuyQty(selection.stockIndex);
-      const lock =
-        selection.side === "player"
-          ? this.playerOfferLock(selection.slotIndex, selection.id)
-          : "";
-      this.phoneDraftQty = lock
-        ? 0
-        : offered > 0
-          ? offered
-          : Math.min(1, selection.quantity);
-    }
-    this.phoneDraftQty = Math.max(0, Math.min(selection.quantity, this.phoneDraftQty));
+    remove.hidden = offered <= 0;
+    const paint = () => {
+      const options: { label: string; value: number }[] = [];
+      for (const n of [1, 5, 10]) if (n < sel.quantity) options.push({ label: String(n), value: n });
+      options.push({ label: sel.quantity > 1 ? `All ${sel.quantity}` : "1", value: sel.quantity });
+      quickSlot.replaceChildren(
+        quickAmounts(options, draft, (value) => {
+          draft = value;
+          this.drawerStepper?.set(value);
+          paint();
+        }),
+      );
+      totalSlot.replaceChildren(
+        kvCard([{ label: `${draft} × ${money(each)}`, value: money(draft * each), total: true }]),
+      );
+      const same = offered > 0 && draft === offered;
+      setButtonLabel(commit, same ? "In the offer" : offered > 0 ? "Update offer" : "Add to offer");
+      commit.disabled = same || this.confirmPending;
+    };
+    this.drawerStepper = createStepper({
+      value: draft,
+      min: 1,
+      max: sel.quantity,
+      onChange: (value) => {
+        draft = value;
+        paint();
+      },
+    });
+    paint();
+    drawer.content.append(this.drawerStepper.el, quickSlot, totalSlot);
+    drawer.bar.append(commit, remove);
   }
 
   private setOfferQuantity(quantity: number): void {
@@ -1289,6 +1492,7 @@ export class TraderUI {
     } else if (qty <= 0) {
       this.buyOffers.delete(selection.stockIndex);
     } else {
+      if (this.traderOfferLock(selection.id)) return;
       this.buyOffers.set(selection.stockIndex, {
         stockIndex: selection.stockIndex,
         itemId: selection.id,
@@ -1298,307 +1502,157 @@ export class TraderUI {
     this.render();
   }
 
-  private draftButton(
-    label: string,
-    aria: string,
-    disabled: boolean,
-    onClick: () => void,
-  ): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className =
-      label === "−" || label === "+" ? "trader-sheet-step" : "trader-sheet-chip";
-    btn.textContent = label;
-    btn.setAttribute("aria-label", aria);
-    btn.disabled = disabled;
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      onClick();
-    });
-    return btn;
-  }
-
-  private fillItemSheet(): void {
-    const selection = this.selection;
-    if (!selection) return;
-    this.syncPhoneDraft();
-    const def = getItemDefinition(selection.id);
-    const name = def?.name ?? selection.id;
-    const equipped =
-      selection.side === "player" &&
-      this.isEquippedSellSlot(selection.slotIndex, selection.id);
-    const effect = wornGearEffectHint(selection.id);
-    const lock =
-      selection.side === "player"
-        ? this.playerOfferLock(selection.slotIndex, selection.id)
-        : "";
-    const each =
-      selection.side === "player"
-        ? traderBuyPrice(selection.id, this.ashenReputation, this.barterT)
-        : traderSellPrice(selection.id, this.ashenReputation, this.barterT);
-    const offered =
-      selection.side === "player"
-        ? this.offeredSellQty(selection.slotIndex)
-        : this.offeredBuyQty(selection.stockIndex);
-
-    this.phoneItemEl.replaceChildren();
-    const body = document.createElement("div");
-    body.className = "trader-sheet-item-body";
-    const top = document.createElement("div");
-    top.className = "trader-sheet-item-top";
-    const title = document.createElement("h3");
-    title.className = "trader-sheet-item-name";
-    title.textContent = equipped ? `${name} · Equipped` : name;
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "dialog-close-btn";
-    close.textContent = "Close";
-    close.addEventListener("click", () => {
-      this.phoneItemOpen = false;
-      this.selection = null;
-      this.phoneDraftKey = "";
-      this.render();
-    });
-    top.append(title, close);
-    const price = document.createElement("div");
-    price.className = "trader-sheet-item-price";
-    price.textContent =
-      selection.side === "player"
-        ? `Sells for ${formatNotes(each)} each`
-        : `Costs ${formatNotes(each)} each`;
-    body.append(top, price);
-    if (effect) {
-      const effectEl = document.createElement("div");
-      effectEl.className = "trader-sheet-item-effect";
-      effectEl.textContent = effect;
-      body.append(effectEl);
-    }
-    if (lock) {
-      const lockEl = document.createElement("div");
-      lockEl.className = "trader-sheet-lock";
-      lockEl.textContent = lock;
-      body.append(lockEl);
-    }
-
-    const controls = document.createElement("div");
-    controls.className = "trader-sheet-controls";
-    const stepper = document.createElement("div");
-    stepper.className = "trader-sheet-stepper";
-    const minus = this.draftButton(
-      "−",
-      "Less",
-      !!lock || this.phoneDraftQty <= 0 || this.confirmPending,
-      () => {
-        this.phoneDraftQty = Math.max(0, this.phoneDraftQty - 1);
-        this.render();
-      },
-    );
-    const qty = document.createElement("span");
-    qty.className = "trader-sheet-qty";
-    qty.textContent = String(this.phoneDraftQty);
-    const plus = this.draftButton(
-      "+",
-      "More",
-      !!lock || this.phoneDraftQty >= selection.quantity || this.confirmPending,
-      () => {
-        this.phoneDraftQty = Math.min(selection.quantity, this.phoneDraftQty + 1);
-        this.render();
-      },
-    );
-    stepper.append(minus, qty, plus);
-    const chips = document.createElement("div");
-    chips.className = "trader-sheet-chips";
-    chips.append(
-      this.draftButton(
-        "5",
-        "Set 5",
-        !!lock || selection.quantity < 5 || this.confirmPending,
-        () => {
-          this.phoneDraftQty = Math.min(5, selection.quantity);
-          this.render();
-        },
-      ),
-      this.draftButton(
-        "10",
-        "Set 10",
-        !!lock || selection.quantity < 10 || this.confirmPending,
-        () => {
-          this.phoneDraftQty = Math.min(10, selection.quantity);
-          this.render();
-        },
-      ),
-      this.draftButton(
-        "All",
-        "All",
-        !!lock || selection.quantity < 1 || this.confirmPending,
-        () => {
-          this.phoneDraftQty = selection.quantity;
-          this.render();
-        },
-      ),
-    );
-    controls.append(stepper, chips);
-
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "trader-confirm-btn trader-sheet-add";
-    if (lock) {
-      action.disabled = true;
-      action.textContent = "Cannot trade";
-    } else if (this.phoneDraftQty <= 0) {
-      action.textContent = "Remove from offer";
-      action.disabled = offered <= 0 || this.confirmPending;
-    } else if (this.phoneDraftQty === offered) {
-      action.textContent = "In the offer";
-      action.disabled = true;
-    } else {
-      action.textContent = offered > 0 ? "Update offer" : "Add to offer";
-      action.disabled = this.confirmPending;
-    }
-    action.addEventListener("click", () => {
-      if (action.disabled) return;
-      this.setOfferQuantity(this.phoneDraftQty);
-    });
-    this.phoneItemEl.append(body, controls, action);
-  }
-
-  private fillReview(): void {
-    const facts = this.offerFacts();
-    this.phoneReviewEl.replaceChildren();
-    const header = document.createElement("div");
-    header.className = "trader-sheet-header trader-sheet-review-header";
-    const back = document.createElement("button");
-    back.type = "button";
-    back.className = "dialog-close-btn";
-    back.textContent = "Back";
-    back.disabled = this.confirmPending;
-    back.addEventListener("click", () => {
+  private renderReview(): void {
+    const header = this.sheet.header;
+    header.setTitle("Review deal");
+    header.setSub(ASHEN_TRADERS_FACTION);
+    header.setBack(() => {
       if (this.confirmPending) return;
-      this.phoneReviewOpen = false;
+      this.sheetView = "shop";
       this.render();
     });
-    const title = document.createElement("h2");
-    title.className = "trader-sheet-review-title";
-    title.textContent = "Offer";
-    header.append(back, title, createDialogCloseButton(() => this.handlers.onClose()));
-
-    const body = document.createElement("div");
-    body.className = "trader-sheet-review-body";
-    this.appendOfferRows(
-      body,
-      "You sell",
-      facts.sells.map((line) => ({
-        itemId: line.itemId,
-        quantity: line.quantity,
-        price: traderBuyPrice(line.itemId, this.ashenReputation, this.barterT) * line.quantity,
-        remove: () => {
-          this.sellOffers.delete(line.slotIndex);
-          if (!this.hasOffer()) this.phoneReviewOpen = false;
-          this.render();
-        },
-      })),
-    );
-    this.appendOfferRows(
-      body,
-      "You buy",
-      facts.buys.map((line) => ({
-        itemId: line.itemId,
-        quantity: line.quantity,
-        price: traderSellPrice(line.itemId, this.ashenReputation, this.barterT) * line.quantity,
-        remove: () => {
-          this.buyOffers.delete(line.stockIndex);
-          if (!this.hasOffer()) this.phoneReviewOpen = false;
-          this.render();
-        },
-      })),
-    );
-
-    const summary = document.createElement("div");
-    summary.className = "trader-sheet-summary";
-    const addLine = (text: string, className: string) => {
-      const line = document.createElement("div");
-      line.className = className;
-      line.textContent = text;
-      summary.append(line);
+    renderTabs(this.sheet.tabsSlot, [], "", () => {});
+    const facts = this.offerFacts();
+    const body: HTMLElement[] = [];
+    if (facts.sells.length) {
+      body.push(sectionLabel("You get"));
+      for (const line of facts.sells) {
+        const slot = this.playerInventory[line.slotIndex];
+        const each = traderBuyPrice(line.itemId, this.ashenReputation, this.barterT);
+        const where = this.isEquippedSellSlot(line.slotIndex, line.itemId) ? "Worn" : "From your pack";
+        body.push(
+          this.reviewRow(line.itemId, line.quantity, where, each * line.quantity, () => {
+            if (slot) {
+              this.openItem({ side: "player", slotIndex: line.slotIndex, id: slot.id, quantity: slot.quantity });
+            }
+          }),
+        );
+      }
+    }
+    if (facts.buys.length) {
+      body.push(sectionLabel("You give"));
+      for (const line of facts.buys) {
+        const entry = this.stock[line.stockIndex];
+        const each = traderSellPrice(line.itemId, this.ashenReputation, this.barterT);
+        body.push(
+          this.reviewRow(line.itemId, line.quantity, `${money(each)} each`, each * line.quantity, () => {
+            if (entry) {
+              this.openItem({ side: "trader", stockIndex: line.stockIndex, id: entry.id, quantity: entry.quantity });
+            }
+          }),
+        );
+      }
+    }
+    const rows: KvRow[] = [];
+    if (facts.sellTotal > 0) rows.push({ label: "You get", value: money(facts.sellTotal) });
+    if (facts.buyTotal > 0) rows.push({ label: "You give", value: money(facts.buyTotal) });
+    if (facts.repGain > 0) rows.push({ label: "Ashen standing", value: `+${formatRep(facts.repGain)}`, tone: "ok" });
+    if (facts.net < 0) rows.push({ label: "You pay", value: money(facts.cash.playerPays), total: true });
+    else if (facts.net > 0) rows.push({ label: "You get paid", value: money(facts.cash.playerReceives), total: true });
+    else rows.push({ label: "Even trade", value: money(0), total: true });
+    rows.push({
+      label: "Your notes after",
+      value: money(this.playerBanknotes + facts.cash.playerReceives - facts.cash.playerPays),
+    });
+    body.push(kvCard(rows, true));
+    const note = (text: string, tone = "") => {
+      const p = document.createElement("p");
+      p.className = tone ? `ms-hint ms-${tone}` : "ms-hint";
+      p.textContent = text;
+      body.push(p);
     };
-    if (facts.sellTotal > 0) addLine(`You sell ${formatNotes(facts.sellTotal)}`, "trader-sheet-summary-line");
-    if (facts.buyTotal > 0) addLine(`You buy ${formatNotes(facts.buyTotal)}`, "trader-sheet-summary-line");
-    if (facts.net === 0) {
-      addLine("Even trade. No cash changes hands", "trader-sheet-summary-cash");
-    } else if (facts.net > 0) {
-      addLine(`You receive ${formatNotes(facts.cash.playerReceives)}`, "trader-sheet-summary-cash");
-    } else {
-      addLine(`You pay ${formatNotes(facts.cash.playerPays)}`, "trader-sheet-summary-cash");
-    }
-    if (facts.repGain > 0) {
-      const shown =
-        Number.isInteger(facts.repGain) ||
-        Math.abs(facts.repGain - Math.round(facts.repGain)) < 1e-9
-          ? String(Math.round(facts.repGain))
-          : facts.repGain.toFixed(1);
-      addLine(`+${shown} reputation`, "trader-sheet-summary-rep");
-    }
     if (facts.cash.shortfall > 0 && facts.net > 0) {
-      addLine(
-        `Trader is short ${formatNotes(facts.cash.shortfall)}. You still get the cash they have.`,
-        "trader-sheet-note",
+      note(
+        `Trader is short ${money(facts.cash.shortfall)}. You still get their remaining cash, plus +${formatRep(
+          facts.cash.shortfall * ASHEN_REP_PER_DOLLAR_TAKEN,
+        )} Ashen reputation.`,
+        "warn",
       );
     }
-    if (facts.blockReason) addLine(facts.blockReason, "trader-sheet-lock");
-    body.append(summary);
+    if (facts.blockReason && !this.confirmPending) note(facts.blockReason, "warn");
+    note("Tap a line to change or remove it.");
+    this.sheet.body.replaceChildren(...body);
 
-    const bar = document.createElement("div");
-    bar.className = "trader-sheet-review-bar";
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "trader-clear-offer-btn";
-    clear.textContent = "Clear";
-    clear.disabled = this.confirmPending;
-    clear.addEventListener("click", () => this.resetOffer());
-    const confirm = document.createElement("button");
-    confirm.type = "button";
-    confirm.className = "trader-confirm-btn";
-    confirm.textContent = this.confirmPending ? "Confirming…" : "Confirm";
-    confirm.disabled = facts.blockReason.length > 0;
-    confirm.addEventListener("click", () => this.confirmOffer());
-    bar.append(clear, confirm);
-    this.phoneReviewEl.append(header, body, bar);
+    const label = this.confirmPending
+      ? "Confirming…"
+      : facts.net < 0
+        ? `Confirm · pay ${money(facts.cash.playerPays)}`
+        : facts.net > 0
+          ? `Confirm · get ${money(facts.cash.playerReceives)}`
+          : "Confirm trade";
+    const confirm = sheetButton(label, "pri", () => this.confirmPhoneOffer());
+    confirm.disabled = this.confirmPending || facts.blockReason.length > 0;
+    this.sheet.bar.className = "ms-bar";
+    this.sheet.bar.replaceChildren(confirm);
   }
 
-  private appendOfferRows(
-    parent: HTMLElement,
-    heading: string,
-    lines: {
-      itemId: string;
-      quantity: number;
-      price: number;
-      remove: () => void;
-    }[],
-  ): void {
-    if (lines.length === 0) return;
-    const label = document.createElement("div");
-    label.className = "trader-sheet-kicker";
-    label.textContent = heading;
-    parent.append(label);
-    for (const line of lines) {
-      const row = document.createElement("div");
-      row.className = "trader-sheet-line";
-      appendItemIcon(row, line.itemId, "trader-sheet-line-icon");
-      const name = document.createElement("div");
-      name.className = "trader-sheet-line-name";
-      const def = getItemDefinition(line.itemId);
-      name.textContent = `${def?.name ?? line.itemId} ×${line.quantity}`;
-      const price = document.createElement("div");
-      price.className = "trader-sheet-line-price";
-      price.textContent = formatNotes(line.price);
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "trader-sheet-remove";
-      remove.textContent = "Remove";
-      remove.disabled = this.confirmPending;
-      remove.addEventListener("click", line.remove);
-      row.append(name, price, remove);
-      parent.append(row);
-    }
+  private reviewRow(itemId: string, quantity: number, meta: string, total: number, onTap: () => void): HTMLElement {
+    const name = getItemDefinition(itemId)?.name ?? itemId;
+    return sheetRow({
+      iconItemId: itemId,
+      qty: quantity > 1 ? quantity : undefined,
+      name: quantity > 1 ? `${name} ×${quantity}` : name,
+      meta: [meta],
+      end: money(total),
+      onTap: this.confirmPending ? undefined : onTap,
+    });
+  }
+
+  private confirmPhoneOffer(): void {
+    if (!this.hasOffer() || this.confirmPending) return;
+    const facts = this.offerFacts();
+    if (facts.blockReason) return;
+    this.confirmedDeal = {
+      sells: facts.sells.map((line) => ({ ...line })),
+      buys: facts.buys.map((line) => ({ ...line })),
+      net: facts.net,
+      paid: facts.cash.playerPays,
+      received: facts.cash.playerReceives,
+      repGain: facts.repGain,
+    };
+    this.confirmPending = true;
+    this.handlers.onConfirm(facts.sells, facts.buys);
+    this.render();
+  }
+
+  private renderDone(): void {
+    const deal = this.confirmedDeal!;
+    const header = this.sheet.header;
+    header.setTitle("Deal done");
+    header.setSub(ASHEN_TRADERS_FACTION);
+    header.setBack(null);
+    renderTabs(this.sheet.tabsSlot, [], "", () => {});
+    const body: HTMLElement[] = [];
+    const lines = (heading: string, items: { itemId: string; quantity: number }[], sign: string) => {
+      if (items.length === 0) return;
+      body.push(sectionLabel(heading));
+      for (const line of items) {
+        const name = getItemDefinition(line.itemId)?.name ?? line.itemId;
+        body.push(sheetRow({ iconItemId: line.itemId, name: `${sign}${line.quantity} ${name}` }));
+      }
+    };
+    lines("Into your pack", deal.buys, "+");
+    lines("Handed over", deal.sells, "−");
+    const rows: KvRow[] = [];
+    if (deal.paid > 0) rows.push({ label: "You paid", value: money(deal.paid), total: true });
+    else if (deal.received > 0) rows.push({ label: "You got paid", value: money(deal.received), total: true });
+    else rows.push({ label: "Even trade", value: money(0), total: true });
+    if (deal.repGain > 0) rows.push({ label: "Ashen standing", value: `+${formatRep(deal.repGain)}`, tone: "ok" });
+    rows.push({ label: "Your notes now", value: money(this.playerBanknotes) });
+    body.push(kvCard(rows, true));
+    this.sheet.body.replaceChildren(...body);
+    this.sheet.bar.className = "ms-bar";
+    const row = document.createElement("div");
+    row.className = "ms-bar-row";
+    row.append(
+      sheetButton("Keep trading", "pri", () => {
+        this.confirmedDeal = null;
+        this.sheetView = "shop";
+        this.render();
+        this.sheet.body.scrollTop = 0;
+      }),
+      sheetButton("Leave", "sec", () => this.handlers.onClose()),
+    );
+    this.sheet.bar.replaceChildren(row);
   }
 }
