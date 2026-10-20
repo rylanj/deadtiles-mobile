@@ -774,6 +774,8 @@ export class WorldScene extends Phaser.Scene {
   /** One close request is in flight after the hammer left the hand. */
   private structureBuildCloseSent = false;
   private structureBuildKind: StructureBuildKind | "deconstruct" = "wall";
+  /** Phone tray has not chosen a piece. Taps walk, and no ghost is shown. */
+  private phoneBuildUnpicked = false;
   private structureFenceFacing: StructureFenceFacing = "SE";
   private structureFenceRotateWasDown = false;
   private bKey?: Phaser.Input.Keyboard.Key;
@@ -1190,6 +1192,14 @@ export class WorldScene extends Phaser.Scene {
     /** After a successful finish, keep the bar at 100% until this time. */
     holdUntil?: number;
   } | null = null;
+  /**
+   * Search id still on the player after loot arrives.
+   * The result message beats the state patch that clears searchTargetId.
+   * Treating that leftover id as a new search closes the loot window.
+   */
+  private staleSearchIdAfterLootOpen: string | null = null;
+  /** Craft finished message arrived before isCrafting cleared. */
+  private staleCraftUntilPatch = false;
   private clothingActionLabel = "Wearing";
   /** Edge-triggered reload press. */
   private reloadKeyWasDown = false;
@@ -2108,6 +2118,11 @@ export class WorldScene extends Phaser.Scene {
     this.craftUI = new CraftUI({
       onClose: () => this.closeCraftUI(),
       onCraft: (recipeId) => this.sendCraftPerform(recipeId),
+      onReopen: () => this.sendCraftReopen(),
+      onStop: () => this.sendCraftStop(),
+      onAbandon: () => this.clearCraftProgressBar(),
+      onEquip: (itemId) => this.equipCraftedItem(itemId),
+      getCraftProgress: () => this.readCraftProgress(),
     });
     this.fireplaceUI = new FireplaceUI({
       onClose: () => this.closeFireplaceUI(),
@@ -2213,7 +2228,12 @@ export class WorldScene extends Phaser.Scene {
         if (!tile || !this.room) return;
         const message: ClientMessage = {
           type: "enterDoorCode",
-          payload: { x: tile.x, y: tile.y, code },
+          payload: {
+            x: tile.x,
+            y: tile.y,
+            code,
+            ...(this.doorCodeUI?.usesKeypad() ? { reply: true } : {}),
+          },
         };
         this.room.send("action", message);
       },
@@ -2543,12 +2563,14 @@ export class WorldScene extends Phaser.Scene {
       room.onMessage("event", (msg: ServerEvent) => {
         if (msg.type === "lootFound") {
           this.clearLocalSearchProgress();
+          this.noteSearchFinishedBeforePatch();
           this.lootPopup?.show(
             msg.payload.items,
             msg.payload.header ? { header: msg.payload.header } : undefined,
           );
         } else if (msg.type === "containerOpen") {
           this.clearLocalSearchProgress();
+          this.noteSearchFinishedBeforePatch();
           this.openContainerLootUI(
             msg.payload.containerId,
             msg.payload.objectType,
@@ -2595,12 +2617,9 @@ export class WorldScene extends Phaser.Scene {
             activeUntil: msg.payload.activeUntil,
           });
         } else if (msg.type === "craftSync") {
-          // Craft finished (dialog already closed when channel started).
-          if (this.localTimedAction?.kind === "craft") {
-            this.localTimedAction = null;
-            this.lastSearchProgressPct = -1;
-            this.searchProgressEl?.classList.remove("search-progress--visible");
-          }
+          const craftingNow = !!this.room?.state.players.get(this.sessionId)?.isCrafting;
+          if (craftingNow) this.staleCraftUntilPatch = true;
+          this.clearCraftProgressBar();
           if (this.localInventorySync) {
             this.localInventorySync = {
               ...this.localInventorySync,
@@ -2609,7 +2628,17 @@ export class WorldScene extends Phaser.Scene {
           }
           this.lastInventoryRenderKey = "";
           this.lastHotbarRenderKey = "";
-          if (msg.payload.salvaged && msg.payload.salvaged.length > 0) {
+          if (this.craftUI?.staysOpenWhileCrafting()) {
+            this.craftUI.sync({
+              workbenchId: msg.payload.workbenchId,
+              inventoryJson: msg.payload.inventoryJson,
+            });
+            this.craftUI.applyResult({
+              crafted: msg.payload.crafted,
+              salvaged: msg.payload.salvaged,
+              ruined: msg.payload.ruined,
+            });
+          } else if (msg.payload.salvaged && msg.payload.salvaged.length > 0) {
             const ruined = (msg.payload.ruined ?? [])
               .map((part) => part.name)
               .filter((name) => name.length > 0);
@@ -2749,6 +2778,8 @@ export class WorldScene extends Phaser.Scene {
             header: msg.payload.label,
             arrow: "↑",
           });
+        } else if (msg.type === "doorCodeResult") {
+          this.doorCodeUI?.noteResult(msg.payload.result);
         } else if (msg.type === "playerNote") {
           const text = msg.payload.text.trim();
           if (text === BIRCHPORT_WEAPON_EQUIP_DENIED) this.notifyTip("weapon_blocked");
@@ -5061,6 +5092,7 @@ export class WorldScene extends Phaser.Scene {
     const rDown = this.keys?.R?.isDown ?? false;
     if (
       this.structureBuildMode &&
+      !this.phoneBuildUnpicked &&
       isStructurePanelKind(this.structureBuildKind) &&
       rDown &&
       !this.structureFenceRotateWasDown
@@ -5245,21 +5277,26 @@ export class WorldScene extends Phaser.Scene {
       const t = this.structureBuildTray;
       if (!t) return;
       t.storage = !t.storage;
-      const first = t.storage ? "storage_box" : "wall";
-      this.structureBuildKind = first;
+      this.phoneBuildUnpicked = true;
+      this.clearBuildModePreview();
       this.updateStructureBuildHud();
     });
     const takeDownBtn = tapBtn("sb-tray-btn sb-tray-btn--danger", "Take down", () => {
-      this.structureBuildKind =
-        this.structureBuildKind === "deconstruct"
-          ? this.structureBuildTray?.storage
-            ? "storage_box"
-            : "wall"
-          : "deconstruct";
+      const takingDown =
+        !this.phoneBuildUnpicked && this.structureBuildKind === "deconstruct";
+      this.phoneBuildUnpicked = takingDown;
+      if (!takingDown) this.structureBuildKind = "deconstruct";
+      if (takingDown) this.clearBuildModePreview();
       this.updateStructureBuildHud();
     });
     row.append(storageBtn, takeDownBtn);
     tray.append(cards, row);
+    const keepTap = (event: Event) => {
+      event.stopPropagation();
+      this.releaseStolenTouchInput({ swallowTapMs: 280 });
+    };
+    tray.addEventListener("pointerdown", keepTap);
+    thumbs.addEventListener("pointerdown", keepTap);
     hud.append(banner, thumbs, tray);
     this.structureBuildTray = {
       title,
@@ -5277,8 +5314,9 @@ export class WorldScene extends Phaser.Scene {
     const t = this.structureBuildTray;
     if (!t || !this.structureBuildMode) return;
     const kind = this.structureBuildKind;
-    if (kind === "storage_box" || kind === "storage_box_2") t.storage = true;
-    else if (kind !== "deconstruct") t.storage = false;
+    const picked = !this.phoneBuildUnpicked;
+    if (picked && (kind === "storage_box" || kind === "storage_box_2")) t.storage = true;
+    else if (picked && kind !== "deconstruct") t.storage = false;
 
     const pieces: { kind: StructureBuildKind; name: string; icon: string }[] = t.storage
       ? [
@@ -5295,7 +5333,8 @@ export class WorldScene extends Phaser.Scene {
 
     const me = this.room?.state?.players?.get(this.sessionId);
     const inventoryJson = me ? (this.localInventorySync?.inventoryJson ?? me.inventoryJson) : "[]";
-    const key = `${t.storage}|${kind}`;
+    const selected = picked ? kind : "";
+    const key = `${t.storage}|${selected}`;
     const paintKey = `${key}|${inventoryJson}`;
     if (t.paintKey === paintKey) return;
     t.paintKey = paintKey;
@@ -5308,7 +5347,7 @@ export class WorldScene extends Phaser.Scene {
       for (const piece of pieces) {
         const card = document.createElement("button");
         card.type = "button";
-        card.className = `sb-card${piece.kind === kind ? " sb-card--on" : ""}`;
+        card.className = `sb-card${piece.kind === selected ? " sb-card--on" : ""}`;
         const img = document.createElement("img");
         img.src = piece.icon;
         img.alt = "";
@@ -5326,17 +5365,29 @@ export class WorldScene extends Phaser.Scene {
           event.preventDefault();
           event.stopPropagation();
           this.releaseStolenTouchInput({ swallowTapMs: 280 });
-          this.structureBuildKind = piece.kind;
+          const same =
+            !this.phoneBuildUnpicked && this.structureBuildKind === piece.kind;
+          this.phoneBuildUnpicked = same;
+          if (!same) this.structureBuildKind = piece.kind;
+          else this.clearBuildModePreview();
           this.updateStructureBuildHud();
         });
         t.cards.append(card);
       }
     }
     t.storageBtn.textContent = t.storage ? "‹ Walls and fences" : "Storage boxes ›";
-    t.takeDownBtn.classList.toggle("sb-tray-btn--on", kind === "deconstruct");
-    t.takeDownBtn.textContent = kind === "deconstruct" ? "Stop taking down" : "Take down";
-    t.rotateBtn.hidden = kind === "deconstruct" || !isStructurePanelKind(kind);
+    t.takeDownBtn.classList.toggle("sb-tray-btn--on", picked && kind === "deconstruct");
+    t.takeDownBtn.textContent =
+      picked && kind === "deconstruct" ? "Stop taking down" : "Take down";
+    t.rotateBtn.hidden = !picked || kind === "deconstruct" || !isStructurePanelKind(kind);
 
+    if (!picked) {
+      t.title.textContent = "Build";
+      t.title.append(this.structureBuildSubSpan("pick a piece"));
+      t.costs.textContent = "";
+      t.note.textContent = "";
+      return;
+    }
     if (kind === "deconstruct") {
       t.title.textContent = "Take down";
       t.title.append(this.structureBuildSubSpan("tap something you built"));
@@ -9617,6 +9668,10 @@ export class WorldScene extends Phaser.Scene {
   ) {
     const active = this.buildMode || this.structureBuildMode;
     if (!active) return;
+    if (this.structureBuildMode && this.phoneBuildUnpicked) {
+      this.clearBuildModePreview();
+      return;
+    }
     if (this.isOverlayOpen() || this.chatOpen) {
       this.clearBuildModePreview();
       return;
@@ -9675,6 +9730,7 @@ export class WorldScene extends Phaser.Scene {
 
   private tryBuildWallAt(screenX: number, screenY: number): boolean {
     if ((!this.buildMode && !this.structureBuildMode) || !this.room) return false;
+    if (this.structureBuildMode && this.phoneBuildUnpicked) return false;
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me?.alive) return true;
     const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
@@ -12134,6 +12190,16 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * Loot messages arrive before the patch that clears searchTargetId.
+   * Keep that id so the progress update does not start the search over
+   * and close the loot window that just opened.
+   */
+  private noteSearchFinishedBeforePatch() {
+    const searchId = this.room?.state?.players?.get(this.sessionId)?.searchTargetId;
+    this.staleSearchIdAfterLootOpen = searchId ? searchId : null;
+  }
+
+  /**
    * Cancellable timed channels. When adding a new progress-bar action:
    * 1. Add a schema busy flag (or localKind) + server `*Cancel` message
    * 2. Append a row here
@@ -12740,7 +12806,11 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     if (this.reloadKeyWasDown) return;
-    if (this.structureBuildMode && isStructurePanelKind(this.structureBuildKind)) {
+    if (
+      this.structureBuildMode &&
+      !this.phoneBuildUnpicked &&
+      isStructurePanelKind(this.structureBuildKind)
+    ) {
       this.reloadKeyWasDown = true;
       return;
     }
@@ -14144,6 +14214,14 @@ export class WorldScene extends Phaser.Scene {
     // even if a stale start-sync still says isReloading.
     const sync = this.localInventorySync;
     const searching = !!me.searchTargetId;
+    if (
+      this.staleSearchIdAfterLootOpen &&
+      me.searchTargetId !== this.staleSearchIdAfterLootOpen
+    ) {
+      this.staleSearchIdAfterLootOpen = null;
+    }
+    // Finished search whose clear-patch has not arrived. Do not start it again.
+    const finishedSearchPending = this.staleSearchIdAfterLootOpen != null;
     const lockpicking =
       searching && me.searchTargetId.startsWith(LOCKPICK_TARGET_PREFIX);
     const crackingSafe = searching && this.isCrackingSafe(me.searchTargetId);
@@ -14152,7 +14230,9 @@ export class WorldScene extends Phaser.Scene {
       this.localTimedAction.label === "Cracking" &&
       this.localTimedAction.optimistic &&
       Date.now() - this.localTimedAction.startedAt < 2500;
-    this.syncLockpickLoop(lockpicking || crackingSafe || optimisticCrack);
+    this.syncLockpickLoop(
+      !finishedSearchPending && (lockpicking || crackingSafe || optimisticCrack),
+    );
     const syncConfirmsOptimisticReload =
       !!sync?.isReloading &&
       this.localTimedAction?.kind === "reload" &&
@@ -14164,7 +14244,8 @@ export class WorldScene extends Phaser.Scene {
       this.localTimedAction.optimistic;
     const unloading = !!me.isUnloading || syncConfirmsOptimisticUnload;
     const consuming = !!me.isConsuming;
-    const crafting = !!me.isCrafting;
+    if (this.staleCraftUntilPatch && !me.isCrafting) this.staleCraftUntilPatch = false;
+    const crafting = !!me.isCrafting && !this.staleCraftUntilPatch;
     const changingClothes = !!me.isChangingClothes;
     const building = !!me.isBuilding;
 
@@ -14175,7 +14256,7 @@ export class WorldScene extends Phaser.Scene {
         "Picking lock",
         false,
       );
-    } else if (searching) {
+    } else if (searching && !finishedSearchPending) {
       const target = this.searchablesCache.find((item) => item.id === me.searchTargetId);
       const cracking = this.isCrackingSafe(me.searchTargetId);
       const inspecting = this.isInspectAction(
@@ -14647,6 +14728,15 @@ export class WorldScene extends Phaser.Scene {
 
     room.onMessage("structureBuildMode", (msg: { enabled?: boolean }) => {
       this.structureBuildMode = msg.enabled === true;
+      if (this.structureBuildTray) {
+        this.phoneBuildUnpicked = true;
+        if (this.structureBuildMode) {
+          this.structureBuildTray.storage = false;
+          this.structureBuildTray.paintKey = undefined;
+          this.structureBuildTray.cards.dataset.key = "";
+          this.clearBuildModePreview();
+        }
+      }
       document.body.classList.toggle("build-mode-open", this.structureBuildMode);
       this.updateStructureBuildHud();
       this.refreshMobileActionButtons();
@@ -17576,6 +17666,19 @@ export class WorldScene extends Phaser.Scene {
     inventoryJson: string;
     station?: "workbench" | "furnace";
   }) {
+    if (this.craftUI?.isOpen()) {
+      const again = this.craftUI.takeRecraft(payload.workbenchId);
+      if (again) {
+        this.craftUI.sync({
+          workbenchId: payload.workbenchId,
+          inventoryJson: payload.inventoryJson,
+        });
+        this.sendCraftPerform(again);
+        return;
+      }
+    }
+    const furnaceActiveUntil =
+      payload.station === "furnace" ? this.fireplaceUI?.getActiveUntil() : undefined;
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
     if (this.mapOverlayUI?.isOpen()) this.mapOverlayUI.close();
@@ -17591,6 +17694,8 @@ export class WorldScene extends Phaser.Scene {
     this.craftUI?.open({
       ...payload,
       extraPockets: this.localExtraPockets(),
+      craftDurationScale: this.localSkillMods(payload.inventoryJson).craftDurationScale,
+      furnaceActiveUntil,
     });
   }
 
@@ -18252,19 +18357,81 @@ export class WorldScene extends Phaser.Scene {
         )
       : CRAFT_DURATION_MS;
 
-    // Soft-close the dialog (no craftClose) so the server can start the channel
-    // from the still-open craft session.
-    this.craftUI.close();
-    document.body.classList.remove("craft-open");
+    const stayOpen = this.craftUI.staysOpenWhileCrafting();
+    if (!stayOpen) {
+      // Soft-close the dialog (no craftClose) so the server can start the channel
+      // from the still-open craft session.
+      this.craftUI.close();
+      document.body.classList.remove("craft-open");
+    }
 
     // Furnace crafts wait for the server. A cold or extinguished fire
     // must not leave a progress bar running.
     if (!furnace) this.beginOptimisticCraft(durationMs);
+    if (stayOpen) this.craftUI.noteCraftSent(recipeId);
     const message: ClientMessage = {
       type: "craftPerform",
       payload: { workbenchId, recipeId },
     };
     this.room.send("action", message);
+  }
+
+  /** Phone sheet asks for a fresh bench session, then crafts again. */
+  private sendCraftReopen() {
+    if (!this.room || !this.craftUI?.isOpen()) return;
+    const workbenchId = this.craftUI.getWorkbenchId();
+    if (!workbenchId) return;
+    const message: ClientMessage = {
+      type: "craftOpen",
+      payload: { workbenchId },
+    };
+    this.room.send("action", message);
+  }
+
+  private sendCraftStop() {
+    if (!this.room) return;
+    this.room.send("action", { type: "craftCancel" });
+    this.clearCraftProgressBar();
+  }
+
+  private clearCraftProgressBar() {
+    if (this.localTimedAction?.kind !== "craft") return;
+    this.localTimedAction = null;
+    this.lastSearchProgressPct = -1;
+    this.searchProgressEl?.classList.remove("search-progress--visible");
+  }
+
+  private readCraftProgress(): {
+    elapsedMs: number;
+    durationMs: number;
+    confirmed: boolean;
+  } | null {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const action = this.localTimedAction?.kind === "craft" ? this.localTimedAction : null;
+    const server = !!me?.isCrafting && (me.craftEndTime ?? 0) > 0 && !this.staleCraftUntilPatch;
+    if (!server && !action) return null;
+    const durationMs = Math.max(
+      1,
+      server ? me?.craftDurationMs || action?.durationMs || CRAFT_DURATION_MS : action?.durationMs || CRAFT_DURATION_MS,
+    );
+    const elapsedMs = server
+      ? durationMs - Math.max(0, (me?.craftEndTime ?? 0) - Date.now())
+      : Date.now() - (action?.startedAt ?? Date.now());
+    return {
+      elapsedMs,
+      durationMs,
+      confirmed: server || (!!action && !action.optimistic),
+    };
+  }
+
+  private equipCraftedItem(itemId: string) {
+    if (!this.room) return;
+    const me = this.room.state.players.get(this.sessionId);
+    const inventoryJson =
+      this.localInventorySync?.inventoryJson ?? me?.inventoryJson ?? "[]";
+    const slot = parseInventory(inventoryJson).findIndex((entry) => entry?.id === itemId);
+    if (slot < 0) return;
+    this.equipWeaponBySlot(slot);
   }
 
   private updateCraftProximity() {

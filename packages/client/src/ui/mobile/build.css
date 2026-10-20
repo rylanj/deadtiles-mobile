@@ -9,6 +9,8 @@ body.is-mobile #structure-build-hud.sb-phone {
   border: 0;
   border-radius: 0;
   background: none;
+  /* Above the stick (70) so the tray stays tappable. Empty space still falls through. */
+  z-index: 80;
   pointer-events: none;
   --sb-tray-h: 164px;
 }
@@ -67,6 +69,7 @@ body.is-mobile #structure-build-hud.sb-phone[hidden] {
   padding: 10px 0 var(--hud-bottom);
   background: rgba(10, 12, 9, 0.95);
   border-top: 1px solid rgba(220, 180, 110, 0.45);
+  pointer-events: auto;
 }
 .sb-cards {
   display: flex;
@@ -147,6 +150,7 @@ body.is-mobile #structure-build-hud.sb-phone[hidden] {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: auto;
 }
 .sb-thumb {
   width: 72px;

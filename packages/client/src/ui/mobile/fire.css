@@ -147,6 +147,9 @@ body.is-mobile #prefab-overlay.ms-host {
 }
 
 /* Take down card over the world */
+body.is-mobile #deconstruct-overlay.ms-card-host {
+  z-index: 112;
+}
 body.is-mobile #deconstruct-overlay.ms-card-host .ms-drawer {
   box-sizing: border-box;
 }

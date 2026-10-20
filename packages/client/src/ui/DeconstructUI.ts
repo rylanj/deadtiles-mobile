@@ -6,6 +6,8 @@ import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { claimPageOverlay } from "./pageOverlay";
+import "./mobile/fire.css";
+import { itemIconImg, markSheetOpen, sheetButton, useMobileSheet } from "./mobileSheet";
 
 export type DeconstructUIHandlers = {
   onClose: () => void;
@@ -60,6 +62,10 @@ export class DeconstructUI {
   private refund: { itemId: string; quantity: number }[] = [];
 
   private overlay: HTMLElement;
+  private layoutEl!: HTMLElement;
+  private phoneCard: HTMLElement | null = null;
+  private msOn = false;
+  private durationMs = 30_000;
   private titleEl: HTMLElement;
   private statusEl: HTMLElement;
   private refundListEl: HTMLElement;
@@ -72,6 +78,7 @@ export class DeconstructUI {
 
     const layout = document.createElement("div");
     layout.className = "fireplace-layout";
+    this.layoutEl = layout;
 
     const panel = document.createElement("div");
     panel.className = "inventory-panel craft-panel fireplace-panel";
@@ -120,6 +127,10 @@ export class DeconstructUI {
     this.overlay.appendChild(layout);
 
     this.overlay.addEventListener("click", (e) => {
+      if (useMobileSheet()) {
+        if (e.target === this.overlay) this.handlers.onClose();
+        return;
+      }
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
@@ -143,10 +154,12 @@ export class DeconstructUI {
       typeof state.durationMs === "number" && state.durationMs > 0
         ? state.durationMs
         : 30_000;
+    this.durationMs = durationMs;
     this.deconstructBtn.textContent = `Deconstruct (${Math.max(1, Math.round(durationMs / 1000))}s)`;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("deconstruct-open");
+    this.applyPhone();
     this.render();
     resetDialogScroll(this.overlay);
   }
@@ -155,6 +168,12 @@ export class DeconstructUI {
     this.visible = false;
     this.overlay.hidden = true;
     document.body.classList.remove("deconstruct-open");
+    this.overlay.classList.remove("ms-card-host");
+    this.layoutEl.hidden = false;
+    this.phoneCard?.remove();
+    this.phoneCard = null;
+    markSheetOpen("take-down", false);
+    this.msOn = false;
     this.tile = null;
     this.refund = [];
   }
@@ -165,6 +184,10 @@ export class DeconstructUI {
   }
 
   private render() {
+    if (this.msOn) {
+      this.renderMobile();
+      return;
+    }
     this.titleEl.textContent = `Deconstruct ${KIND_LABELS[this.kind] ?? "structure"}`;
     this.statusEl.textContent = "Only structures you built can be deconstructed";
 
@@ -192,5 +215,66 @@ export class DeconstructUI {
       row.appendChild(info);
       this.refundListEl.appendChild(row);
     }
+  }
+
+  private applyPhone() {
+    this.msOn = useMobileSheet();
+    this.overlay.classList.toggle("ms-card-host", this.msOn);
+    this.layoutEl.hidden = this.msOn;
+    markSheetOpen("take-down", this.visible && this.msOn);
+  }
+
+  private renderMobile() {
+    this.phoneCard?.remove();
+    const name = (KIND_LABELS[this.kind] ?? "structure").toLowerCase();
+    const seconds = Math.max(1, Math.round(this.durationMs / 1000));
+    const card = document.createElement("div");
+    card.className = "ms-drawer ms-tone-red";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", `Take down this ${name}?`);
+    const grab = document.createElement("div");
+    grab.className = "ms-grab";
+    const body = document.createElement("div");
+    body.className = "ms-drawer-scroll";
+    const title = document.createElement("h2");
+    title.className = "ms-take-title";
+    title.textContent = `Take down this ${name}?`;
+    const hint = document.createElement("p");
+    hint.className = "ms-hint ms-take-hint";
+    hint.textContent = `Stand still for ${seconds} s. You get these materials back.`;
+    const list = document.createElement("div");
+    list.className = "ms-card ms-take-card";
+    if (this.refund.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "ms-hint";
+      empty.textContent = "Nothing comes back.";
+      list.append(empty);
+    }
+    for (const line of this.refund) {
+      const row = document.createElement("div");
+      row.className = "ms-kv";
+      const label = document.createElement("span");
+      label.className = "ms-kv-k";
+      const img = itemIconImg(line.itemId);
+      if (img) label.append(img);
+      label.append(
+        document.createTextNode(getItemDefinition(line.itemId)?.name ?? line.itemId),
+      );
+      const value = document.createElement("b");
+      value.className = "ms-kv-v";
+      value.textContent = `×${line.quantity}`;
+      row.append(label, value);
+      list.append(row);
+    }
+    body.append(title, hint, list);
+    const bar = document.createElement("div");
+    bar.className = "ms-bar";
+    bar.append(
+      sheetButton(`Take down · ${seconds} s`, "danger", () => this.handlers.onDeconstruct()),
+      sheetButton("Keep it", "sec", () => this.handlers.onClose()),
+    );
+    card.append(grab, body, bar);
+    this.overlay.append(card);
+    this.phoneCard = card;
   }
 }

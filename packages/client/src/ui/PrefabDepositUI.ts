@@ -14,6 +14,16 @@ import { appendItemIcon } from "./itemIcons";
 import { createDialogCloseButton } from "./dialogCloseBtn";
 import { resetDialogScroll } from "./dialogScroll";
 import { claimPageOverlay } from "./pageOverlay";
+import "./mobile/fire.css";
+import {
+  createSheet,
+  markSheetOpen,
+  meter,
+  sheetButton,
+  sheetRow,
+  useMobileSheet,
+  type Sheet,
+} from "./mobileSheet";
 
 export type PrefabDepositUIHandlers = {
   onClose: () => void;
@@ -76,6 +86,10 @@ export class PrefabDepositUI {
   private durationMs = 30_000;
 
   private overlay: HTMLElement;
+  private layoutEl!: HTMLElement;
+  private ms: Sheet | null = null;
+  private msOn = false;
+  private confirmCancel = false;
   private titleEl: HTMLElement;
   private statusEl: HTMLElement;
   private costListEl: HTMLElement;
@@ -89,6 +103,7 @@ export class PrefabDepositUI {
 
     const layout = document.createElement("div");
     layout.className = "fireplace-layout";
+    this.layoutEl = layout;
 
     const panel = document.createElement("div");
     panel.className = "inventory-panel craft-panel fireplace-panel";
@@ -141,6 +156,7 @@ export class PrefabDepositUI {
     this.overlay.appendChild(layout);
 
     this.overlay.addEventListener("click", (e) => {
+      if (useMobileSheet()) return;
       if (e.target === this.overlay) this.handlers.onClose();
     });
 
@@ -159,9 +175,11 @@ export class PrefabDepositUI {
   open(state: PrefabDepositUIState) {
     this.tile = { x: state.x, y: state.y };
     this.applyState(state);
+    this.confirmCancel = false;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("prefab-open");
+    this.applyPhone();
     this.render();
     resetDialogScroll(this.overlay);
   }
@@ -177,6 +195,12 @@ export class PrefabDepositUI {
     this.visible = false;
     this.overlay.hidden = true;
     document.body.classList.remove("prefab-open");
+    this.overlay.classList.remove("ms-host");
+    this.layoutEl.hidden = false;
+    if (this.ms) this.ms.root.hidden = true;
+    markSheetOpen("prefab", false);
+    this.msOn = false;
+    this.confirmCancel = false;
     this.tile = null;
     this.deposits = {};
     this.inventory = [];
@@ -197,6 +221,10 @@ export class PrefabDepositUI {
   }
 
   private render() {
+    if (this.msOn) {
+      this.renderMobile();
+      return;
+    }
     this.titleEl.textContent = KIND_LABELS[this.kind] ?? "Prefab";
     const funded = structureDepositsMeetCost(this.kind, this.deposits);
     this.statusEl.textContent = funded
@@ -259,5 +287,136 @@ export class PrefabDepositUI {
 
     this.buildBtn.hidden = !funded;
     this.buildBtn.disabled = !funded;
+  }
+
+  private applyPhone() {
+    this.msOn = useMobileSheet();
+    this.overlay.classList.toggle("ms-host", this.msOn);
+    this.layoutEl.hidden = this.msOn;
+    if (this.msOn && !this.ms) {
+      this.ms = createSheet({ onClose: () => this.handlers.onClose() });
+      this.overlay.append(this.ms.root);
+    }
+    if (this.ms) this.ms.root.hidden = !this.msOn;
+    markSheetOpen("prefab", this.visible && this.msOn);
+  }
+
+  private kindName(): string {
+    return KIND_LABELS[this.kind] ?? "Build";
+  }
+
+  private depositPlans() {
+    const plans: { itemId: string; quantity: number; name: string }[] = [];
+    for (const line of getStructureBuildCosts(this.kind)) {
+      const capacity = remainingDepositCapacity(this.kind, this.deposits, line.itemId);
+      const inStock = countItemInInventory(this.inventory, line.itemId);
+      const quantity = Math.min(capacity, Math.max(inStock, 0));
+      if (quantity <= 0) continue;
+      plans.push({
+        itemId: line.itemId,
+        quantity,
+        name: getItemDefinition(line.itemId)?.name ?? line.itemId,
+      });
+    }
+    return plans;
+  }
+
+  private renderMobile() {
+    const sheet = this.ms;
+    if (!sheet) return;
+    const costs = getStructureBuildCosts(this.kind);
+    const funded = structureDepositsMeetCost(this.kind, this.deposits);
+    let filled = 0;
+    let needSum = 0;
+    let haveSum = 0;
+    for (const line of costs) {
+      const have = Math.min(this.deposits[line.itemId] ?? 0, line.quantity);
+      if (have >= line.quantity) filled += 1;
+      haveSum += have;
+      needSum += line.quantity;
+    }
+    sheet.header.setBack(null);
+    sheet.header.setTitle(`${this.kindName()} (unfinished)`);
+    sheet.header.setSub(
+      `${filled} of ${costs.length} ${costs.length === 1 ? "material" : "materials"} in`,
+    );
+    const nodes: HTMLElement[] = [];
+    const total = meter(needSum > 0 ? (haveSum / needSum) * 100 : 0, "#5ec85e");
+    total.classList.add("ms-prefab-total");
+    nodes.push(total);
+    for (const line of costs) {
+      const have = this.deposits[line.itemId] ?? 0;
+      const name = getItemDefinition(line.itemId)?.name ?? line.itemId;
+      const done = have >= line.quantity;
+      const carry = countItemInInventory(this.inventory, line.itemId);
+      const row = sheetRow({
+        iconItemId: line.itemId,
+        name,
+        meta: done ? undefined : [`you carry ${carry}`],
+        state: !done && carry > 0 ? "on" : undefined,
+        end: done ? this.okEnd(`${line.quantity} / ${line.quantity}`) : `${Math.min(have, line.quantity)} / ${line.quantity}`,
+      });
+      row.classList.add("ms-prefab-row");
+      const track = meter(
+        line.quantity > 0 ? (Math.min(have, line.quantity) / line.quantity) * 100 : 0,
+        done ? "#5ec85e" : "#d9b43a",
+      );
+      row.querySelector(".ms-row-mid")?.append(track);
+      nodes.push(row);
+    }
+    const note = document.createElement("p");
+    note.className = "ms-hint";
+    note.textContent = "Materials stay in the build if you walk away. Cancelling gives them back.";
+    nodes.push(note);
+    sheet.body.replaceChildren(...nodes);
+    this.renderPrefabBar(sheet, funded);
+  }
+
+  private okEnd(text: string): HTMLElement {
+    const end = document.createElement("span");
+    end.className = "ms-ok";
+    end.textContent = `${text} ✓`;
+    return end;
+  }
+
+  private renderPrefabBar(sheet: Sheet, funded: boolean) {
+    sheet.bar.replaceChildren();
+    const plans = this.depositPlans();
+    const seconds = Math.max(1, Math.round(this.durationMs / 1000));
+    if (this.confirmCancel) {
+      const yes = sheetButton("Refund materials", "danger", () => this.handlers.onCancel());
+      const no = sheetButton("Keep building", "sec", () => {
+        this.confirmCancel = false;
+        this.render();
+      });
+      sheet.bar.append(yes, no);
+    } else {
+      if (!funded) {
+        const label =
+          plans.length === 0
+            ? "Nothing to deposit"
+            : plans.length === 1
+              ? `Deposit ${plans[0]!.quantity} ${plans[0]!.name}`
+              : "Deposit all";
+        const deposit = sheetButton(
+          label,
+          "pri",
+          () => {
+            for (const plan of plans) this.handlers.onDeposit(plan.itemId, plan.quantity);
+          },
+          plans.length > 1 ? { sub: `${plans.length} materials` } : undefined,
+        );
+        deposit.disabled = plans.length === 0;
+        sheet.bar.append(deposit);
+      }
+      const cancel = sheetButton(`Cancel ${this.kindName().toLowerCase()}`, "danger", () => {
+        this.confirmCancel = true;
+        this.render();
+      });
+      const build = sheetButton(`Build · ${seconds} s`, "sec", () => this.handlers.onBuild());
+      build.disabled = !funded;
+      sheet.bar.append(cancel, build);
+    }
+    sheet.syncBar();
   }
 }

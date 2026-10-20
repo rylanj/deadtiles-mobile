@@ -47,6 +47,20 @@ export const STRUCTURE_DECONSTRUCT_DURATION_MS = 30_000;
 /** Hammer use-count durability spent when placing a ghost prefab. */
 export const PREFAB_PLACE_HAMMER_WEAR = 1;
 
+/**
+ * Unfinished prefabs one player may have at once.
+ * Finishing, cancelling, destroying, or a restart that drops the ghost frees a slot.
+ * Fence corners are created by the fence and do not use a slot.
+ */
+export const MAX_UNBUILT_PREFABS = 10;
+
+export function countsTowardUnbuiltPrefabCap(rec: {
+  status: string;
+  kind: string;
+}): boolean {
+  return rec.status === "prefab" && rec.kind !== "fence_corner";
+}
+
 /** Hammer use-count durability spent when a prefab finishes building. */
 export const PREFAB_BUILD_HAMMER_WEAR = 10;
 
