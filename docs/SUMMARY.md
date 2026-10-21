@@ -1,30 +1,29 @@
-# Summary
+# Table of contents
 
 ## Start
 
 * [Welcome](README.md)
-* [How to play](play.md)
-* [Controls](controls.md)
+* [How to play](start/play.md)
+* [Controls](start/controls.md)
 
 ## Stay alive
 
-* [Survival](survival.md)
-* [Combat](combat.md)
-* [Infection](infection.md)
-* [Death](death.md)
+* [Survival](stay-alive/survival.md)
+* [Combat](stay-alive/combat.md)
+* [Infection](stay-alive/infection.md)
+* [Death](stay-alive/death.md)
 
 ## The county
 
-* [Birchport](birchport.md)
-* [Factions](factions.md)
-* [Work](work.md)
-* [Skills](skills.md)
-* [Building](building.md)
-* [Radio](radio.md)
+* [Birchport](the-county/birchport.md)
+* [Factions](the-county/factions.md)
+* [Work](the-county/work.md)
+* [Skills](the-county/skills.md)
+* [Building](the-county/building.md)
+* [Radio](the-county/radio.md)
 
 ## Money
 
-* [Trade](trade.md)
-* [Deadmarks](deadmarks.md)
-
-* [FAQ](faq.md)
+* [Trade](money/trade.md)
+* [Deadmarks](money/deadmarks.md)
+* [FAQ](money/faq.md)
