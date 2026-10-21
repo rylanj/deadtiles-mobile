@@ -1,6 +1,23 @@
 # Controls
 
-Press Esc on a computer to close windows and show this list in game.
+On a phone, the buttons are on the screen. On a computer, press Esc to close windows and show this list in game.
+
+## Phone
+
+| Control | Action |
+| --- | --- |
+| Stick, or tap the ground | Move |
+| Stick pushed to the edge | Sprint |
+| Tap a person or object | Talk, search, interact |
+| Backpack button | Inventory |
+| Hotbar | Equip a weapon |
+| Tap a target | Melee hit in range |
+| Aim button, then tap | Aim and attack |
+| Reload button | Reload |
+| Map button | Map |
+| Journal button | Journal and Field Guide |
+| Build button | Build mode |
+| Chat button | Chat and radio commands |
 
 ## Computer
 
@@ -23,23 +40,6 @@ Press Esc on a computer to close windows and show this list in game.
 | `/radio message` | Talk on the radio |
 | `/ping` | Share your location on the radio |
 | Esc | Close windows, show controls |
-
-## Phone
-
-| Control | Action |
-| --- | --- |
-| Stick, or tap the ground | Move |
-| Stick pushed to the edge | Sprint |
-| Tap a person or object | Talk, search, interact |
-| Backpack button | Inventory |
-| Hotbar | Equip a weapon |
-| Tap a target | Melee hit in range |
-| Aim button, then tap | Aim and attack |
-| Reload button | Reload |
-| Map button | Map |
-| Journal button | Journal and Field Guide |
-| Build button | Build mode |
-| Chat button | Chat and radio commands |
 
 Open your pack, select food, water, or medicine, and use it. You can walk while that finishes. Sprinting interrupts it.
 
