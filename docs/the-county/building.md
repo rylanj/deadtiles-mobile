@@ -2,7 +2,11 @@
 
 Press B, or the build button, with a hammer to place walls, doors, storage, and the rest. Each piece needs its materials deposited before it goes up.
 
-Most structures cannot be built inside Birchport. Build out in the county.
+Most structures cannot be built inside Birchport. A fireplace is the exception. It is also how you get health back in town: stand beside it once it is lit. See [Survival](../stay-alive/survival.md). Build everything else out in the county.
+
+A small storage box holds 8 slots. A large one holds 24. Gear in a box is not on your body when you die. The market also rents a safe deposit box. See [Trade](../money/trade.md).
+
+Cloth and bandages are made at a workbench you find, not one you build. Metal recipes need a lit furnace.
 
 Other survivors lock their buildings with a code. When you build your own, you can set a code too. A locked door stays locked until someone has the code or picks it. See [Combat](../stay-alive/combat.md) for what a lockpick costs you in time and noise.
 

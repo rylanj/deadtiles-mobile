@@ -24,15 +24,15 @@ In Birchport they run the supermarket, the building with the boarded windows. We
 
 ## Standing
 
-| Standing | Reputation     | What it means                                                              |
-| -------- | -------------- | -------------------------------------------------------------------------- |
-| Exiled   | Below -100     | Permanent. They will not deal with you.                                    |
-| Hostile  | -100 up to 0   | They will not talk, and they may shoot. This band climbs back toward Wary. |
-| Wary     | 0 to 499       | Where everyone starts.                                                     |
-| Neutral  | 500 to 999     | Ordinary business.                                                         |
-| Warm     | 1,000 to 2,499 | Better prices and a larger wire.                                           |
-| Friendly | 2,500 to 4,999 | Better still.                                                              |
-| Allied   | 5,000 and up   | Best prices, no market cut, and the largest wire.                          |
+| Standing | Reputation | What it means |
+| --- | --- | --- |
+| Exiled | Below -100 | Permanent. They will not deal with you. |
+| Hostile | -100 up to 0 | They will not talk, and they may shoot. This band climbs back toward Wary. |
+| Wary | 0 to 499 | Where everyone starts. |
+| Neutral | 500 to 999 | Ordinary business. |
+| Warm | 1,000 to 2,499 | Better prices and a larger wire. |
+| Friendly | 2,500 to 4,999 | Better still. |
+| Allied | 5,000 and up | Best prices, no market cut, and the largest wire. |
 
 Jobs and trade raise standing. Attacking a faction, or stealing from it, drops you a full level: Allied becomes Friendly, Friendly becomes Warm, and so on, down to Exiled.
 

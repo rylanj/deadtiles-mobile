@@ -4,11 +4,13 @@ Equip a weapon from the hotbar, aim, and attack. Shots stop at the first body or
 
 With a melee weapon, click a target in range to hit them. On a phone, tap them. Hold Ctrl, or tap the aim button, to ready up, then click or tap to swing in any direction.
 
+You have 100 health. A walker bite takes about 15 of it, and about one bite in ten starts an infection. How to get that health back is in [Survival](survival.md).
+
 ## Noise
 
-Walkers chase anything they see or hear.
+Walkers chase anything they see or hear. When one spots you, it calls others close by.
 
-Gunshots carry a long way. Walkers come to investigate. Melee stays quiet. Searching makes noise too, though not from nearly as far as a gunshot.
+Gunshots carry a long way. A pistol is heard far off. A rifle is heard farther. Walkers come to investigate. Melee stays quiet. Searching makes noise too, though not from nearly as far as a gunshot. A search takes a few seconds, and you have to stay at the furniture. Walking away stops it.
 
 A lockpick takes about a minute if you stay beside the door, and that noise can draw walkers. The kit wears down with use.
 
