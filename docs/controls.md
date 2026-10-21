@@ -41,4 +41,6 @@ Press Esc on a computer to close windows and show this list in game.
 | Build button | Build mode |
 | Chat button | Chat and radio commands |
 
+Open your pack, select food, water, or medicine, and use it. You can walk while that finishes. Sprinting interrupts it.
+
 Sprinting drains stamina. Once it runs out, you have to rest before it comes back. Reloading a gun takes a moment, and you have to stand still while you do it.

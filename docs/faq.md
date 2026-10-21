@@ -12,6 +12,10 @@ Open [play.deadtiles.com](https://play.deadtiles.com) and sign in with Phantom o
 
 Yes. You do not buy the game to enter the county.
 
+## How do I get my health back?
+
+It does not come back on its own. Use rags, a bandage, or alcohol, take multivitamins, or stand beside a lit fireplace or furnace. Doctor Clark at Birchport Hospital fully heals you for 50 banknotes. See [Survival](survival.md).
+
 ## Where is it safe?
 
 Birchport's streets, and the inside of faction buildings, do not allow drawn weapons. Outside town, other players can kill you and take what you are carrying. See [Birchport](birchport.md).

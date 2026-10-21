@@ -22,7 +22,7 @@ The market also rents a safe deposit box for 1,000 notes. Gear in the box is not
 
 ## The player board
 
-The market board is where survivors list goods for each other. Buyers pay in notes. A listing stays up for 48 hours. If it does not sell, the goods wait at the desk for you to collect.
+The market board is where survivors list goods for each other. Buyers pay in notes. A listing stays up for 168 hours (seven days). If it does not sell, the goods wait at the desk for you to collect.
 
 The cut comes out of the sale, not when you post. Allied pays no cut.
 

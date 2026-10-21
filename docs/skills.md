@@ -26,4 +26,19 @@ Medicine, Reading.
 
 Bartering, Persuasion.
 
-Bartering improves the price Kevin gives you. Medicine stretches a course of antibiotics. The rest show up in the Journal as you use them.
+The Journal lists every level. What they change:
+
+* Fitness raises your stamina bar, up to about twice as long a sprint.
+* Immunity makes walker bites less likely to infect you, and slows the climb.
+* Recovery slows hunger, and makes the slow heals from a fire or multivitamins stronger.
+* Medicine makes rags, bandages, and alcohol heal more, and stretches a course of antibiotics.
+* Stealth makes searching and lockpicking quieter, and walkers notice you from less far away.
+* Scavenging makes searching faster.
+* Lockpicking makes a pick faster, and the kit lasts longer.
+* Cooking makes food fill you more.
+* Accuracy tightens your shots.
+* Melee hits harder.
+* Construction builds faster, and you get more of the materials back when you take a piece down.
+* Bartering improves the price Kevin gives you.
+* Persuasion makes jobs pay more notes and more standing.
+* Reading makes a magazine train you more, and you finish it faster.
