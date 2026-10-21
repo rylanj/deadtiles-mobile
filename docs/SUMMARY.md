@@ -20,6 +20,7 @@
 * [Work](the-county/work.md)
 * [Skills](the-county/skills.md)
 * [Building](the-county/building.md)
+* [Crafting](the-county/crafting.md)
 * [Radio](the-county/radio.md)
 
 ## Money

@@ -6,7 +6,7 @@ Most structures cannot be built inside Birchport. A fireplace is the exception. 
 
 A small storage box holds 8 slots. A large one holds 24. Gear in a box is not on your body when you die. The market also rents a safe deposit box. See [Trade](trade.md).
 
-Cloth and bandages are made at a workbench you find, not one you build. Metal recipes need a lit furnace.
+Cloth, wood, and guns are made at a workbench you find. Metal needs a lit furnace. The recipes are in [Crafting](crafting.md).
 
 Other survivors lock their buildings with a code. When you build your own, you can set a code too. A locked door stays locked until someone has the code or picks it. See [Combat](combat.md) for what a lockpick costs you in time and noise.
 
