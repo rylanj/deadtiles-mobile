@@ -41,7 +41,13 @@ import {
   type StorySpeechLine,
 } from "@zombie/shared";
 import { createDialogCloseButton } from "./dialogCloseBtn";
-import { appendItemIcon, fillSpeechButton, markQuestKeepsake, markSpeechQuest } from "./itemIcons";
+import {
+  appendItemIcon,
+  fillSpeechButton,
+  markQuestKeepsake,
+  markSpeechQuest,
+  markSpeechReady,
+} from "./itemIcons";
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
@@ -128,6 +134,8 @@ export class AshenTraderDialogUI {
   private buybackSigning = false;
   private buybackAmountDraft = "";
   private buybackWaitTimer: number | null = null;
+  /** Notes waiting at Kevin before the desk payload arrives. */
+  private buybackReadyHint = 0;
 
   private overlay: HTMLElement;
   private playerAvatarEl: HTMLImageElement;
@@ -279,6 +287,7 @@ export class AshenTraderDialogUI {
     questsJson?: string;
     extraPockets?: number;
     safeDepositRented?: boolean;
+    buybackReadyNotes?: number;
   }) {
     this.npcId = opts.npcId;
     this.npcKind = opts.npcKind;
@@ -297,6 +306,7 @@ export class AshenTraderDialogUI {
     this.questsJson = opts.questsJson ?? "";
     this.extraPockets = opts.extraPockets ?? 0;
     this.safeDepositRented = !!opts.safeDepositRented;
+    this.buybackReadyHint = Math.max(0, Math.floor(opts.buybackReadyNotes ?? 0));
     this.expandedQuestId = null;
     this.denyQuestId = "";
     this.denyReason = "";
@@ -323,9 +333,11 @@ export class AshenTraderDialogUI {
     document.body.classList.add("ashen-dialog-open");
     this.render();
     resetDialogScroll(this.overlay);
+    if (isKevin && opts.npcId) this.handlers.onRequestBuyback(opts.npcId);
   }
 
   close() {
+    this.sheet.cancelByeClose();
     this.visible = false;
     this.overlay.hidden = true;
     this.overlay.classList.remove("talk-sheet-mode");
@@ -348,6 +360,7 @@ export class AshenTraderDialogUI {
     this.buybackBusy = false;
     this.buybackSigning = false;
     this.buybackAmountDraft = "";
+    this.buybackReadyHint = 0;
     this.clearBuybackWait();
   }
 
@@ -397,10 +410,13 @@ export class AshenTraderDialogUI {
     result?: { ok: boolean; reason: string },
   ) {
     if (!this.visible || !this.isMarketTrader()) return;
+    const wasReady = this.buybackCollectNotes();
     this.buybackDesk = payload;
     if (payload.inventoryJson) this.inventoryJson = payload.inventoryJson;
     if (this.buybackSigning) {
-      if (this.activeLineId === "buyback") this.render();
+      if (this.activeLineId === "buyback" || wasReady !== this.buybackCollectNotes()) {
+        this.render();
+      }
       return;
     }
     this.buybackBusy = false;
@@ -412,7 +428,9 @@ export class AshenTraderDialogUI {
     ) {
       this.buybackNotice = "";
     }
-    if (this.activeLineId === "buyback") this.render();
+    if (this.activeLineId === "buyback" || wasReady !== this.buybackCollectNotes()) {
+      this.render();
+    }
   }
 
   /** The wallet accepted this hold, so the desk should stop offering cancel. */
@@ -565,12 +583,22 @@ export class AshenTraderDialogUI {
                 : line.id === "jobs"
                   ? "journal"
                   : undefined;
+      const collectReady =
+        line.action === "buyback" && this.isMarketTrader() && this.buybackCollectNotes() > 0;
       const speech =
-        line.action === "deposit" && this.safeDepositRented && line.playerRented
-          ? line.playerRented
-          : line.player;
+        collectReady && line.playerCollect
+          ? line.playerCollect
+          : line.action === "deposit" && this.safeDepositRented && line.playerRented
+            ? line.playerRented
+            : line.player;
       fillSpeechButton(btn, speech, iconId);
+      if (collectReady) {
+        btn.classList.add("ashen-dialog-speech-btn--ready");
+        markSpeechReady(btn);
+      }
+      btn.dataset.lineId = line.id;
       btn.addEventListener("click", () => {
+        this.sheet.cancelByeClose();
         this.phoneNav.resetForLine();
         this.activeLineId = line.id;
         if (line.action === "wire" && this.isMarketTrader()) {
@@ -580,8 +608,7 @@ export class AshenTraderDialogUI {
           this.clearWireWait();
         }
         if (line.action === "buyback" && this.isMarketTrader() && !this.buybackSigning) {
-          this.buybackDesk = null;
-          this.buybackNotice = "Checking the drawer.";
+          if (!this.buybackDesk) this.buybackNotice = "Checking the drawer.";
           this.buybackBusy = false;
           this.clearBuybackWait();
         }
@@ -613,6 +640,12 @@ export class AshenTraderDialogUI {
         if (line.action === "buyback" && this.isMarketTrader() && this.npcId) {
           this.handlers.onRequestBuyback(this.npcId);
         }
+        if (line.id === "bye") {
+          this.sheet.scheduleByeClose(
+            () => this.handlers.onClose(),
+            this.responseEl.textContent ?? "",
+          );
+        }
       });
       this.speechListEl.appendChild(btn);
     }
@@ -626,8 +659,10 @@ export class AshenTraderDialogUI {
         btn.classList.add("ashen-dialog-speech-btn--active");
       }
       fillSpeechButton(btn, line.player);
+      btn.dataset.lineId = line.id;
       markSpeechQuest(btn);
       btn.addEventListener("click", () => {
+        this.sheet.cancelByeClose();
         this.phoneNav.resetForLine();
         this.activeLineId = line.id;
         this.scriptedLineId = line.id;
@@ -661,10 +696,14 @@ export class AshenTraderDialogUI {
         ? active.npcGuard
         : this.isMarketTrader() && active.npcMarket
           ? active.id === "buyback" &&
-            ashenStanding(this.ashenReputation) === "allied" &&
-            active.npcMarketAllied
-            ? active.npcMarketAllied
-            : active.npcMarket
+            this.buybackCollectNotes() > 0 &&
+            active.npcMarketCollect
+            ? active.npcMarketCollect
+            : active.id === "buyback" &&
+                ashenStanding(this.ashenReputation) === "allied" &&
+                active.npcMarketAllied
+              ? active.npcMarketAllied
+              : active.npcMarket
           : active.npcMan;
     const reply = document.createElement("div");
     reply.className = "red-dialog-response-text";
@@ -767,6 +806,10 @@ export class AshenTraderDialogUI {
         {
           label: "You can still wire today",
           value: Math.min(desk.personalLeft, desk.coastLeft).toLocaleString("en-US"),
+        },
+        {
+          label: "Daily limit left today",
+          value: `${desk.coastLeft.toLocaleString("en-US")} of ${desk.coastCap.toLocaleString("en-US")}`,
         },
         { label: "Smallest wire", value: floor.toLocaleString("en-US") },
       ]),
@@ -1177,6 +1220,15 @@ export class AshenTraderDialogUI {
     const notes = Number(this.buybackAmountDraft);
     if (!Number.isSafeInteger(notes) || notes < 1) return null;
     return notes;
+  }
+
+  private buybackCollectNotes(): number {
+    if (this.buybackDesk) {
+      return this.buybackDesk.claims
+        .filter((claim) => claim.status === "ready")
+        .reduce((sum, claim) => sum + claim.notes, 0);
+    }
+    return this.buybackReadyHint;
   }
 
   private buybackBlockReason(desk: BuybackDeskPayload): string | null {

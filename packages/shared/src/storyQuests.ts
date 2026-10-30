@@ -72,6 +72,37 @@ export const STORY_OBJECTIVE_HEAR_COLEMAN = "hear_coleman";
 export const STORY_OBJECTIVE_GET_CONFESSION = "get_confession";
 export const STORY_OBJECTIVE_DELIVER_CONFESSION = "deliver_confession";
 
+export type StoryStepPlace = "clark" | "davis" | "kevin" | "redOrder";
+
+/**
+ * NPC a story step sends the player to, when that step is not the marked building.
+ * Null means the step is at the building stored on the quest.
+ */
+export function storyStepPlace(objectiveId: string): StoryStepPlace | null {
+  switch (objectiveId) {
+    case STORY_OBJECTIVE_TALK_CLARK:
+    case STORY_OBJECTIVE_ASK_CLARK:
+      return "clark";
+    case STORY_OBJECTIVE_TALK_DAVIS:
+    case STORY_OBJECTIVE_ASK_DAVIS:
+    case STORY_OBJECTIVE_DELIVER_CONFESSION:
+      return "davis";
+    case STORY_OBJECTIVE_ASK_KEVIN:
+    case STORY_OBJECTIVE_GET_COUNT:
+    case STORY_OBJECTIVE_GET_KIT:
+      return "kevin";
+    case STORY_OBJECTIVE_SHOW_TAG:
+      return "redOrder";
+    default:
+      return null;
+  }
+}
+
+/** Who takes a story quest once its field steps are done. */
+export function storyReportPlace(questId: string): "clark" | "davis" {
+  return questId === QUEST_ID_FOUND_ON_THE_ROAD ? "clark" : "davis";
+}
+
 /** Kevin's full count takes three in-game hours on the world clock. */
 export const STORY_COUNT_WAIT_MS = Math.round((DAY_LENGTH_MS / 24) * 3);
 

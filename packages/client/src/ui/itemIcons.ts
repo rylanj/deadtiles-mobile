@@ -64,6 +64,7 @@ const ITEM_ICON_PATHS: Record<string, string> = {
   scrap_metal: "/assets/UI/UI_scrap_metal.png",
   wood: "/assets/UI/UI_wood.png",
   banknote: "/assets/UI/UI_banknote.png",
+  gift_box: "/assets/UI/UI_gift_box_1.png",
   price_tag: "/assets/UI/UI_price_tag.png",
   wallet: "/assets/UI/UI_wallet.png",
   safe: "/assets/UI/UI_safe.png",
@@ -199,6 +200,20 @@ export function fillSpeechButton(
   text.className = "red-dialog-speech-label";
   text.textContent = label;
   button.append(text);
+}
+
+/** Green tick on a speech option that has something ready to collect. */
+export function markSpeechReady(button: HTMLButtonElement): void {
+  const mark = document.createElement("span");
+  mark.className = "red-dialog-speech-ready";
+  mark.setAttribute("aria-hidden", "true");
+  const tick = document.createElement("span");
+  tick.className = "red-dialog-speech-ready-tick";
+  tick.textContent = "✓";
+  mark.appendChild(tick);
+  const label = button.querySelector(".red-dialog-speech-label");
+  if (label) button.insertBefore(mark, label);
+  else button.prepend(mark);
 }
 
 /** Gold map diamond on a speech option that exists for a quest. */

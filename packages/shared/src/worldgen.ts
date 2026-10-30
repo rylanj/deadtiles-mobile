@@ -1790,8 +1790,21 @@ function settlementLabelPoint(
 }
 
 /**
- * Cities and arterial towns whose footprints intersect a tile rectangle —
- * used by the M map to draw place-name labels.
+ * Largest city grid past its cell edge (largest tier, jitter, landmark pad).
+ * Map labels use this instead of building the street grid.
+ */
+const MAP_CITY_LABEL_OVERFLOW = 64;
+
+/**
+ * Roadside towns are named only inside this many tiles of view.
+ * A county-wide map would otherwise build every town on the open frame.
+ */
+const MAP_TOWN_LABEL_MAX_SPAN = 800;
+
+/**
+ * Cities and arterial towns whose footprints intersect a tile rectangle.
+ * Used by the M map to draw place-name labels.
+ * City names use the owning cell, so opening the map does not build street grids.
  */
 export function settlementsInTileRegion(
   minTileX: number,
@@ -1807,53 +1820,83 @@ export function settlementsInTileRegion(
     minY: minTileY,
     maxY: maxTileY,
   };
-  // City street grids can overflow their 96×96 cell — search neighbours too.
+  // City street grids can overflow their 96×96 cell, so search neighbours too.
   const cellPad = SETTLEMENT_CELL;
-
-  for (const { cx, cy } of settlementCellsInRegion(
+  const labelCells = settlementCellsInRegion(
     minTileX - cellPad,
     maxTileX + cellPad,
     minTileY - cellPad,
     maxTileY + cellPad,
-  )) {
-    if (settlementType(cx, cy) === "city") {
-      const bounds = cityLandmarkBounds(cx, cy);
-      const layout = getCachedLayout(cx, cy);
-      const preferredX = layout?.ccx ?? (bounds.minX + bounds.maxX) / 2;
-      const preferredY = layout?.ccy ?? (bounds.minY + bounds.maxY) / 2;
-      const point = settlementLabelPoint(preferredX, preferredY, bounds, view);
-      if (point) {
-        const id = `city:${cx},${cy}`;
-        if (!seen.has(id)) {
-          seen.add(id);
-          labels.push({
-            id,
-            name: getCityName(cx, cy),
-            kind: "city",
-            x: point.x,
-            y: point.y,
-          });
+  );
+
+  for (const { cx, cy } of labelCells) {
+    if (settlementType(cx, cy) !== "city") continue;
+    const bounds = {
+      minX: cx - MAP_CITY_LABEL_OVERFLOW,
+      maxX: cx + SETTLEMENT_CELL - 1 + MAP_CITY_LABEL_OVERFLOW,
+      minY: cy - MAP_CITY_LABEL_OVERFLOW,
+      maxY: cy + SETTLEMENT_CELL - 1 + MAP_CITY_LABEL_OVERFLOW,
+    };
+    const point = settlementLabelPoint(
+      cx + (SETTLEMENT_CELL - 1) / 2,
+      cy + (SETTLEMENT_CELL - 1) / 2,
+      bounds,
+      view,
+    );
+    if (!point) continue;
+    const id = `city:${cx},${cy}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    labels.push({
+      id,
+      name: getCityName(cx, cy),
+      kind: "city",
+      x: point.x,
+      y: point.y,
+    });
+  }
+
+  // Same city neighbourhood arterialTownsIntersectingCell used to scan,
+  // deduped so each owner generates its towns a single time.
+  const viewSpan = Math.max(maxTileX - minTileX, maxTileY - minTileY);
+  if (viewSpan <= MAP_TOWN_LABEL_MAX_SPAN) {
+    const townOwners = new Set<string>();
+    for (const { cx, cy } of labelCells) {
+      const minCX = Math.floor((cx - URBAN_REACH) / SETTLEMENT_CELL) * SETTLEMENT_CELL;
+      const maxCX =
+        Math.floor((cx + SETTLEMENT_CELL - 1 + URBAN_REACH) / SETTLEMENT_CELL) * SETTLEMENT_CELL;
+      const minCY = Math.floor((cy - URBAN_REACH) / SETTLEMENT_CELL) * SETTLEMENT_CELL;
+      const maxCY =
+        Math.floor((cy + SETTLEMENT_CELL - 1 + URBAN_REACH) / SETTLEMENT_CELL) * SETTLEMENT_CELL;
+      for (let ucx = minCX; ucx <= maxCX; ucx += SETTLEMENT_CELL) {
+        for (let ucy = minCY; ucy <= maxCY; ucy += SETTLEMENT_CELL) {
+          if (settlementType(ucx, ucy) !== "city") continue;
+          townOwners.add(`${ucx}:${ucy}`);
         }
       }
     }
-
-    for (const town of arterialTownsIntersectingCell(cx, cy)) {
-      if (seen.has(town.townKey)) continue;
-      const point = settlementLabelPoint(
-        (town.minX + town.maxX) / 2,
-        (town.minY + town.maxY) / 2,
-        town,
-        view,
-      );
-      if (!point) continue;
-      seen.add(town.townKey);
-      labels.push({
-        id: town.townKey,
-        name: getArterialTownName(town.townKey),
-        kind: "town",
-        x: point.x,
-        y: point.y,
-      });
+    for (const key of townOwners) {
+      const colon = key.indexOf(":");
+      const cx = parseInt(key.slice(0, colon), 10);
+      const cy = parseInt(key.slice(colon + 1), 10);
+      for (const town of arterialTownsOwnedByCity(cx, cy)) {
+        if (seen.has(town.townKey)) continue;
+        const point = settlementLabelPoint(
+          (town.minX + town.maxX) / 2,
+          (town.minY + town.maxY) / 2,
+          town,
+          view,
+        );
+        if (!point) continue;
+        seen.add(town.townKey);
+        labels.push({
+          id: town.townKey,
+          name: getArterialTownName(town.townKey),
+          kind: "town",
+          x: point.x,
+          y: point.y,
+        });
+      }
     }
   }
 
@@ -5549,9 +5592,15 @@ export function stepBirchportBootChart(budgetMs: number): boolean {
   return birchportBootChartDone;
 }
 
+/** Chart buffer. Allocates on first use and does not paint towns. */
+export function birchportMapChartBuffer(): BirchportMapChart {
+  return ensureBirchportMapChart();
+}
+
 /**
  * Raster of Birchport and the land around it. The full buffer exists immediately.
  * The spawn-area towns are painted here. {@link stepBirchportMapChart} fills the rest.
+ * The open map must not call this: finishing the spawn area in one turn freezes phones.
  */
 export function prepareBirchportMapChart(): BirchportMapChart {
   const chart = ensureBirchportMapChart();
@@ -5570,11 +5619,16 @@ export function getBirchportMapChart(): BirchportMapChart {
 /**
  * Paint more of the chart. Cells near `focusX`/`focusY` jump the queue when
  * the player or the map view moves. Returns true when the chart is finished.
+ *
+ * `retainNear` is the player, not the map view. After cells are painted, worldgen
+ * caches farther than `dist` tiles from the player are dropped. The chart bytes
+ * stay. Passing the view centre would evict the ground the player is standing on.
  */
 export function stepBirchportMapChart(
   budgetMs: number,
   focusX?: number,
   focusY?: number,
+  retainNear?: { x: number; y: number; dist: number },
 ): boolean {
   ensureBirchportMapChart();
   if (
@@ -5582,7 +5636,9 @@ export function stepBirchportMapChart(
     typeof focusY === "number" &&
     Number.isFinite(focusX) &&
     Number.isFinite(focusY) &&
-    (Math.abs(focusX - birchportMapChartFocusX) > 64 ||
+    (!Number.isFinite(birchportMapChartFocusX) ||
+      !Number.isFinite(birchportMapChartFocusY) ||
+      Math.abs(focusX - birchportMapChartFocusX) > 64 ||
       Math.abs(focusY - birchportMapChartFocusY) > 64)
   ) {
     birchportMapChartFocusX = focusX;
@@ -5611,8 +5667,21 @@ export function stepBirchportMapChart(
     birchportMapChartCursor++;
     painted++;
   }
-  if (painted > 0) birchportMapChartRev++;
+  if (painted > 0) {
+    birchportMapChartRev++;
+    releaseChartCachesFarFrom(retainNear);
+  }
   return birchportMapChartCursor >= birchportMapChartQueue.length;
+}
+
+/** Drop worldgen the chart warmed outside the player's keep distance. */
+function releaseChartCachesFarFrom(
+  retainNear: { x: number; y: number; dist: number } | undefined,
+): void {
+  if (!retainNear) return;
+  const { x, y, dist } = retainNear;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !(dist > 0)) return;
+  evictDistantCells(x, y, dist);
 }
 
 function paintBirchportMapChartCell(cx: number, cy: number): void {

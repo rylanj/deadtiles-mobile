@@ -7,7 +7,7 @@ export const TUTORIAL_CHAPTERS = [
   { id: "wake", title: "Chapter 1: Wake Up" },
   { id: "birchport", title: "Chapter 2: Birchport" },
   { id: "patrol", title: "Chapter 3: The Patrol" },
-  { id: "own", title: "Chapter 4: On Your Own" },
+  { id: "own", title: "Chapter 4: The Road" },
 ] as const;
 
 export type TutorialChapterId = (typeof TUTORIAL_CHAPTERS)[number]["id"];
@@ -22,6 +22,8 @@ export const ONBOARDING_STEP_IDS = [
   "map",
   "leave_hospital",
   "sprint",
+  "reach_gate",
+  "reach_mess",
   "talk_davis",
   "turn_in_aye",
   "accept_two_behind",
@@ -47,10 +49,7 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     id: "intro",
     chapter: "wake",
     title: "Welcome to Deadtiles",
-    body:
-      "Ashen County fell to the dead. A few towns still hold out, and everyone else scavenges what is left. " +
-      "You share this world with other players. Stay fed, watered and warm. When you die, everything you carried stays on your body. " +
-      "The factions you meet remember how you treat them.",
+    body: "Doctor Clark is in this ward. Walk up to him and ask what happened to you.",
     card: { button: "Begin" },
   },
   move: {
@@ -64,22 +63,18 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     id: "talk_clark",
     chapter: "wake",
     title: "Talk to Doctor Clark",
-    body:
-      "Doctor Clark patched you up. Walk up to him and press E to talk, then ask what happened to you. " +
-      "This ward belongs to the National Guard. Weapons can't be drawn here, and searching their furniture or their dead counts as theft.",
-    mobileBody:
-      "Doctor Clark patched you up. Tap him to talk, then ask what happened to you. " +
-      "This ward belongs to the National Guard. Weapons can't be drawn here, and searching their furniture or their dead counts as theft.",
+    body: "Doctor Clark is marked. Walk up to him and press E, then ask what happened to you.",
+    mobileBody: "Doctor Clark is marked. Tap him, then ask what happened to you.",
   },
   eat_drink: {
     id: "eat_drink",
     chapter: "wake",
     title: "Eat and drink",
     body:
-      "You woke up hungry and thirsty. Press Tab to open your inventory and use the tuna or the water. " +
+      "Canned tuna and water are in your pack. Press Tab and use one. " +
       "If hunger or thirst reaches zero, you start losing health.",
     mobileBody:
-      "You woke up hungry and thirsty. Tap the backpack button to open your inventory and use the tuna or the water. " +
+      "Canned tuna and water are in your pack. Tap the backpack button and use one. " +
       "If hunger or thirst reaches zero, you start losing health.",
   },
   map: {
@@ -95,31 +90,42 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
     id: "leave_hospital",
     chapter: "wake",
     title: "Leave the ward",
-    body: "Head for the hospital exit when you're ready.",
+    body: "The ward door is marked. Head outside when you're ready.",
   },
   sprint: {
     id: "sprint",
     chapter: "birchport",
     title: "Sprint",
     body:
-      "Hold Shift while moving, or double-click a destination, to sprint. Sprinting drains stamina. Once it runs out, you have to rest before it comes back.",
+      "The barracks gate is marked. Hold Shift while moving, or double-click a destination, to sprint there. Sprinting drains stamina. Once it runs out, you have to rest before it comes back.",
     mobileBody:
-      "Push the stick all the way to its edge to sprint. Sprinting drains stamina. Once it runs out, you have to rest before it comes back.",
+      "The barracks gate is marked. Push the stick all the way to its edge to sprint there. Sprinting drains stamina. Once it runs out, you have to rest before it comes back.",
+  },
+  reach_gate: {
+    id: "reach_gate",
+    chapter: "birchport",
+    title: "The barracks gate",
+    body: "Go through the barracks gate. The mess hall is in the yard beyond it.",
+  },
+  reach_mess: {
+    id: "reach_mess",
+    chapter: "birchport",
+    title: "The mess hall",
+    body: "Cross the yard to the mess hall. Captain Davis is inside.",
   },
   talk_davis: {
     id: "talk_davis",
     chapter: "birchport",
     title: "Report to Captain Davis",
-    body:
-      "Birchport is held by the National Guard. Weapons can't be drawn on its streets or inside faction buildings, so town is safe ground. " +
-      "Go through the barracks gate (marked on your map) and find Captain Davis in the mess hall.",
+    body: "Captain Davis is marked. Walk up to him and press E to talk.",
+    mobileBody: "Captain Davis is marked. Tap him to talk.",
   },
   accept_aye_captain: {
     id: "accept_aye_captain",
     chapter: "wake",
-    title: "Accept Aye, aye, Captain",
+    title: "Aye, aye, Captain",
     body:
-      "Accept Aye, aye, Captain from Doctor Clark. He is sending you to Captain Davis in the barracks mess hall.",
+      "Doctor Clark is sending you to Captain Davis in the barracks mess hall. The job is already in your Journal.",
   },
   turn_in_aye: {
     id: "turn_in_aye",
@@ -131,9 +137,9 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
   accept_two_behind: {
     id: "accept_two_behind",
     chapter: "patrol",
-    title: "Accept Two Behind It",
+    title: "Two Behind It",
     body:
-      "Accept Two Behind It. Read it before you take it. That is how Davis says you earn the National Guard's trust.",
+      "Davis has you looking for the patrol that saved you. Sergeant Coleman's house is next. The job is in your Journal.",
   },
   search_coleman: {
     id: "search_coleman",
@@ -147,11 +153,9 @@ export const ONBOARDING_STEPS: Record<OnboardingStepId, OnboardingStepDef> = {
   finish: {
     id: "finish",
     chapter: "own",
-    title: "You're on your own",
+    title: "A Deal with the Devil",
     body:
-      "That's the basics. Scavenge, stay fed and warm, follow the story Davis offers, and build somewhere safe to keep your loot. " +
-      "Once this tutorial ends, Davis and Clark post more work on their boards. The Field Guide in your Journal covers all of this in more detail.",
-    card: { button: "Finish" },
+      "Davis took this job on for you. The motel in East Forestford is marked on your map. Follow it from your Journal.",
   },
 };
 
@@ -176,6 +180,7 @@ export const TUTORIAL_TIP_IDS = [
   "night",
   "stamina_out",
   "weapon_blocked",
+  "town_quiet",
   "standing_hostile",
   "first_death",
   "zombie_near",
@@ -264,6 +269,11 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
     title: "No weapons here",
     body: "Weapons can't be drawn on Birchport's streets or inside faction buildings. Leave town to fight.",
   },
+  town_quiet: {
+    id: "town_quiet",
+    title: "Town is quiet",
+    body: "Walkers stay outside the fence. Birchport's streets are quiet, and weapons stay holstered in town.",
+  },
   standing_hostile: {
     id: "standing_hostile",
     title: "Hostile standing",
@@ -272,7 +282,7 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
   first_death: {
     id: "first_death",
     title: "Your body stays behind",
-    body: "Everything you carried is on your corpse where you fell. It lasts one hour, so go back for it if it's safe. Any player can loot it.",
+    body: "Everything you carried is on your corpse where you fell. It lasts one hour, so go back for it if it's safe. Any player can loot it. Quest papers and job items stay with you when you come back.",
   },
   zombie_near: {
     id: "zombie_near",
@@ -292,7 +302,7 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
   theft_warning: {
     id: "theft_warning",
     title: "Stop stealing",
-    body: "They warned you. Finish searching their supplies or their dead and they open fire. Stop searching and they stand down. The National Guard turns the whole Birchport garrison. The Red Order turns the squad in that building.",
+    body: "They warned you. Finish searching their supplies or their dead and they open fire. Stop searching and they stand down. Your standing does not change this time. Steal again and your reputation drops. The National Guard turns the whole Birchport garrison. The Red Order turns the squad in that building.",
   },
   weapon_broke: {
     id: "weapon_broke",
@@ -303,7 +313,7 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
     id: "melee",
     title: "Melee",
     body:
-      "Click a target in range to hit them. Or hold CTRL to ready up, then click to swing in any direction.",
+      "Click a target in range to hit them. Or hold right-click to ready up, then click to swing in any direction.",
     mobileBody:
       "Tap a target in range to hit them. Or tap the aim button to ready up, then tap to swing in any direction.",
   },
@@ -379,7 +389,7 @@ export const CONTROLS_DESKTOP: readonly ControlsLegendRow[] = [
   { key: "1 / 2", action: "Equip hotbar weapon" },
   { key: "0", action: "Put weapon away" },
   { key: "Click target", action: "Melee hit in range" },
-  { key: "CTRL + Click", action: "Aim and attack" },
+  { key: "Right-click + Click", action: "Aim and attack" },
   { key: "R", action: "Reload" },
   { key: "M", action: "Map" },
   { key: "J", action: "Journal and Field Guide" },
@@ -438,7 +448,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
     title: "Combat and noise",
     paragraphs: [
       "Equip a weapon from your hotbar, aim, and attack toward the cursor. Shots stop at the first body or solid cover in the way.",
-      "With a melee weapon, click a target in range to hit them (tap on a phone). Hold CTRL, or tap the aim button, to ready up, then click or tap to swing in any direction.",
+      "With a melee weapon, click a target in range to hit them (tap on a phone). Hold right-click, or tap the aim button, to ready up, then click or tap to swing in any direction.",
       "Gunshots are loud. Walkers far away hear them and come to look. Melee is quiet, but melee weapons wear out with use.",
       "Walkers move faster at night. Never fight a group in the open if you can use a doorway.",
     ],
@@ -459,7 +469,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
       "National Guard: posts across the country. Birchport is their hub in Ashen County, with a few smaller outposts besides. Captain Davis at the barracks and Doctor Clark at the hospital post jobs.",
       "Ashen Traders: run caravans and the Birchport market. They buy, sell, and keep medicine and ammo moving.",
       "The Red Order: hold city blocks and want the Ashen gone. They run Birchport's supermarket and post their own work. Their furniture and their dead are protected. If they see you finish a search, that squad turns hostile.",
-      "Standing runs Exiled, Hostile, Wary, Neutral, Warm, Friendly, Allied. Everyone starts Wary. Jobs raise it. Attacking a faction or stealing from it drops it a full level. Hostile groups refuse to talk and may shoot. Hostile standing climbs back toward Wary over real time, online or offline. Exiled is permanent.",
+      "Standing runs Exiled, Hostile, Wary, Neutral, Warm, Friendly, Allied. Everyone starts Wary. Jobs raise it. Attacking a faction or stealing from it drops it a full level. The first time guards tell you to stop stealing, your standing stays where it was. Steal again and your reputation drops. Hostile groups refuse to talk and may shoot. Hostile standing climbs back toward Wary over real time, online or offline. Exiled is permanent.",
       "For now you can work for both the Ashen and the Red Order. Later jobs will force you to pick a side.",
     ],
   },
@@ -476,7 +486,7 @@ export const FIELD_GUIDE_PAGES: readonly FieldGuidePage[] = [
     id: "death",
     title: "Death and loot",
     paragraphs: [
-      "When you die, everything you carried stays on your corpse for one hour. Anyone can loot it, including other players.",
+      "When you die, everything you carried stays on your corpse for one hour. Anyone can loot it, including other players. Quest papers and job items stay with you.",
       "You respawn with a few basic supplies. Your skills and faction standing carry over.",
     ],
   },
@@ -524,10 +534,20 @@ export type TutorialFlagsState = {
   tipsOff?: boolean;
   /** Tracker collapsed to its small pill. */
   minimized?: boolean;
+  /** Replay from the Journal: skip is allowed, and one-shot steps can be passed. */
+  replay?: boolean;
 };
 
 export function createEmptyTutorialFlags(): TutorialFlagsState {
-  return { done: false, seen: false, steps: {}, tips: {}, tipsOff: false, minimized: false };
+  return {
+    done: false,
+    seen: false,
+    steps: {},
+    tips: {},
+    tipsOff: false,
+    minimized: false,
+    replay: false,
+  };
 }
 
 function readBoolMap(raw: unknown, allowed: readonly string[]): Record<string, boolean> {
@@ -558,6 +578,7 @@ export function parseTutorialFlagsJson(
       tips: readBoolMap(obj.tips, TUTORIAL_TIP_IDS),
       tipsOff: obj.tipsOff === true,
       minimized: obj.minimized === true,
+      replay: obj.replay === true,
     };
   } catch {
     return createEmptyTutorialFlags();
@@ -574,6 +595,7 @@ export function serializeTutorialFlagsJson(
     tips: state.tips ?? {},
     tipsOff: state.tipsOff === true,
     minimized: state.minimized === true,
+    replay: state.replay === true,
   });
 }
 

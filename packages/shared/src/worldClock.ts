@@ -79,6 +79,12 @@ export const CLOUDY_BRIGHTNESS_KEEP = 0.8;
 /** Overcast-day campfire puddle vs full night (streetlamps stay off). */
 export const CLOUDY_DAY_FIRE_STRENGTH = 0.38;
 
+/**
+ * Deep-night multiply, vignette, and indoor color crush.
+ * 0.8 draws those overlays at 80% strength so night is about 20% lighter.
+ */
+const NIGHT_OVERLAY_SCALE = 0.8;
+
 /** Normalize world time into [0, dayLengthMs). */
 export function worldTimeOfDayMs(
   worldTimeMs: number,
@@ -284,6 +290,7 @@ export function formatInGameClock(worldTimeMs: number): string {
  * Visual parameters for the client lighting pass.
  * Interiors pass `indoor` to pin the camera void to night. At night the
  * indoor overlay is stronger than outdoors so rooms read darker than the street.
+ * Both overlays draw at NIGHT_OVERLAY_SCALE so deep night stays readable.
  * `alwaysLit` skips night overlay (powered interiors such as hospitals).
  * `underground` forces the night-indoor look even while the sun is up.
  * `firelitAmount` (0..1) lifts indoor night lighting by up to 20% when a
@@ -337,12 +344,13 @@ export function dayNightLook(
   const firelit =
     indoor && !alwaysLit ? clamp01(opts?.firelitAmount ?? 0) : 0;
   const fireLift = 1 - firelit * 0.2;
+  const nightShade = darkness * NIGHT_OVERLAY_SCALE;
   const ambient = indoor
-    ? lerpRgb(outdoorAmbient, 0x05080e, darkness * 0.55 * fireLift)
+    ? lerpRgb(outdoorAmbient, 0x05080e, nightShade * 0.55 * fireLift)
     : outdoorAmbient;
-  const outdoorAlpha = darkness * 0.66;
-  const indoorAlpha = darkness * 0.88 * fireLift;
-  const vignette = indoor ? darkness * 0.22 * fireLift : darkness * 0.72;
+  const outdoorAlpha = nightShade * 0.66;
+  const indoorAlpha = nightShade * 0.88 * fireLift;
+  const vignette = indoor ? nightShade * 0.22 * fireLift : nightShade * 0.72;
   return {
     phase,
     sunlight,

@@ -386,12 +386,12 @@ export type InspectGraveMessage = {
   y: number;
 };
 
-/** Hold / release firearm aim stance (CTRL). */
+/** Hold / release firearm aim stance (desktop right-click). */
 export type AimMessage = {
   aiming: boolean;
 };
 
-/** 8-way facing while CTRL-aiming (mouse look). */
+/** 8-way facing while aiming (mouse look). */
 export type AimLookMessage = {
   facing: number;
 };
@@ -518,6 +518,7 @@ export type ClientMessage =
   | { type: "marketClose" }
   | { type: "safeDepositOpen"; payload: MarketOpenMessage }
   | { type: "safeDepositPay"; payload: MarketOpenMessage }
+  | { type: "safeDepositUpgrade" }
   | { type: "safeDepositClose" }
   | { type: "dialogOpen"; payload: DialogOpenMessage }
   | { type: "dialogChoose"; payload: DialogChooseMessage }
@@ -578,6 +579,7 @@ const NO_PAYLOAD_TYPES = new Set([
   "tradeClose",
   "marketClose",
   "safeDepositClose",
+  "safeDepositUpgrade",
   "dialogClose",
   "craftClose",
   "fireplaceClose",
@@ -1187,6 +1189,10 @@ export type ServerMessage =
         ashenMilitiaReputation?: number;
         /** True when the NPC is indoors (militia hospital replies). */
         inInterior?: boolean;
+        /** Kevin only. True after the safe deposit fee is paid. */
+        safeDepositRented?: boolean;
+        /** Kevin only. Notes waiting on the desk after a Deadmark buy. */
+        buybackReadyNotes?: number;
         /**
          * Completions used in the rolling window per capped militia task id
          * (e.g. Doctor Clark snack jobs). JSON: Record<taskId, number>.
@@ -1204,7 +1210,7 @@ export type ServerMessage =
         rewards: { id: string; quantity: number; name: string }[];
         /** Replaces "You received:" when the turn-in is mostly a briefing. */
         header?: string;
-        /** Leave the dialog open so the next story quest can be accepted. */
+        /** Leave the dialog open so the next story quest can be read. */
         keepOpen?: boolean;
         /** Updated rolling-window counts for capped tasks. */
         taskCompletionsJson?: string;

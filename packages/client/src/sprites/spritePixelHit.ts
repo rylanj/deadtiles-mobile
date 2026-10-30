@@ -106,3 +106,19 @@ export function pickTopOpaqueImageAtWorld(
   }
   return best ? { x: best.x, y: best.y } : null;
 }
+
+/**
+ * True when this image is drawn in front of `depth` and an opaque texel
+ * covers the world point. Transparent padding does not count.
+ */
+export function spriteCoversWorldPointAboveDepth(
+  sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite,
+  worldX: number,
+  worldY: number,
+  depth: number,
+): boolean {
+  if (!sprite.visible || !sprite.active || sprite.alpha <= 0.05) return false;
+  if (sprite.depth <= depth) return false;
+  if (!sprite.getBounds().contains(worldX, worldY)) return false;
+  return spriteOpaqueAtWorldPoint(sprite, worldX, worldY);
+}

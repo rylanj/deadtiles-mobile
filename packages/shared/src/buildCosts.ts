@@ -142,6 +142,16 @@ export const STORAGE_BOX2_OBJECT_TYPE = "storagebox2";
 /** Slots in a Birchport market safe deposit box. */
 export const SAFE_DEPOSIT_SLOTS = 8;
 
+/** Extra slots added by each paid safe deposit upgrade. */
+export const SAFE_DEPOSIT_UPGRADE_SLOTS = 4;
+
+/** How many times a rented box can be expanded. */
+export const SAFE_DEPOSIT_MAX_UPGRADES = 3;
+
+/** 8 + 4 × 3. */
+export const SAFE_DEPOSIT_MAX_SLOTS =
+  SAFE_DEPOSIT_SLOTS + SAFE_DEPOSIT_UPGRADE_SLOTS * SAFE_DEPOSIT_MAX_UPGRADES;
+
 /** Object type sent with the safe deposit container UI. */
 export const SAFE_DEPOSIT_OBJECT_TYPE = "safedeposit";
 

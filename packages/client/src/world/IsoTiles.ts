@@ -36,7 +36,10 @@ import {
   type TreeInfo,
   type WorldBounds,
 } from "@zombie/shared";
-import { spriteOpaqueAtWorldPoint } from "../sprites/spritePixelHit";
+import {
+  spriteCoversWorldPointAboveDepth,
+  spriteOpaqueAtWorldPoint,
+} from "../sprites/spritePixelHit";
 import {
   CLIENT_RENDER_RADIUS,
   TILES_PER_SYNC,
@@ -118,7 +121,7 @@ import {
   entityRenderDepth,
   groundSortDepth,
   GROUND_LAYER_DEPTH,
-  tileIndicatorDepth,
+  lootHoverOutlineDepth,
   ENTITY_BUILDING_DEPTH_REACH,
   applyBuildingTreeDepth,
   applyBuildingStreetlightDepth,
@@ -148,6 +151,7 @@ export {
   interiorFurnitureDepthBias,
   interiorPartitionDepth,
   LOCAL_PLAYER_DEPTH_BIAS,
+  lootHoverOutlineDepth,
   overworldCorpseRenderDepth,
   overworldEntityRenderDepth,
   overworldPartitionDepth,
@@ -167,7 +171,40 @@ const STREETLIGHT_DISPLAY_HEIGHT = 208;
 /** Extra screen-Y so the base sits lower on the curb (positive = lower). */
 const STREETLIGHT_BOTTOM_PAD = Math.round(STREETLIGHT_DISPLAY_HEIGHT * 0.075);
 
-/** Orange diamond outline on an iso tile centre — used for search/loot highlights. */
+const LOOT_HOVER_FX_KEY = "lootHoverFx";
+/** Multiply fallback when WebGL FX is unavailable. Lime enough to shift orange wood. */
+const LOOT_HOVER_TINT = 0xb8ff6a;
+
+type LootHoverSprite = Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
+
+/**
+ * Hover on lootable sprites: keep the texture, lift brightness and push hue
+ * toward yellow-green so orange wood still reads as selected.
+ */
+export function applyLootHoverTint(sprite: LootHoverSprite | null | undefined) {
+  if (!sprite) return;
+  const fx = sprite.preFX;
+  if (!fx) {
+    sprite.setTint(LOOT_HOVER_TINT);
+    return;
+  }
+  if (sprite.getData(LOOT_HOVER_FX_KEY)) return;
+  fx.clear();
+  const matrix = fx.addColorMatrix();
+  matrix.brightness(1.28, false);
+  matrix.hue(24, true);
+  matrix.saturate(0.4, true);
+  sprite.setData(LOOT_HOVER_FX_KEY, true);
+}
+
+export function clearLootHoverTint(sprite: LootHoverSprite | null | undefined) {
+  if (!sprite) return;
+  sprite.clearTint();
+  if (!sprite.getData(LOOT_HOVER_FX_KEY)) return;
+  sprite.preFX?.clear();
+  sprite.setData(LOOT_HOVER_FX_KEY, false);
+}
+
 /** Stroke one iso tile diamond. Set `clearFirst` false to layer multiple tiles. */
 export function strokeIsoTileOutline(
   graphics: Phaser.GameObjects.Graphics,
@@ -1773,10 +1810,8 @@ export class WorldTileManager {
       return;
     }
 
-    // Same band as interior furniture hover — above floor, behind furniture /
-    // entities so the outline sits under backpacks and future overworld props.
     this.interactionHighlight.clearMask();
-    this.interactionHighlight.setDepth(tileIndicatorDepth(tx, ty));
+    this.interactionHighlight.setDepth(lootHoverOutlineDepth());
     strokeIsoTileOutline(this.interactionHighlight, tx, ty);
 
     // Dual masked layer unused for loot — full outline must stay readable.
@@ -1836,6 +1871,40 @@ export class WorldTileManager {
     if (bestDoor) return bestDoor;
     const cart = isoToCartesian(worldX, worldY);
     return getCellarAt(Math.floor(cart.x), Math.floor(cart.y));
+  }
+
+  /**
+   * Building, tree, or street prop drawn in front of `depth` with an opaque
+   * pixel at this world point.
+   */
+  opaqueCoverAboveDepth(
+    worldX: number,
+    worldY: number,
+    depth: number,
+  ): boolean {
+    for (const tracked of this.buildingObjects.values()) {
+      const display = tracked.cuboid.display;
+      if (!(display instanceof Phaser.GameObjects.Image)) continue;
+      if (spriteCoversWorldPointAboveDepth(display, worldX, worldY, depth)) {
+        return true;
+      }
+    }
+    const images = [
+      this.treeObjects,
+      this.streetlightObjects,
+      this.graveObjects,
+      this.cellarObjects,
+      this.fenceObjects,
+      this.borderWallObjects,
+    ];
+    for (const map of images) {
+      for (const img of map.values()) {
+        if (spriteCoversWorldPointAboveDepth(img, worldX, worldY, depth)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private streetChunkKey(x: number, y: number): string {
@@ -3567,6 +3636,21 @@ export class WorldTileManager {
   /** Minimap colors for tiles currently drawn in the overworld render square. */
   getMinimapKinds(): ReadonlyMap<string, MinimapTileKind> {
     return this.minimapKinds;
+  }
+
+  /**
+   * How far from the player worldgen caches are kept for this camera.
+   * Same distance used when the view moves and distant cells are dropped.
+   */
+  worldgenKeepDist(): number {
+    const view = this.view;
+    const half = Math.max(
+      Math.ceil((view.maxX - view.minX) / 2),
+      Math.ceil((view.maxY - view.minY) / 2),
+      1,
+    );
+    if (!Number.isFinite(half)) return cacheKeepBoundaryDist(1);
+    return cacheKeepBoundaryDist(half);
   }
 
   /** True when this global tile has been drawn (camera-culled sync). */

@@ -304,6 +304,7 @@ export class RedOrderDialogUI {
   }
 
   close() {
+    this.sheet.cancelByeClose();
     this.visible = false;
     this.overlay.hidden = true;
     this.overlay.classList.remove("talk-sheet-mode");
@@ -394,8 +395,10 @@ export class RedOrderDialogUI {
         btn.classList.add("red-dialog-speech-btn--active");
       }
       fillSpeechButton(btn, line.player, line.id === "jobs" ? "journal" : undefined);
+      btn.dataset.lineId = line.id;
       if (storyIds.has(line.id)) markSpeechQuest(btn);
       btn.addEventListener("click", () => {
+        this.sheet.cancelByeClose();
         this.phoneNav.resetForLine();
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
@@ -408,6 +411,12 @@ export class RedOrderDialogUI {
           this.scriptedReply = null;
         }
         this.render();
+        if (line.id === "bye") {
+          this.sheet.scheduleByeClose(
+            () => this.handlers.onClose(),
+            this.responseEl.textContent ?? "",
+          );
+        }
       });
       this.speechListEl.appendChild(btn);
     }

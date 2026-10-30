@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import {
   cartesianToIso,
+  isoToCartesian,
   BIGSHELF_RENDER_HEIGHT_PX,
   FURNITURE_RENDER_HEIGHT_PX,
   getBuildingAt,
@@ -43,7 +44,6 @@ import {
   ENTITY_RENDER_HEIGHT,
   TILE_HEIGHT,
   TILE_WIDTH,
-  WALL_DEPTH,
   parseStructureFenceFacing,
   parseStructureFenceCorner,
   structureFenceFootprint,
@@ -116,6 +116,9 @@ import {
   interiorFurnitureDepth,
   interiorFurnitureDepthBias,
   interiorPartitionDepth,
+  applyLootHoverTint,
+  clearLootHoverTint,
+  lootHoverOutlineDepth,
   strokeIsoFootprintOutline,
   strokeIsoTileOutline,
   tileIndicatorDepth,
@@ -128,8 +131,18 @@ import {
 import {
   nearestManhattanTile,
   pickTopOpaqueImageAtWorld,
+  spriteCoversWorldPointAboveDepth,
   spriteOpaqueAtWorldPoint,
 } from "../sprites/spritePixelHit";
+import {
+  DOOR_LEAF_PICK_REACH,
+  PARTITION_HEIGHT,
+  PARTITION_THICKNESS,
+  doorLeafAxes,
+  doorLeafCoversWorldPoint,
+  interiorDoorLeafBounds,
+  interiorDoorLeafQuads,
+} from "./doorLeafHit";
 
 /**
  * Supersample factor for baked interior door canvases — matches exterior
@@ -271,11 +284,7 @@ export type SearchableVisual = {
   activeUntil?: number;
 };
 
-/** Interior partition height (fraction of one exterior storey). */
-const PARTITION_HEIGHT = WALL_DEPTH * 0.65;
-/** Footprint thickness in tile units — thin room dividers, not full-tile blocks. */
-const PARTITION_THICKNESS = 0.16;
-/** Below this span (tile units) a clipped wall face is degenerate — skip it. */
+/** Below this span (tile units) a clipped wall face is degenerate. Skip it. */
 const PARTITION_FACE_EPS = 1e-6;
 /** Generic partition face colors (warm off-white). */
 const PARTITION_WALL_FRONT = "#f2efe8";
@@ -319,9 +328,6 @@ const HOSPITAL_DOOR_TOP = "#c09c54";
 const JAIL_DOOR_FRONT = "#727479";
 const JAIL_DOOR_SIDE = "#525458";
 const JAIL_DOOR_TOP = "#64666a";
-/** Open-door leaf thickness (a bit slimmer than the closed footprint). */
-const DOOR_OPEN_THICKNESS = PARTITION_THICKNESS * 0.7;
-
 const FURNITURE_RENDER_HEIGHT = FURNITURE_RENDER_HEIGHT_PX;
 const BIGSHELF_RENDER_HEIGHT = BIGSHELF_RENDER_HEIGHT_PX;
 /** Desk display height relative to generic furniture scale. */
@@ -913,6 +919,12 @@ export class InteriorView {
   /** Whether the searched sheet was showing. A crack does not count. */
   private searchVisualOpen = new Map<string, boolean>();
   private highlightGraphics: Phaser.GameObjects.Graphics | null = null;
+  /** Furniture currently yellow-tinted for loot hover. */
+  private hoverTintId: string | null = null;
+  /** Interior door leaf currently yellow-tinted for hover. */
+  private hoverDoorKey: string | null = null;
+  /** Storage box sprite currently yellow-tinted for hover. */
+  private hoverStorageKey: string | null = null;
   private buildGhostGraphics: Phaser.GameObjects.Graphics | null = null;
   private buildGhostWall: Phaser.GameObjects.Image | null = null;
   private buildGhostWallSig = "";
@@ -1356,8 +1368,9 @@ export class InteriorView {
 
   /** Remove one storage box sprite. */
   removeStorageBox(x: number, y: number) {
-    this.storageBoxes = this.storageBoxes.filter((f) => f.x !== x || f.y !== y);
     const key = `${x},${y}`;
+    if (key === this.hoverStorageKey) this.clearStorageHoverTint();
+    this.storageBoxes = this.storageBoxes.filter((f) => f.x !== x || f.y !== y);
     this.storageBoxSprites.get(key)?.destroy();
     this.storageBoxSprites.delete(key);
   }
@@ -1450,6 +1463,104 @@ export class InteriorView {
     return pickTopOpaqueImageAtWorld(worldX, worldY, candidates);
   }
 
+  /**
+   * Door leaf under a world point. The graphic rises above the floor tile,
+   * so a click on the door itself often maps to a tile behind it.
+   * Returns the frontmost leaf and the depth it was drawn at.
+   */
+  pickDoorLeafAtWorld(
+    worldX: number,
+    worldY: number,
+  ): { x: number; y: number; depth: number } | null {
+    if (!this.visible) return null;
+    const cart = isoToCartesian(worldX, worldY);
+    const cx = Math.floor(cart.x);
+    const cy = Math.floor(cart.y);
+    let best: { x: number; y: number; depth: number } | null = null;
+    for (const door of this.activeDoors()) {
+      if (
+        Math.max(Math.abs(door.x - cx), Math.abs(door.y - cy)) >
+        DOOR_LEAF_PICK_REACH
+      ) {
+        continue;
+      }
+      const facing = this.houseDoorFacingAt(door.x, door.y);
+      const axes: ("ns" | "ew")[] = facing
+        ? [facing === "SE" ? "ns" : "ew"]
+        : doorLeafAxes(this.partitionWallSet, door.x, door.y);
+      let hit = false;
+      for (const axis of axes) {
+        if (
+          doorLeafCoversWorldPoint(
+            door.x,
+            door.y,
+            axis,
+            door.isOpen,
+            worldX,
+            worldY,
+          )
+        ) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+      const depth = this.drawnDoorDepth(door.x, door.y);
+      if (depth == null) continue;
+      if (!best || depth > best.depth) {
+        best = { x: door.x, y: door.y, depth };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Furniture, fences, and plywood walls drawn in front of a door leaf.
+   * Door graphics themselves are not included.
+   */
+  placeableCoversPointAboveDepth(
+    worldX: number,
+    worldY: number,
+    depth: number,
+  ): boolean {
+    const covers = (
+      sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite,
+    ) => spriteCoversWorldPointAboveDepth(sprite, worldX, worldY, depth);
+    for (const sprite of this.objectSprites.values()) {
+      if (sprite instanceof Phaser.GameObjects.Graphics) continue;
+      if (covers(sprite)) return true;
+    }
+    for (const sprite of this.fireplaceSprites.values()) {
+      if (covers(sprite)) return true;
+    }
+    for (const sprite of this.storageBoxSprites.values()) {
+      if (covers(sprite)) return true;
+    }
+    for (const sprite of this.fenceSprites.values()) {
+      if (covers(sprite)) return true;
+    }
+    for (const sprite of this.fenceCornerSprites.values()) {
+      if (covers(sprite)) return true;
+    }
+    for (const entry of this.wallEntries) {
+      if (!(entry.graphics instanceof Phaser.GameObjects.Image)) continue;
+      if (covers(entry.graphics)) return true;
+    }
+    return false;
+  }
+
+  /** Depth of the door graphic currently on screen, if it is visible. */
+  private drawnDoorDepth(tx: number, ty: number): number | null {
+    const sprite = this.internalDoorSprites.get(`${tx},${ty}`);
+    if (sprite?.visible && sprite.alpha > 0.05) return sprite.depth;
+    for (const entry of this.wallEntries) {
+      if (entry.x !== tx || entry.y !== ty) continue;
+      if (!entry.graphics.visible || entry.graphics.alpha <= 0.05) continue;
+      return entry.depth;
+    }
+    return null;
+  }
+
   /** Merged procedural + admin + persistent-structure walls (doors count as wall presence too, for run adjacency). */
   getMergedWalls(): InteriorWallTile[] {
     if (this.floorLevel > 0) {
@@ -1507,6 +1618,8 @@ export class InteriorView {
     this.searchVisualOpen.clear();
     this.highlightGraphics?.destroy();
     this.highlightGraphics = null;
+    this.hoverTintId = null;
+    this.hoverDoorKey = null;
   }
 
   private clearWallSprites() {
@@ -1698,8 +1811,7 @@ export class InteriorView {
     if (!this.highlightGraphics) {
       this.highlightGraphics = this.scene.add.graphics();
     }
-    // Ground-indicator band — above floor, behind furniture.
-    this.highlightGraphics.setDepth(tileIndicatorDepth(tx, ty));
+    this.highlightGraphics.setDepth(lootHoverOutlineDepth());
     strokeIsoTileOutline(this.highlightGraphics, tx, ty, color, alpha);
   }
 
@@ -2179,41 +2291,135 @@ export class InteriorView {
 
   /**
    * Topmost furniture sprite whose opaque pixels cover the world point.
-   * Used so a click on tall wall art (furnaces) still selects that object
-   * when the floor tile under the cursor is the wall behind it.
+   * Tall pieces stand on a floor tile but paint up onto the wall behind it,
+   * so a click on the art often maps to that wall tile.
    */
-  pickFurnitureIdAtWorld(worldX: number, worldY: number): string | null {
-    let bestId: string | null = null;
-    let bestDepth = -Infinity;
+  pickFurnitureAtWorld(
+    worldX: number,
+    worldY: number,
+  ): { id: string; depth: number } | null {
+    let best: { id: string; depth: number } | null = null;
     for (const [id, sprite] of this.objectSprites) {
       if (sprite instanceof Phaser.GameObjects.Graphics) continue;
       if (!sprite.visible || !sprite.active) continue;
       if (!sprite.getBounds().contains(worldX, worldY)) continue;
-      if (!spriteOpaqueAtWorldPoint(sprite, worldX, worldY)) continue;
-      if (sprite.depth < bestDepth) continue;
-      bestDepth = sprite.depth;
-      bestId = id;
+      if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(sprite, worldX, worldY)) continue;
+      if (best && sprite.depth <= best.depth) continue;
+      best = { id, depth: sprite.depth };
     }
-    return bestId;
+    return best;
   }
 
-  /** Draws a yellow outline around the hovered item's footprint. Pass null to clear. */
-  setHoveredItem(id: string | null, items: SearchableVisual[]) {
-    if (!id) {
-      this.highlightGraphics?.clear();
+  /** Id of the topmost furniture sprite under a world point. */
+  pickFurnitureIdAtWorld(worldX: number, worldY: number): string | null {
+    return this.pickFurnitureAtWorld(worldX, worldY)?.id ?? null;
+  }
+
+  /** Yellow-tints the hovered furniture sprite. Pass null to clear. */
+  setHoveredItem(id: string | null) {
+    if (id === this.hoverTintId) {
+      this.applyHoverTint();
       return;
     }
-    const item = items.find((i) => i.id === id);
-    if (!item) return;
-    const { w, h } = searchableFootprint(item);
-    if (!this.highlightGraphics) {
-      this.highlightGraphics = this.scene.add.graphics();
+    this.clearHoverTint();
+    this.hoverTintId = id;
+    this.applyHoverTint();
+  }
+
+  private tintableSprite(
+    sprite: ObjectSprite | undefined,
+  ): Phaser.GameObjects.Image | Phaser.GameObjects.Sprite | null {
+    if (
+      sprite instanceof Phaser.GameObjects.Image ||
+      sprite instanceof Phaser.GameObjects.Sprite
+    ) {
+      return sprite;
     }
-    // Ground-indicator band — above floor, behind furniture.
-    this.highlightGraphics.setDepth(
-      tileIndicatorDepth(item.x + w - 1, item.y + h - 1),
+    return null;
+  }
+
+  private clearHoverTint() {
+    const sprite = this.tintableSprite(
+      this.hoverTintId ? this.objectSprites.get(this.hoverTintId) : undefined,
     );
-    strokeIsoFootprintOutline(this.highlightGraphics, item.x, item.y, w, h);
+    clearLootHoverTint(sprite);
+    this.hoverTintId = null;
+  }
+
+  private applyHoverTint() {
+    const sprite = this.tintableSprite(
+      this.hoverTintId ? this.objectSprites.get(this.hoverTintId) : undefined,
+    );
+    applyLootHoverTint(sprite);
+  }
+
+  /** Yellow-tints a house door leaf. Pass null to clear. */
+  setHoveredDoor(tx: number | null, ty: number | null) {
+    const key = tx != null && ty != null ? `${tx},${ty}` : null;
+    if (key === this.hoverDoorKey) {
+      this.applyDoorHoverTint();
+      return;
+    }
+    this.clearDoorHoverTint();
+    this.hoverDoorKey = key;
+    this.applyDoorHoverTint();
+  }
+
+  private clearDoorHoverTint() {
+    if (!this.hoverDoorKey) return;
+    const sprite = this.internalDoorSprites.get(this.hoverDoorKey);
+    if (sprite) clearLootHoverTint(sprite);
+    this.hoverDoorKey = null;
+  }
+
+  private applyDoorHoverTint() {
+    if (!this.hoverDoorKey) return;
+    const sprite = this.internalDoorSprites.get(this.hoverDoorKey);
+    if (sprite) applyLootHoverTint(sprite);
+  }
+
+  /**
+   * Storage box whose drawn crate covers this world point.
+   * The sprite stands taller than its floor tile, same as other loot.
+   */
+  storageBoxAtWorld(worldX: number, worldY: number): { x: number; y: number } | null {
+    let best: { x: number; y: number; depth: number } | null = null;
+    for (const box of this.storageBoxes) {
+      const sprite = this.storageBoxSprites.get(`${box.x},${box.y}`);
+      if (!sprite?.visible || !sprite.active) continue;
+      if (!sprite.getBounds().contains(worldX, worldY)) continue;
+      if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(sprite, worldX, worldY)) continue;
+      if (best && sprite.depth <= best.depth) continue;
+      best = { x: box.x, y: box.y, depth: sprite.depth };
+    }
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  /** Yellow-tints a storage box. Pass nulls to clear. */
+  setHoveredStorageBox(x: number | null, y: number | null) {
+    const key = x != null && y != null ? `${x},${y}` : null;
+    if (key === this.hoverStorageKey) {
+      this.applyStorageHoverTint();
+      return;
+    }
+    this.clearStorageHoverTint();
+    this.hoverStorageKey = key;
+    this.applyStorageHoverTint();
+  }
+
+  private clearStorageHoverTint() {
+    const sprite = this.hoverStorageKey
+      ? this.storageBoxSprites.get(this.hoverStorageKey)
+      : undefined;
+    if (sprite) clearLootHoverTint(sprite);
+    this.hoverStorageKey = null;
+  }
+
+  private applyStorageHoverTint() {
+    const sprite = this.hoverStorageKey
+      ? this.storageBoxSprites.get(this.hoverStorageKey)
+      : undefined;
+    if (sprite) applyLootHoverTint(sprite);
   }
 
   /**
@@ -2251,6 +2457,7 @@ export class InteriorView {
     for (const item of relevant) {
       this.upsertSearchable(item, searchingIds?.has(item.id) === true);
     }
+    this.applyHoverTint();
     this.refreshUpperStairHoles();
   }
 
@@ -3157,6 +3364,7 @@ export class InteriorView {
   }
 
   private clearStorageBoxes() {
+    this.clearStorageHoverTint();
     for (const sprite of this.storageBoxSprites.values()) sprite.destroy();
     this.storageBoxSprites.clear();
     this.storageBoxes = [];
@@ -4027,39 +4235,6 @@ function paintMergedPlywoodTop(
   ctx.restore();
 }
 
-function interiorDoorLeafBounds(
-  ox: number,
-  oy: number,
-  axis: "ns" | "ew",
-  isOpen: boolean,
-): { x0: number; y0: number; x1: number; y1: number } {
-  const cx = ox + 0.5;
-  const cy = oy + 0.5;
-  const halfT = PARTITION_THICKNESS / 2;
-  if (!isOpen) {
-    if (axis === "ns") {
-      return { x0: cx - halfT, x1: cx + halfT, y0: oy, y1: oy + 1 };
-    }
-    return { x0: ox, x1: ox + 1, y0: cy - halfT, y1: cy + halfT };
-  }
-  if (axis === "ns") {
-    // Hinge at the north end of the closed leaf (cx, oy); swing east.
-    return {
-      x0: cx - halfT,
-      x1: cx - halfT + 1,
-      y0: oy,
-      y1: oy + DOOR_OPEN_THICKNESS,
-    };
-  }
-  // Hinge at the west end of the closed leaf (ox, cy); swing south.
-  return {
-    x0: ox,
-    x1: ox + DOOR_OPEN_THICKNESS,
-    y0: cy - halfT,
-    y1: cy - halfT + 1,
-  };
-}
-
 /**
  * Main camera-facing door parallelogram bottom edge (bl→br = texture U).
  * Closed NS / open EW → east face; closed EW / open NS → south face.
@@ -4406,39 +4581,12 @@ export function drawInteriorDoorTile(
   isOpen: boolean,
   isLocked: boolean,
 ) {
-  const d = PARTITION_HEIGHT;
   const { x0, y0, x1, y1 } = interiorDoorLeafBounds(ox, oy, axis, isOpen);
+  const quads = interiorDoorLeafQuads(ox, oy, axis, isOpen);
 
-  const front = hexToNum(DOOR_FRONT);
-  const side = hexToNum(DOOR_SIDE);
-  const top = hexToNum(DOOR_TOP);
-
-  const sw = cartesianToIso(x0, y1);
-  const se = cartesianToIso(x1, y1);
-  fillPartitionPoly(
-    g,
-    [sw, se, { x: se.x, y: se.y - d }, { x: sw.x, y: sw.y - d }],
-    front,
-  );
-
-  const ne = cartesianToIso(x1, y0);
-  fillPartitionPoly(
-    g,
-    [se, ne, { x: ne.x, y: ne.y - d }, { x: se.x, y: se.y - d }],
-    side,
-  );
-
-  const nw = cartesianToIso(x0, y0);
-  fillPartitionPoly(
-    g,
-    [
-      { x: nw.x, y: nw.y - d },
-      { x: ne.x, y: ne.y - d },
-      { x: se.x, y: se.y - d },
-      { x: sw.x, y: sw.y - d },
-    ],
-    top,
-  );
+  fillPartitionPoly(g, quads.front, hexToNum(DOOR_FRONT));
+  fillPartitionPoly(g, quads.side, hexToNum(DOOR_SIDE));
+  fillPartitionPoly(g, quads.top, hexToNum(DOOR_TOP));
 
   if (isLocked) {
     paintDoorCodeLockGraphics(g, doorCodeLockLayout(x0, y0, x1, y1, axis, isOpen));

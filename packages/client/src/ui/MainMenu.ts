@@ -1,6 +1,14 @@
 import {
+  ASHEN_MILITIA_FACTION,
+  ASHEN_TRADERS_FACTION,
+  BACKPACK_FANNY_ID,
+  GIFT_BOX_ITEM_ID,
   HUNGER_MAX,
+  INVITE_BONUS_BANKNOTES,
+  INVITE_BONUS_REPUTATION,
   PLAYER_MAX_HEALTH,
+  RED_ORDER_FACTION,
+  REFERRER_PAYOUT_BANKNOTES,
   STAMINA_MAX,
   SURVIVOR_NAME_MAX,
   THIRST_MAX,
@@ -14,14 +22,23 @@ import {
 } from "@zombie/shared";
 import {
   clearStoredSession,
+  approveReferralPayout,
+  banAdminPlayer,
+  fetchAdminBoard,
   fetchPlayerPreview,
+  fetchReferralBoard,
+  kickAdminPlayer,
   loadCachedAuthSession,
   loginWithSolanaWallet,
   registerSurvivorName,
   restoreAuthSession,
   storeAuthSession,
+  unbanAdminPlayer,
+  type AdminBoard,
   type AuthSession,
   type PlayerPreview,
+  type ReferralBoard,
+  type ReferralPayout,
 } from "../network/ColyseusClient";
 import { ensureCountyRadio, forgetCountyRadio } from "../network/countyRadio";
 import { getWallets } from "@wallet-standard/app";
@@ -50,6 +67,15 @@ import {
 } from "../network/walletDeepLinks";
 import { WeaponHotbar } from "./WeaponHotbar";
 import { playerAvatarSrc } from "./playerAvatar";
+import {
+  captureReferMenuRequest,
+  clearStoredReferral,
+  copyReferralLink,
+  INVITE_BONUS_LINE,
+  storedReferral,
+} from "../network/referral";
+import { createDialogCloseButton } from "./dialogCloseBtn";
+import { itemIconImg } from "./mobileSheet";
 
 export type MainMenuHandlers = {
   onPlay: (session: AuthSession) => void;
@@ -119,6 +145,147 @@ function makeHealthBarRow(): {
   return { row, fill, cap, lost };
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function menuIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("main-menu-btn-icon");
+  return svg;
+}
+
+function filledPath(d: string): SVGPathElement {
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "currentColor");
+  return path;
+}
+
+function strokedPath(d: string): SVGPathElement {
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.6");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  return path;
+}
+
+function playIcon(): SVGSVGElement {
+  const svg = menuIcon();
+  svg.classList.add("main-menu-btn-icon--play");
+  svg.appendChild(filledPath("M5.15 3.05 12.6 8 5.15 12.95V3.05z"));
+  return svg;
+}
+
+function adminIcon(): SVGSVGElement {
+  const svg = menuIcon();
+  svg.append(
+    strokedPath("M8 2.4 13.4 4.7v3.35c0 3.35-2.2 5.55-5.4 6.55-3.2-1-5.4-3.2-5.4-6.55V4.7L8 2.4z"),
+    strokedPath("M8 6.2v4.2"),
+    strokedPath("M6.2 8.3h3.6"),
+  );
+  return svg;
+}
+
+function referIcon(): SVGSVGElement {
+  const svg = menuIcon();
+  const head = document.createElementNS(SVG_NS, "circle");
+  head.setAttribute("cx", "6.1");
+  head.setAttribute("cy", "5");
+  head.setAttribute("r", "1.85");
+  head.setAttribute("fill", "none");
+  head.setAttribute("stroke", "currentColor");
+  head.setAttribute("stroke-width", "1.6");
+  svg.append(
+    head,
+    strokedPath("M2.55 12.7c.45-2.05 1.9-3.15 3.55-3.15s3.1 1.1 3.55 3.15"),
+    strokedPath("M11.15 6.15h3.3"),
+    strokedPath("M12.8 4.5v3.3"),
+  );
+  return svg;
+}
+
+function formatSignupWhen(createdAt: number): string {
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return "";
+  const date = new Date(createdAt * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** Copy pages, or a check once the link is on the clipboard. */
+function paintReferralIcon(svg: SVGSVGElement, copied: boolean): void {
+  svg.replaceChildren();
+  if (copied) {
+    svg.appendChild(strokedPath("M3.15 8.35 6.35 11.45 12.9 4.55"));
+    return;
+  }
+  const page = document.createElementNS(SVG_NS, "rect");
+  page.setAttribute("x", "2.45");
+  page.setAttribute("y", "5.25");
+  page.setAttribute("width", "7.85");
+  page.setAttribute("height", "8.15");
+  page.setAttribute("rx", "1.3");
+  page.setAttribute("fill", "none");
+  page.setAttribute("stroke", "currentColor");
+  page.setAttribute("stroke-width", "1.6");
+  svg.append(
+    strokedPath("M6.05 4.55V3.85A1.2 1.2 0 0 1 7.25 2.65h4.05A1.2 1.2 0 0 1 12.5 3.85V8.2"),
+    page,
+  );
+}
+
+function appendRewardCell(
+  parent: HTMLElement,
+  name: string,
+  qty: number,
+  graphic: HTMLElement,
+) {
+  const cell = document.createElement("div");
+  cell.className = "invite-item";
+  const icon = document.createElement("div");
+  icon.className = "invite-item-icon";
+  icon.append(graphic);
+  const qtyEl = document.createElement("span");
+  qtyEl.className = "invite-item-qty";
+  qtyEl.textContent = String(qty);
+  icon.append(qtyEl);
+  const label = document.createElement("div");
+  label.className = "invite-item-name";
+  label.textContent = name;
+  cell.append(icon, label);
+  parent.append(cell);
+}
+
+function appendInvitePackage(parent: HTMLElement) {
+  const items = document.createElement("div");
+  items.className = "invite-items";
+  const rewards: { id: string; qty: number; name: string }[] = [
+    { id: "banknote", qty: INVITE_BONUS_BANKNOTES, name: "Banknotes" },
+    { id: BACKPACK_FANNY_ID, qty: 1, name: "Fanny Pack" },
+    { id: GIFT_BOX_ITEM_ID, qty: 1, name: "Gift Box" },
+    { id: "safe", qty: 1, name: "Safe Deposit Box" },
+  ];
+  for (const reward of rewards) {
+    const img = itemIconImg(reward.id);
+    appendRewardCell(items, reward.name, reward.qty, img ?? document.createElement("span"));
+  }
+  for (const faction of [ASHEN_TRADERS_FACTION, ASHEN_MILITIA_FACTION, RED_ORDER_FACTION]) {
+    const img = itemIconImg("rep");
+    appendRewardCell(items, faction, INVITE_BONUS_REPUTATION, img ?? document.createElement("span"));
+  }
+  parent.append(items);
+}
+
+function buttonLabel(text: string): HTMLSpanElement {
+  const label = document.createElement("span");
+  label.className = "main-menu-btn-label";
+  label.textContent = text;
+  return label;
+}
+
 /**
  * Full-screen Deatiles main menu — Solana wallet login + unique survivor name.
  */
@@ -128,8 +295,19 @@ export class MainMenu {
   private nameInput: HTMLInputElement;
   private walletBtn: HTMLButtonElement;
   private playBtn: HTMLButtonElement;
+  private playLabel: HTMLElement;
   private registerBtn: HTMLButtonElement;
+  private adminBtn: HTMLButtonElement;
+  private referralBtn: HTMLButtonElement;
+  private referralLabel: HTMLElement;
   private signOutBtn: HTMLButtonElement;
+  private inviteBanner: HTMLElement;
+  private referralMenu?: HTMLElement;
+  private referralMenuKey?: (event: KeyboardEvent) => void;
+  private referralCopyTimer = 0;
+  private adminMenu?: HTMLElement;
+  private adminMenuKey?: (event: KeyboardEvent) => void;
+  private adminUserIdDraft = "";
   private statusEl: HTMLElement;
   private survivorNameEl: HTMLElement;
   private previewSection: HTMLElement;
@@ -147,9 +325,12 @@ export class MainMenu {
   private walletHint: HTMLElement;
   private busy = false;
   private session: AuthSession | null = null;
+  /** Open Refer players once this visit if the site sent ?refer=1. */
+  private referMenuPending = false;
   private stopWalletHandoff?: () => void;
 
   constructor(private handlers: MainMenuHandlers) {
+    this.referMenuPending = captureReferMenuRequest();
     this.root = document.createElement("div");
     this.root.id = "main-menu";
 
@@ -284,8 +465,24 @@ export class MainMenu {
     this.playBtn = document.createElement("button");
     this.playBtn.type = "button";
     this.playBtn.className = "main-menu-play";
-    this.playBtn.textContent = "Enter world";
     this.playBtn.hidden = true;
+    this.playBtn.append(playIcon());
+    this.playLabel = buttonLabel("Enter world");
+    this.playBtn.append(this.playLabel);
+
+    this.adminBtn = document.createElement("button");
+    this.adminBtn.type = "button";
+    this.adminBtn.className = "main-menu-admin";
+    this.adminBtn.hidden = true;
+    this.adminBtn.append(adminIcon(), buttonLabel("Admin"));
+
+    this.referralBtn = document.createElement("button");
+    this.referralBtn.type = "button";
+    this.referralBtn.className = "main-menu-referral";
+    this.referralBtn.hidden = true;
+    this.referralBtn.append(referIcon());
+    this.referralLabel = buttonLabel("Refer players");
+    this.referralBtn.append(this.referralLabel);
 
     this.signOutBtn = document.createElement("button");
     this.signOutBtn.type = "button";
@@ -297,6 +494,8 @@ export class MainMenu {
       this.walletBtn,
       this.registerBtn,
       this.playBtn,
+      this.adminBtn,
+      this.referralBtn,
       this.signOutBtn,
     );
 
@@ -320,13 +519,26 @@ export class MainMenu {
       this.walletHint.append(installLink, ", then refresh this page.");
     }
 
+    this.inviteBanner = document.createElement("div");
+    this.inviteBanner.className = "main-menu-invite";
+    this.inviteBanner.hidden = true;
+    const inviteKicker = document.createElement("div");
+    inviteKicker.className = "main-menu-invite-kicker";
+    inviteKicker.textContent = "You were invited";
+    const inviteText = document.createElement("p");
+    inviteText.className = "main-menu-invite-text";
+    inviteText.textContent = INVITE_BONUS_LINE;
+    this.inviteBanner.append(inviteKicker, inviteText);
+    appendInvitePackage(this.inviteBanner);
+
     const hint = document.createElement("div");
     hint.className = "main-menu-hint";
     hint.innerHTML = isMobileDevice()
       ? "<span>Tap</span> move · interact · shoot"
-      : "<span>Click</span> move · <span>CTRL</span> aim · <span>R</span> reload · <span>TAB</span> inventory · <span>M</span> map";
+      : "<span>Click</span> move · <span>RMB</span> aim · <span>R</span> reload · <span>TAB</span> inventory · <span>M</span> map";
 
     body.append(
+      this.inviteBanner,
       preview,
       this.nameSection,
       actions,
@@ -341,6 +553,8 @@ export class MainMenu {
     this.walletBtn.addEventListener("click", () => void this.handleConnectWallet());
     this.registerBtn.addEventListener("click", () => void this.handleRegister());
     this.playBtn.addEventListener("click", () => this.handlePlay());
+    this.adminBtn.addEventListener("click", () => this.openAdminMenu());
+    this.referralBtn.addEventListener("click", () => this.openReferralMenu());
     this.signOutBtn.addEventListener("click", () => this.handleSignOut());
     this.nameInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -355,6 +569,7 @@ export class MainMenu {
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") this.adoptCachedSession();
     });
+    this.updateInviteBanner();
     void this.boot();
     resetDialogScroll(this.root);
     window.setTimeout(() => this.refreshWalletHint(), 400);
@@ -428,6 +643,7 @@ export class MainMenu {
       this.survivorNameEl.textContent = session.name;
       this.applyPreview(session.preview);
       this.syncAuthButtons();
+      this.maybeOpenReferMenu();
       return;
     }
 
@@ -446,7 +662,10 @@ export class MainMenu {
     this.walletBtn.hidden = loggedIn;
     this.registerBtn.hidden = !needsName;
     this.playBtn.hidden = !ready;
+    this.adminBtn.hidden = !ready || !this.session?.isAdmin;
+    this.referralBtn.hidden = !ready;
     this.signOutBtn.hidden = !loggedIn;
+    this.updateInviteBanner();
     this.nameSection.hidden = !needsName;
     this.previewSection.hidden = !ready;
     this.walletLabel.hidden = !loggedIn;
@@ -454,7 +673,7 @@ export class MainMenu {
     if (!this.busy) {
       this.walletBtn.textContent = "Connect wallet";
       this.registerBtn.textContent = "Create survivor";
-      this.playBtn.textContent = "Enter world";
+      this.playLabel.textContent = "Enter world";
     }
     this.refreshWalletHint();
   }
@@ -467,6 +686,8 @@ export class MainMenu {
 
   private handleSignOut() {
     if (this.busy) return;
+    this.closeReferralMenu();
+    this.closeAdminMenu();
     forgetCountyRadio();
     clearStoredSession();
     this.session = null;
@@ -613,7 +834,13 @@ export class MainMenu {
 
     this.setBusy(true, "Creating survivor…");
     try {
-      const session = await registerSurvivorName(this.session.sessionToken, name);
+      const ref = storedReferral();
+      const session = await registerSurvivorName(
+        this.session.sessionToken,
+        name,
+        ref && ref !== this.session.wallet ? ref : "",
+      );
+      clearStoredReferral();
       this.setBusy(false);
       this.setSession(session);
     } catch (err) {
@@ -630,6 +857,504 @@ export class MainMenu {
     }
   }
 
+  private updateInviteBanner() {
+    const stored = storedReferral();
+    const wallet = this.session?.wallet ?? "";
+    const invitedArrival = !!stored && stored !== wallet && !this.session?.name;
+    const bonusPending = this.session?.preview?.inviteBonusPending === true;
+    this.inviteBanner.hidden = !(invitedArrival || bonusPending);
+  }
+
+  /** After a survivor exists, the bounty-site link opens Refer players once. */
+  private maybeOpenReferMenu() {
+    if (!this.referMenuPending) return;
+    if (this.busy || !this.session?.name || !this.session.wallet) return;
+    this.referMenuPending = false;
+    if (this.referralMenu) return;
+    this.openReferralMenu();
+  }
+
+  private closeReferralMenu() {
+    window.clearTimeout(this.referralCopyTimer);
+    this.referralCopyTimer = 0;
+    if (this.referralMenuKey) {
+      document.removeEventListener("keydown", this.referralMenuKey);
+      this.referralMenuKey = undefined;
+    }
+    this.referralMenu?.remove();
+    this.referralMenu = undefined;
+  }
+
+  private openReferralMenu() {
+    if (this.busy || !this.session?.name || !this.session.wallet || this.referralMenu) return;
+    const session = this.session;
+
+    const overlay = document.createElement("div");
+    overlay.className = "referral-menu";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-label", "Refer players");
+    this.referralMenu = overlay;
+
+    const panel = document.createElement("div");
+    panel.className = "referral-menu-panel";
+
+    const header = document.createElement("div");
+    header.className = "referral-menu-header";
+    const title = document.createElement("h2");
+    title.className = "referral-menu-title";
+    title.textContent = "Refer players";
+    header.append(title, createDialogCloseButton(() => this.closeReferralMenu()));
+
+    const offer = document.createElement("div");
+    offer.className = "referral-menu-offer";
+    const offerText = document.createElement("p");
+    offerText.className = "main-menu-invite-text";
+    offerText.textContent = "Referred survivors who finish the tutorial receive:";
+    offer.append(offerText);
+    appendInvitePackage(offer);
+    const payoutNote = document.createElement("p");
+    payoutNote.className = "referral-menu-payout-note";
+    payoutNote.textContent = `When the referred survivor finishes the tutorial you will receive ${REFERRER_PAYOUT_BANKNOTES.toLocaleString()} banknotes pending manual approval`;
+    offer.append(payoutNote);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "main-menu-referral";
+    const copyIcon = menuIcon();
+    paintReferralIcon(copyIcon, false);
+    const copyLabel = buttonLabel("Copy Referral Link");
+    copyBtn.append(copyIcon, copyLabel);
+    copyBtn.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await copyReferralLink(session.wallet);
+          paintReferralIcon(copyIcon, true);
+          copyLabel.textContent = "Copied";
+          window.clearTimeout(this.referralCopyTimer);
+          this.referralCopyTimer = window.setTimeout(() => {
+            this.referralCopyTimer = 0;
+            if (!copyBtn.isConnected) return;
+            paintReferralIcon(copyIcon, false);
+            copyLabel.textContent = "Copy Referral Link";
+          }, 1600);
+        } catch (err) {
+          console.error(err);
+          copyLabel.textContent = "Could not copy";
+        }
+      })();
+    });
+
+    const countEl = document.createElement("div");
+    countEl.className = "referral-menu-count";
+    countEl.textContent = "Loading survivors…";
+
+    const list = document.createElement("div");
+    list.className = "referral-menu-list";
+
+    panel.append(header, offer, copyBtn, countEl, list);
+    overlay.append(panel);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) this.closeReferralMenu();
+    });
+    this.referralMenuKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      this.closeReferralMenu();
+    };
+    document.addEventListener("keydown", this.referralMenuKey);
+
+    this.root.appendChild(overlay);
+    resetDialogScroll(overlay);
+
+    void fetchReferralBoard(session.sessionToken)
+      .then((board) => {
+        if (!overlay.isConnected) return;
+        this.renderReferralSignups(countEl, list, board);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!overlay.isConnected) return;
+        countEl.textContent = "Could not load the list. You can still copy your link.";
+      });
+  }
+
+  private renderReferralSignups(
+    countEl: HTMLElement,
+    list: HTMLElement,
+    board: ReferralBoard,
+  ) {
+    const signups = board.signups;
+    list.replaceChildren();
+    if (signups.length === 0) {
+      countEl.textContent = "No one has joined with your link yet.";
+      return;
+    }
+    countEl.textContent =
+      signups.length >= 50
+        ? "Latest 50 survivors"
+        : signups.length === 1
+          ? "1 survivor"
+          : `${signups.length} survivors`;
+    for (const signup of signups) {
+      const row = document.createElement("div");
+      row.className = "referral-menu-row";
+      const name = document.createElement("div");
+      name.className = "referral-menu-name";
+      name.textContent = signup.name;
+      const meta = document.createElement("div");
+      meta.className = "referral-menu-meta";
+      const status = signup.tutorialDone ? "Tutorial finished" : "Tutorial not finished";
+      const when = formatSignupWhen(signup.createdAt);
+      meta.textContent = when ? `${status} · ${when}` : status;
+      row.append(name, meta);
+      list.append(row);
+    }
+  }
+
+  private closeAdminMenu() {
+    if (this.adminMenuKey) {
+      document.removeEventListener("keydown", this.adminMenuKey);
+      this.adminMenuKey = undefined;
+    }
+    this.adminMenu?.remove();
+    this.adminMenu = undefined;
+    this.adminUserIdDraft = "";
+  }
+
+  private openAdminMenu() {
+    if (this.busy || !this.session?.name || !this.session.isAdmin || this.adminMenu) return;
+    const session = this.session;
+
+    const overlay = document.createElement("div");
+    overlay.className = "referral-menu";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-label", "Admin");
+    this.adminMenu = overlay;
+
+    const panel = document.createElement("div");
+    panel.className = "referral-menu-panel admin-menu-panel";
+
+    const header = document.createElement("div");
+    header.className = "referral-menu-header";
+    const title = document.createElement("h2");
+    title.className = "referral-menu-title";
+    title.textContent = "Admin";
+    header.append(title, createDialogCloseButton(() => this.closeAdminMenu()));
+
+    const status = document.createElement("div");
+    status.className = "admin-menu-status";
+    status.textContent = "Loading…";
+
+    const body = document.createElement("div");
+    body.className = "admin-menu-body";
+
+    panel.append(header, status, body);
+    overlay.append(panel);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) this.closeAdminMenu();
+    });
+    this.adminMenuKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      this.closeAdminMenu();
+    };
+    document.addEventListener("keydown", this.adminMenuKey);
+    this.root.appendChild(overlay);
+    resetDialogScroll(overlay);
+
+    const load = () => {
+      void fetchAdminBoard(session.sessionToken)
+        .then((board) => {
+          if (!overlay.isConnected) return;
+          status.textContent = "";
+          this.renderAdminBoard(body, board, load);
+        })
+        .catch((err) => {
+          console.error(err);
+          if (!overlay.isConnected) return;
+          status.textContent = err instanceof Error ? err.message : "Could not load admin tools.";
+        });
+    };
+    load();
+  }
+
+  private renderAdminBoard(
+    body: HTMLElement,
+    board: AdminBoard,
+    reload: () => void,
+  ) {
+    body.replaceChildren();
+    body.append(
+      this.adminOnlineSection(board, reload),
+      this.adminPayoutSection(board.payouts, reload),
+      this.adminBanSection(board, reload),
+    );
+  }
+
+  private adminOnlineSection(board: AdminBoard, reload: () => void): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "admin-menu-section";
+    const title = document.createElement("div");
+    title.className = "referral-menu-count";
+    title.textContent =
+      board.players.length === 0
+        ? "No one is in the world"
+        : board.players.length === 1
+          ? "1 player in the world"
+          : `${board.players.length} players in the world`;
+    block.append(title);
+    if (board.players.length === 0) return block;
+    const list = document.createElement("div");
+    list.className = "referral-menu-list admin-menu-list";
+    for (const player of board.players) {
+      const row = document.createElement("div");
+      row.className = "referral-menu-row admin-menu-row";
+      const text = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "referral-menu-name";
+      name.textContent = player.name;
+      const meta = document.createElement("div");
+      meta.className = "referral-menu-meta";
+      meta.textContent = player.wallet ? shortWallet(player.wallet) : player.playerId;
+      meta.title = player.wallet || player.playerId;
+      text.append(name, meta);
+      const actions = document.createElement("div");
+      actions.className = "admin-menu-actions";
+      const self = player.wallet === this.session?.wallet;
+      const kick = document.createElement("button");
+      kick.type = "button";
+      kick.className = "admin-action";
+      kick.textContent = "Kick";
+      kick.disabled = self;
+      kick.addEventListener("click", () => {
+        const token = this.session?.sessionToken;
+        if (!token || kick.disabled) return;
+        kick.disabled = true;
+        ban.disabled = true;
+        kick.textContent = "Kicking…";
+        void kickAdminPlayer(token, player.playerId)
+          .then(reload)
+          .catch((err) => {
+            console.error(err);
+            kick.disabled = false;
+            ban.disabled = self;
+            kick.textContent = "Kick";
+            meta.textContent = err instanceof Error ? err.message : "Could not kick";
+          });
+      });
+      const ban = document.createElement("button");
+      ban.type = "button";
+      ban.className = "admin-action admin-action--ban";
+      ban.textContent = "Ban";
+      ban.disabled = self;
+      ban.addEventListener("click", () => {
+        const token = this.session?.sessionToken;
+        if (!token || ban.disabled) return;
+        kick.disabled = true;
+        ban.disabled = true;
+        ban.textContent = "Banning…";
+        void banAdminPlayer(token, player.playerId)
+          .then(reload)
+          .catch((err) => {
+            console.error(err);
+            kick.disabled = self;
+            ban.disabled = false;
+            ban.textContent = "Ban";
+            meta.textContent = err instanceof Error ? err.message : "Could not ban";
+          });
+      });
+      actions.append(kick, ban);
+      row.append(text, actions);
+      list.append(row);
+    }
+    block.append(list);
+    return block;
+  }
+
+  private adminPayoutSection(payouts: ReferralPayout[], reload: () => void): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "admin-menu-section";
+    const title = document.createElement("div");
+    title.className = "referral-menu-count";
+    title.textContent =
+      payouts.length === 0
+        ? "No referrals waiting"
+        : payouts.length === 1
+          ? "1 referral waiting"
+          : `${payouts.length} referrals waiting`;
+    block.append(title);
+    if (payouts.length === 0) return block;
+    block.append(this.referralPayoutSection(payouts, reload));
+    return block;
+  }
+
+  private adminBanSection(board: AdminBoard, reload: () => void): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "admin-menu-section";
+    const title = document.createElement("div");
+    title.className = "referral-menu-count";
+    title.textContent =
+      board.bans.length === 0
+        ? "No banned players"
+        : board.bans.length === 1
+          ? "1 banned player"
+          : `${board.bans.length} banned players`;
+    block.append(title, this.adminUserIdForm(reload));
+    if (board.bans.length === 0) return block;
+    const list = document.createElement("div");
+    list.className = "referral-menu-list admin-menu-list";
+    for (const ban of board.bans) {
+      const row = document.createElement("div");
+      row.className = "referral-menu-row admin-menu-row";
+      const text = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "referral-menu-name";
+      name.textContent = ban.name || shortWallet(ban.wallet);
+      const meta = document.createElement("div");
+      meta.className = "referral-menu-meta";
+      const when = formatSignupWhen(ban.bannedAt);
+      meta.textContent = when
+        ? `${shortWallet(ban.wallet)} · ${when}`
+        : shortWallet(ban.wallet);
+      meta.title = ban.wallet;
+      text.append(name, meta);
+      const unban = document.createElement("button");
+      unban.type = "button";
+      unban.className = "admin-action";
+      unban.textContent = "Unban";
+      unban.addEventListener("click", () => {
+        const token = this.session?.sessionToken;
+        if (!token || unban.disabled) return;
+        unban.disabled = true;
+        unban.textContent = "Unbanning…";
+        void unbanAdminPlayer(token, ban.wallet)
+          .then(reload)
+          .catch((err) => {
+            console.error(err);
+            unban.disabled = false;
+            unban.textContent = "Unban";
+            meta.textContent = err instanceof Error ? err.message : "Could not unban";
+          });
+      });
+      row.append(text, unban);
+      list.append(row);
+    }
+    block.append(list);
+    return block;
+  }
+
+  private adminUserIdForm(reload: () => void): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "admin-menu-manual";
+    const row = document.createElement("div");
+    row.className = "referral-menu-row admin-menu-row admin-menu-manual-row";
+    const input = document.createElement("input");
+    input.id = "admin-menu-user-id";
+    input.className = "admin-menu-id-input";
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = "User id";
+    input.setAttribute("aria-label", "User id");
+    input.value = this.adminUserIdDraft;
+    input.addEventListener("input", () => {
+      this.adminUserIdDraft = input.value;
+    });
+    const hint = document.createElement("div");
+    hint.className = "admin-menu-manual-hint";
+    const actions = document.createElement("div");
+    actions.className = "admin-menu-actions";
+    const readId = () => input.value.trim();
+    const run = (kind: "ban" | "unban", button: HTMLButtonElement) => {
+      const token = this.session?.sessionToken;
+      const userId = readId();
+      if (!token || button.disabled) return;
+      if (!userId) {
+        hint.textContent = "Paste a user id first.";
+        input.focus();
+        return;
+      }
+      this.adminUserIdDraft = userId;
+      const banBtn = actions.querySelector(".admin-action--ban") as HTMLButtonElement;
+      const unbanBtn = actions.querySelector(".admin-action--unban") as HTMLButtonElement;
+      banBtn.disabled = true;
+      unbanBtn.disabled = true;
+      const idle = button.textContent ?? "";
+      button.textContent = kind === "ban" ? "Banning…" : "Unbanning…";
+      hint.textContent = "";
+      const request =
+        kind === "ban"
+          ? banAdminPlayer(token, userId)
+          : unbanAdminPlayer(token, userId);
+      void request
+        .then(reload)
+        .catch((err) => {
+          console.error(err);
+          banBtn.disabled = false;
+          unbanBtn.disabled = false;
+          button.textContent = idle;
+          hint.textContent = err instanceof Error ? err.message : "Could not update ban.";
+        });
+    };
+    const ban = document.createElement("button");
+    ban.type = "button";
+    ban.className = "admin-action admin-action--ban";
+    ban.textContent = "Ban";
+    ban.addEventListener("click", () => run("ban", ban));
+    const unban = document.createElement("button");
+    unban.type = "button";
+    unban.className = "admin-action admin-action--unban";
+    unban.textContent = "Unban";
+    unban.addEventListener("click", () => run("unban", unban));
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      run("ban", ban);
+    });
+    actions.append(ban, unban);
+    row.append(input, actions);
+    wrap.append(row, hint);
+    return wrap;
+  }
+
+  private referralPayoutSection(payouts: ReferralPayout[], onApproved: () => void): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "referral-payouts admin-menu-list";
+    for (const payout of payouts) {
+      const row = document.createElement("div");
+      row.className = "referral-menu-row referral-payout-row admin-menu-row";
+      const text = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "referral-menu-name";
+      name.textContent = payout.referrerName;
+      const meta = document.createElement("div");
+      meta.className = "referral-menu-meta";
+      meta.textContent = `${payout.amount.toLocaleString()} notes for ${payout.referredName}`;
+      text.append(name, meta);
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "referral-approve";
+      approve.textContent = "Approve";
+      approve.addEventListener("click", () => {
+        const token = this.session?.sessionToken;
+        if (!token || approve.disabled) return;
+        approve.disabled = true;
+        approve.textContent = "Approving…";
+        void approveReferralPayout(token, payout.referredUserId)
+          .then(() => onApproved())
+          .catch((err) => {
+            console.error(err);
+            approve.disabled = false;
+            approve.textContent = "Approve";
+            meta.textContent = err instanceof Error ? err.message : "Could not approve";
+          });
+      });
+      row.append(text, approve);
+      block.append(row);
+    }
+    return block;
+  }
+
   private handlePlay() {
     if (this.busy || !this.session || this.session.needsName || !this.session.name) {
       return;
@@ -644,13 +1369,15 @@ export class MainMenu {
     this.walletBtn.disabled = busy;
     this.playBtn.disabled = busy;
     this.registerBtn.disabled = busy;
+    this.adminBtn.disabled = busy;
+    this.referralBtn.disabled = busy;
     this.signOutBtn.disabled = busy;
     this.nameInput.disabled = busy || Boolean(this.session?.name);
     this.syncAuthButtons();
     if (busy) {
       if (!this.walletBtn.hidden) this.walletBtn.textContent = "Connecting…";
       if (!this.registerBtn.hidden) this.registerBtn.textContent = "Creating…";
-      if (!this.playBtn.hidden) this.playBtn.textContent = "Entering…";
+      if (!this.playBtn.hidden) this.playLabel.textContent = "Entering…";
     }
     if (message) {
       this.statusEl.hidden = false;
@@ -661,6 +1388,7 @@ export class MainMenu {
       this.statusEl.textContent = "";
       this.statusEl.classList.remove("main-menu-status--error");
     }
+    if (!busy) this.maybeOpenReferMenu();
   }
 
   showError(message: string) {
@@ -668,6 +1396,8 @@ export class MainMenu {
   }
 
   destroy() {
+    this.closeReferralMenu();
+    this.closeAdminMenu();
     this.stopWalletHandoff?.();
     this.stopWalletHandoff = undefined;
     this.previewHotbar?.destroy();

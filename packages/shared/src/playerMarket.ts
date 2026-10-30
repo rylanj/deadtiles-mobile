@@ -17,6 +17,7 @@ import {
   isItemRarity,
   isPocketSlot,
   isWeaponSlot,
+  isQuestBoundEntry,
   itemFitsInSlot,
   makeInventoryEntry,
   maxStackForItem,
@@ -109,15 +110,15 @@ export function marketFeePercent(reputation: number): number {
 export function marketListingCap(reputation: number): number {
   switch (factionStanding(reputation)) {
     case "allied":
-      return 30;
+      return 50;
     case "friendly":
-      return 20;
+      return 25;
     case "warm":
-      return 10;
+      return 12;
     case "neutral":
-      return 5;
+      return 6;
     case "wary":
-      return 1;
+      return 3;
     default:
       return 0;
   }
@@ -279,7 +280,7 @@ export function isMarketListableSlot(
   const slot = inventory[slotIndex];
   if (!slot || !Number.isInteger(slot.quantity) || slot.quantity <= 0) return false;
   const def = getItemDefinition(slot.id);
-  if (!def || def.id === "banknote") return false;
+  if (!def || def.id === "banknote" || isQuestBoundEntry(slot)) return false;
   if (slotIndex === equippedSlot && copiesOutside(inventory, slotIndex, slot.id) > 0) {
     return false;
   }

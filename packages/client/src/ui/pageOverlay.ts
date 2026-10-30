@@ -32,6 +32,8 @@ const PAGE_OVERLAY_IDS = [
   "structure-build-hud",
   "slot-drag-layer",
   "combat-lock-banner",
+  "restart-banner",
+  "notice-stack",
   "radio-caption",
 ];
 

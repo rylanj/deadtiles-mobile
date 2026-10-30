@@ -59,9 +59,9 @@ function clipIsoGroundDiamondAt(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
+  hw = (TILE_WIDTH + TILE_DISPLAY_BLEED) / 2,
+  hh = (TILE_HEIGHT + TILE_DISPLAY_BLEED) / 2,
 ) {
-  const hw = (TILE_WIDTH + TILE_DISPLAY_BLEED) / 2;
-  const hh = (TILE_HEIGHT + TILE_DISPLAY_BLEED) / 2;
   ctx.beginPath();
   ctx.moveTo(cx, cy - hh);
   ctx.lineTo(cx + hw, cy);
@@ -155,6 +155,13 @@ function canvasHasOpaquePixels(canvas: HTMLCanvasElement): boolean {
 }
 
 /**
+ * Hospital art is much larger than one tile. A 1x diamond throws that detail
+ * away, and zooming the camera then softens it further. Bake and stamp at
+ * the max camera zoom.
+ */
+const HOSPITAL_FLOOR_DETAIL = 2;
+
+/**
  * Bake a ground tile diamond.
  *
  * Square interior floors (`tile-wood`, `tile-ground-tiles`, `tile-hospital`,
@@ -175,8 +182,9 @@ function bakeDiamondCanvas(
   srcH: number,
   baseKey = "",
 ): HTMLCanvasElement {
-  const w = groundTileCanvasWidth();
-  const h = groundTileCanvasHeight();
+  const detail = baseKey === "tile-hospital" ? HOSPITAL_FLOOR_DETAIL : 1;
+  const w = groundTileCanvasWidth() * detail;
+  const h = groundTileCanvasHeight() * detail;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -189,7 +197,7 @@ function bakeDiamondCanvas(
   const hh = h / 2;
 
   ctx.save();
-  clipIsoGroundDiamondAt(ctx, cx, cy);
+  clipIsoGroundDiamondAt(ctx, cx, cy, hw, hh);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
@@ -351,7 +359,9 @@ function isContinuousFloorKey(key: string): boolean {
  * when the camera zooms in, so they bake at the max camera zoom.
  */
 function interiorFloorResolution(baseKey: string): number {
-  return baseKey === "tile-diner" ? 2 : 1;
+  return baseKey === "tile-diner" || baseKey === "tile-hospital"
+    ? HOSPITAL_FLOOR_DETAIL
+    : 1;
 }
 
 export type GroundFloorOverlay = {

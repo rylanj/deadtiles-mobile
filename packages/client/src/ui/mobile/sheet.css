@@ -717,8 +717,10 @@ button.ms-row,
   image-rendering: pixelated;
 }
 .ms-kv-v {
+  flex-shrink: 0;
   font-weight: 700;
   text-align: right;
+  white-space: nowrap;
   color: var(--ms-strong);
 }
 .ms-kv--total {

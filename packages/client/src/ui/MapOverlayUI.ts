@@ -10,11 +10,11 @@ import {
   MAP_MARKER_LIMIT,
   MAP_MARKER_SHAPES,
   MAP_MARKER_TEXT_LIMIT,
+  birchportMapChartBuffer,
   birchportMapChartKind,
   birchportMapChartRevision,
   birchportMapPois,
   birchportSafezoneRects,
-  getBirchportMapChart,
   parseMapMarkers,
   serializeMapMarkersJson,
   worldMaxX,
@@ -38,6 +38,40 @@ const MAP_PIXELS = 400;
 const MAP_VIEW_MIN = 40;
 /** Far enough to frame the county border from Birchport, plus land past it. */
 const MAP_VIEW_MAX = 4200;
+/**
+ * While the chart is still filling, or live tiles change under a still view,
+ * repaint at this pace. Panning and zooming still paint on the same frame.
+ */
+const MAP_TERRAIN_REPAINT_MS = 250;
+
+/**
+ * Inclusive pixel indexes whose centers sample `tile`.
+ * The chart fill uses floor(origin + (pixel + 0.5) * scale).
+ * Returns null when that tile covers no pixel.
+ */
+function tilePixelSpan(
+  tile: number,
+  origin: number,
+  scale: number,
+): { min: number; max: number } | null {
+  if (!(scale > 0) || !Number.isFinite(tile) || !Number.isFinite(origin)) return null;
+  const lo = (tile - origin) / scale - 0.5;
+  const hi = (tile + 1 - origin) / scale - 0.5;
+  const min = Math.ceil(lo - 1e-9);
+  const max = Math.floor(hi - 1e-9);
+  if (max < min) return null;
+  return { min, max };
+}
+
+function clipPixelSpan(
+  span: { min: number; max: number } | null,
+): { min: number; max: number } | null {
+  if (!span) return null;
+  const min = span.min < 0 ? 0 : span.min;
+  const max = span.max >= MAP_PIXELS ? MAP_PIXELS - 1 : span.max;
+  if (max < min) return null;
+  return { min, max };
+}
 const MAP_VIEW_STORAGE_KEY = "deadtiles.mapView";
 
 type SavedMapView = {
@@ -255,6 +289,7 @@ export class MapOverlayUI {
   private canvas: HTMLCanvasElement;
   private markerCanvas: HTMLCanvasElement;
   private labelsLayer: HTMLElement;
+  private youLabel: HTMLElement;
   private questLayer: HTMLElement;
   private radioLayer: HTMLElement;
   private poiLayer: HTMLElement;
@@ -299,10 +334,12 @@ export class MapOverlayUI {
     this.swallowMarkerEscapeRepeat = true;
     this.dismissMarkerEditor(true);
   };
-  private lastKindsSize = -1;
-  private lastPaintKey = "";
-  private centerTX = Number.NaN;
-  private centerTY = Number.NaN;
+  private terrainCtx: CanvasRenderingContext2D | null = null;
+  private terrainImage: ImageData | null = null;
+  private terrainViewKey = "";
+  private terrainRevision = -1;
+  private terrainKindsSize = -1;
+  private terrainPaintedAt = 0;
   private viewSpan = MAP_VIEW_TILES;
   private followPlayer = true;
   private dragging = false;
@@ -361,6 +398,11 @@ export class MapOverlayUI {
     this.labelsLayer = document.createElement("div");
     this.labelsLayer.className = "map-labels";
 
+    this.youLabel = document.createElement("span");
+    this.youLabel.className = "map-you-label";
+    this.youLabel.textContent = "You are here";
+    this.youLabel.hidden = true;
+
     this.questLayer = document.createElement("div");
     this.questLayer.className = "map-quest-layer";
 
@@ -382,6 +424,7 @@ export class MapOverlayUI {
       this.poiLayer,
       this.questLayer,
       this.radioLayer,
+      this.youLabel,
       this.customLayer,
     );
     if (this.phone) {
@@ -589,7 +632,7 @@ export class MapOverlayUI {
   }
 
   private clampView() {
-    const chart = this.mapChart ?? getBirchportMapChart();
+    const chart = this.chartBuffer();
     const { halfX, halfY } = this.visibleHalfSpans();
     const minCX = chart.minX + halfX;
     const maxCX = chart.minX + chart.width - halfX;
@@ -626,18 +669,19 @@ export class MapOverlayUI {
     this.dismissMarkerEditor(false);
     this.visible = false;
     this.overlay.hidden = true;
-    this.centerTX = Number.NaN;
-    this.centerTY = Number.NaN;
     this.dragging = false;
     this.lastTapAt = 0;
-    this.lastKindsSize = -1;
-    this.lastPaintKey = "";
+    this.terrainViewKey = "";
+    this.terrainRevision = -1;
+    this.terrainKindsSize = -1;
+    this.terrainPaintedAt = 0;
     this.lastLabelKey = "";
     this.lastQuestKey = "";
     this.lastRadioKey = "";
     this.lastPoiKey = "";
     this.lastCustomDataKey = "";
     this.labelsLayer.replaceChildren();
+    this.youLabel.hidden = true;
     this.poiLayer.replaceChildren();
     this.questLayer.replaceChildren();
     this.radioLayer.replaceChildren();
@@ -650,9 +694,38 @@ export class MapOverlayUI {
     return this.visible;
   }
 
+  /** Chart bytes. Does not paint towns; boot and the world step do that. */
+  private chartBuffer(): BirchportMapChart {
+    if (!this.mapChart) this.mapChart = birchportMapChartBuffer();
+    return this.mapChart;
+  }
+
   /**
-   * Paint terrain from already-rendered tile kinds when the center or
-   * drawn-tile set changes, then redraw entity markers and place names.
+   * Repaint the terrain image when the view moves. Chart fills and live-tile
+   * edits under a still view wait briefly so opening the map does not rebuild
+   * the image every frame.
+   */
+  private terrainDirty(kindsSize: number): boolean {
+    const viewKey = `${this.viewX.toFixed(1)}|${this.viewY.toFixed(1)}|${Math.round(this.viewSpan)}`;
+    const viewChanged = viewKey !== this.terrainViewKey;
+    const dataChanged =
+      birchportMapChartRevision() !== this.terrainRevision ||
+      kindsSize !== this.terrainKindsSize;
+    if (!viewChanged && !dataChanged) return false;
+    if (viewChanged) return true;
+    return performance.now() - this.terrainPaintedAt >= MAP_TERRAIN_REPAINT_MS;
+  }
+
+  private rememberTerrainPaint(kindsSize: number) {
+    this.terrainViewKey = `${this.viewX.toFixed(1)}|${this.viewY.toFixed(1)}|${Math.round(this.viewSpan)}`;
+    this.terrainRevision = birchportMapChartRevision();
+    this.terrainKindsSize = kindsSize;
+    this.terrainPaintedAt = performance.now();
+  }
+
+  /**
+   * Paint terrain from the chart, then stamp tiles already drawn in the
+   * overworld. Entity markers and place names are drawn after that.
    */
   render(
     centerX: number,
@@ -670,13 +743,8 @@ export class MapOverlayUI {
       this.viewY = centerY;
     }
 
-    const paintKey = `${this.viewX.toFixed(1)}|${this.viewY.toFixed(1)}|${Math.round(this.viewSpan)}|${kinds.size}|${birchportMapChartRevision()}`;
-    if (paintKey !== this.lastPaintKey) {
-      this.lastPaintKey = paintKey;
-      this.centerTX = Math.floor(this.viewX);
-      this.centerTY = Math.floor(this.viewY);
-      this.lastKindsSize = kinds.size;
-      this.paintTerrain(kinds);
+    if (this.terrainDirty(kinds.size) && this.paintTerrain(kinds)) {
+      this.rememberTerrainPaint(kinds.size);
     }
 
     if (this.draft?.follow) {
@@ -686,6 +754,7 @@ export class MapOverlayUI {
     }
 
     this.paintMarkers(markers);
+    this.paintYouLabel(markers);
     this.paintSettlementLabels(settlements);
     this.paintPoiMarkers();
     this.paintQuestMarkers(questMarkers);
@@ -693,12 +762,21 @@ export class MapOverlayUI {
     this.paintCustomMarkers();
   }
 
-  private paintTerrain(kinds: ReadonlyMap<string, MinimapTileKind>) {
-    const ctx = this.canvas.getContext("2d");
-    if (!ctx) return;
-    if (!this.mapChart) this.mapChart = getBirchportMapChart();
+  private terrainContext(): CanvasRenderingContext2D | null {
+    if (this.terrainCtx) return this.terrainCtx;
+    this.terrainCtx = this.canvas.getContext("2d", { willReadFrequently: true });
+    return this.terrainCtx;
+  }
 
-    const image = ctx.createImageData(MAP_PIXELS, MAP_PIXELS);
+  private paintTerrain(kinds: ReadonlyMap<string, MinimapTileKind>): boolean {
+    const ctx = this.terrainContext();
+    if (!ctx) return false;
+    const chart = this.chartBuffer();
+
+    if (!this.terrainImage || this.terrainImage.width !== MAP_PIXELS || this.terrainImage.height !== MAP_PIXELS) {
+      this.terrainImage = ctx.createImageData(MAP_PIXELS, MAP_PIXELS);
+    }
+    const image = this.terrainImage;
     const data = image.data;
     const left = this.viewX - this.viewSpan / 2;
     const top = this.viewY - this.viewSpan / 2;
@@ -709,12 +787,8 @@ export class MapOverlayUI {
       const ty = Math.floor(top + (py + 0.5) * scale);
       for (let px = 0; px < MAP_PIXELS; px++) {
         const tx = Math.floor(left + (px + 0.5) * scale);
-        const live = kinds.get(`${tx},${ty}`);
-        const chartKind = live
-          ? undefined
-          : CHART_KIND[birchportMapChartKind(this.mapChart, tx, ty)];
-        const kind = live ?? chartKind;
-        const [r, g, b, a] = kind ? KIND_COLOR[kind] : COLOR_EMPTY;
+        const chartKind = CHART_KIND[birchportMapChartKind(chart, tx, ty)];
+        const [r, g, b, a] = chartKind ? KIND_COLOR[chartKind] : COLOR_EMPTY;
         data[i++] = r;
         data[i++] = g;
         data[i++] = b;
@@ -722,7 +796,45 @@ export class MapOverlayUI {
       }
     }
 
+    this.stampLiveKinds(data, kinds, left, top, scale);
     ctx.putImageData(image, 0, 0);
+    return true;
+  }
+
+  /**
+   * Overwrite chart pixels with tiles the overworld has actually drawn.
+   * Pixel centers match the chart fill: floor(origin + (pixel + 0.5) * scale).
+   */
+  private stampLiveKinds(
+    data: Uint8ClampedArray,
+    kinds: ReadonlyMap<string, MinimapTileKind>,
+    left: number,
+    top: number,
+    scale: number,
+  ) {
+    for (const [key, kind] of kinds) {
+      const comma = key.indexOf(",");
+      if (comma <= 0) continue;
+      const tx = Number(key.slice(0, comma));
+      const ty = Number(key.slice(comma + 1));
+      if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
+      const color = KIND_COLOR[kind];
+      if (!color) continue;
+      const pxSpan = clipPixelSpan(tilePixelSpan(tx, left, scale));
+      const pySpan = clipPixelSpan(tilePixelSpan(ty, top, scale));
+      if (!pxSpan || !pySpan) continue;
+      const [r, g, b, a] = color;
+      for (let py = pySpan.min; py <= pySpan.max; py++) {
+        let i = (py * MAP_PIXELS + pxSpan.min) * 4;
+        for (let px = pxSpan.min; px <= pxSpan.max; px++) {
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+          data[i + 3] = a;
+          i += 4;
+        }
+      }
+    }
   }
 
   private paintMarkers(markers: MapOverlayMarker[]) {
@@ -754,6 +866,36 @@ export class MapOverlayUI {
         ctx.fillRect(px, py, 2, 2);
       }
     }
+  }
+
+  /** "You are here" sits above the green square in HTML so it stays sharp when the map scales. */
+  private paintYouLabel(markers: readonly MapOverlayMarker[]) {
+    const self = markers.find((marker) => marker.kind === "self");
+    if (!self) {
+      this.youLabel.hidden = true;
+      return;
+    }
+    const { px, py } = this.project(self.x, self.y);
+    if (px < 0 || py < 0 || px >= MAP_PIXELS || py >= MAP_PIXELS) {
+      this.youLabel.hidden = true;
+      return;
+    }
+    // Gap is in map pixels so it clears the square at every zoom and screen size.
+    const below = py < 18;
+    const anchorY = below ? py + 8 : py - 8;
+    this.youLabel.hidden = false;
+    const frameWidth = this.mapFrame.clientWidth;
+    const labelWidth = this.youLabel.offsetWidth;
+    let anchorX = px;
+    if (frameWidth > 0 && labelWidth > 0) {
+      const half = (labelWidth / frameWidth) * MAP_PIXELS * 0.5 + 4;
+      anchorX = Math.max(half, Math.min(MAP_PIXELS - half, px));
+    }
+    this.youLabel.style.left = `${(anchorX / MAP_PIXELS) * 100}%`;
+    this.youLabel.style.top = `${(anchorY / MAP_PIXELS) * 100}%`;
+    this.youLabel.style.transform = below
+      ? "translate(-50%, 0)"
+      : "translate(-50%, -100%)";
   }
 
   /** Dashed edge of walkable Ashen County. Land past the line is scenery. */
@@ -880,6 +1022,7 @@ export class MapOverlayUI {
       { label: "County border", swatch: "county" },
       { label: "Safezone", swatch: "safezone" },
       { label: "Building", swatch: "building" },
+      { label: "You are here", swatch: "you" },
       { label: "Place", swatch: "place" },
       { label: "Marker", swatch: "marker" },
       { label: "Task", swatch: "task" },
@@ -1061,6 +1204,8 @@ export class MapOverlayUI {
     this.visible = false;
     this.overlay.hidden = true;
     this.overlay.remove();
+    this.terrainCtx = null;
+    this.terrainImage = null;
     document.body.classList.remove("map-open");
   }
 
@@ -1149,7 +1294,7 @@ export class MapOverlayUI {
   }
 
   private clampMarkerPoint(x: number, y: number): { x: number; y: number } {
-    const chart = this.mapChart ?? getBirchportMapChart();
+    const chart = this.chartBuffer();
     return {
       x: Math.min(chart.minX + chart.width, Math.max(chart.minX, x)),
       y: Math.min(chart.minY + chart.height, Math.max(chart.minY, y)),

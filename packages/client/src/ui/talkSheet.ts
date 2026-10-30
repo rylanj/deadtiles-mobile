@@ -25,6 +25,16 @@ const PUSH_TITLE: Record<TalkPush, string> = {
   story: "Story",
 };
 
+function pushTitle(
+  kind: TalkPush,
+  sheets: Partial<Record<TalkPush, HTMLElement>>,
+  collectReady: boolean,
+): string {
+  if (kind === "jobs" && sheets.story && !sheets.jobs) return "Story";
+  if (kind === "buyback" && collectReady) return "Collect notes";
+  return PUSH_TITLE[kind];
+}
+
 const REOPEN_LABEL: Record<TalkPush, string> = {
   jobs: "View jobs",
   wire: "View wire",
@@ -116,6 +126,7 @@ export class TalkSheet {
   private shownLine: string | null = null;
   private subTitle = "";
   private keyboardHandler: (() => void) | null = null;
+  private byeCloseTimer: number | null = null;
 
   constructor(
     tone: "ashen" | "red",
@@ -209,7 +220,9 @@ export class TalkSheet {
       this.closeAsk();
     }
     const services = buttons.filter((btn) => !!btn.dataset.iconId);
-    this.questions = buttons.filter((btn) => !btn.dataset.iconId);
+    this.questions = buttons.filter(
+      (btn) => !btn.dataset.iconId && btn.dataset.lineId !== "bye",
+    );
     this.tilesEl.replaceChildren();
     for (const source of services) {
       const iconId = source.dataset.iconId ?? "";
@@ -221,7 +234,16 @@ export class TalkSheet {
       }
       const icon = itemIconImg(iconId);
       if (icon) tile.append(icon);
-      const label = TILE_LABEL[iconId] ?? speechLabel(source);
+      const ready = source.classList.contains("ashen-dialog-speech-btn--ready");
+      if (ready) {
+        tile.classList.add("ms-tile--ready");
+        const badge = document.createElement("span");
+        badge.className = "ms-tile-badge";
+        badge.textContent = "✓";
+        badge.setAttribute("aria-hidden", "true");
+        tile.append(badge);
+      }
+      const label = ready && iconId === "banknote" ? "Collect" : TILE_LABEL[iconId] ?? speechLabel(source);
       tile.append(document.createTextNode(label));
       tile.setAttribute("aria-label", speechLabel(source));
       tile.addEventListener("click", () => source.click());
@@ -359,7 +381,24 @@ export class TalkSheet {
     });
   }
 
+  /** Show the farewell, then drop the talk window. */
+  scheduleByeClose(close: () => void, reply = ""): void {
+    this.cancelByeClose();
+    const delay = Math.min(2200, Math.max(900, reply.trim().length * 18));
+    this.byeCloseTimer = window.setTimeout(() => {
+      this.byeCloseTimer = null;
+      close();
+    }, delay);
+  }
+
+  cancelByeClose(): void {
+    if (this.byeCloseTimer == null) return;
+    window.clearTimeout(this.byeCloseTimer);
+    this.byeCloseTimer = null;
+  }
+
   dispose(): void {
+    this.cancelByeClose();
     this.closeAsk();
     this.watchKeyboard(false);
   }
@@ -455,7 +494,11 @@ export function syncTalkSheet(bind: TalkSheetBindings): void {
   if (kind && nodes.length > 0 && fullPage) {
     bind.sheet.closeCards();
     bind.sheet.closeAsk();
-    const title = kind === "jobs" && sheets.story && !sheets.jobs ? "Story" : PUSH_TITLE[kind];
+    const title = pushTitle(
+      kind,
+      sheets,
+      !!active?.classList.contains("ashen-dialog-speech-btn--ready"),
+    );
     const lead = kind === "wire" || kind === "buyback" ? firstSentence(leadText(replyNodes)) : "";
     bind.sheet.fillSub(title, nodes, lead);
     bind.sheet.subMetaEl.hidden = true;
@@ -474,18 +517,28 @@ export function syncTalkSheet(bind: TalkSheetBindings): void {
   bind.sheet.jobDetailKey = "";
   bind.sheet.closeSub();
   if (kind && nodes.length > 0) {
-    const title = kind === "jobs" && sheets.story && !sheets.jobs ? "Story" : PUSH_TITLE[kind];
+    const title = pushTitle(
+      kind,
+      sheets,
+      !!active?.classList.contains("ashen-dialog-speech-btn--ready"),
+    );
     bind.sheet.fillCards(title, nodes, "");
     pinTalkBar(bind.sheet.cardsBarEl, bind.sheet.cardsEl, kind);
   } else {
     bind.sheet.closeCards();
   }
   if (bind.push && bind.nav.dismissed && nodesFor(bind.push, sheets).length > 0) {
+    const collectReady = !!bind.speechListEl.querySelector(
+      ".ashen-dialog-speech-btn--ready",
+    );
     bind.sheet.replyEl.append(
-      reopenButton(REOPEN_LABEL[bind.push], () => {
-        bind.nav.reopen();
-        bind.rerender();
-      }),
+      reopenButton(
+        bind.push === "buyback" && collectReady ? "Collect notes" : REOPEN_LABEL[bind.push],
+        () => {
+          bind.nav.reopen();
+          bind.rerender();
+        },
+      ),
     );
   }
   if (sheets.story && bind.push !== "jobs") {

@@ -123,6 +123,8 @@ export const NECK_SLOT_INDEX = ARMOR_SLOT_INDEX + 1;
 export const LEFT_HAND_SLOT_INDEX = ARMOR_SLOT_INDEX + 2;
 export const RIGHT_HAND_SLOT_INDEX = ARMOR_SLOT_INDEX + 3;
 export const BACKPACK_FANNY_ID = "backpack_fanny";
+/** Invitation gift. Never rolled as world loot or sold by traders. */
+export const GIFT_BOX_ITEM_ID = "gift_box";
 export const BACKPACK_UTILITY_ID = "backpack_utility";
 export const BACKPACK_SMALL_ID = "backpack_small";
 export const BACKPACK_HUNTING_ID = "backpack_hunting";
@@ -140,7 +142,7 @@ export const MAX_ITEM_STACK = 10;
 /** Max stack for ammunition and screws. */
 export const MAX_BULK_ITEM_STACK = 100;
 /** Max stack for banknotes. */
-export const MAX_BANKNOTE_STACK = 10_000;
+export const MAX_BANKNOTE_STACK = 50_000;
 
 /** Instance rarity for weapons / notable loot (missing → common). */
 export type ItemRarity = "common" | "uncommon" | "rare" | "epic";
@@ -596,6 +598,14 @@ export const INVENTORY_ITEMS: ItemDefinition[] = [
   /** Fuel for Fireplace1 — looted from felled trees. */
   { id: "wood", name: "Wood", category: "crafting", stackable: false, weight: 0.5 },
   { id: "banknote", name: "Banknote", category: "junk", stackable: true, weight: 0.01 },
+  {
+    id: GIFT_BOX_ITEM_ID,
+    name: "Gift Box",
+    category: "junk",
+    stackable: true,
+    weight: 0.3,
+    consumeDurationMs: 2_000,
+  },
   { id: "dogtag", name: "Dog Tag", category: "junk", stackable: true, weight: 0.02 },
   { id: "lighter", name: "Lighter", category: "junk", stackable: false, weight: 0.05, maxDurability: 20 },
   { id: "lockpick", name: "Lockpick Kit", category: "junk", stackable: false, weight: 0.05, maxDurability: 5 },
@@ -922,6 +932,12 @@ export function isQuestKeepsakeItem(itemId: string | undefined): boolean {
   );
 }
 
+/** Unique quest papers and items lent for a job. They cannot be dropped. */
+export function isQuestBoundEntry(entry: InventoryEntry | null | undefined): boolean {
+  if (!entry || entry.quantity <= 0) return false;
+  return entry.loaner === true || isQuestKeepsakeItem(entry.id);
+}
+
 /** Pickup popup copy for daily-job papers. Story papers use STORY_FIND_TEXT. */
 const QUEST_PAPER_TEXT: Readonly<Record<string, string>> = {
   [CARAVAN_MANIFEST_ITEM_ID]:
@@ -957,7 +973,7 @@ export function isConsumable(itemId: string): boolean {
 }
 
 /** Synced on the player while a consume channel is active. */
-export type ConsumeAction = "eat" | "drink" | "bandage" | "use" | "learn" | "read";
+export type ConsumeAction = "eat" | "drink" | "bandage" | "use" | "learn" | "read" | "open";
 
 export const CONSUME_ACTION_LABELS: Record<ConsumeAction, string> = {
   eat: "Eating",
@@ -966,10 +982,12 @@ export const CONSUME_ACTION_LABELS: Record<ConsumeAction, string> = {
   use: "Using",
   learn: "Learning",
   read: "Reading",
+  open: "Opening",
 };
 
 /** Caption kind shown above the player while consuming this item. */
 export function getConsumeAction(itemId: string): ConsumeAction {
+  if (itemId === GIFT_BOX_ITEM_ID) return "open";
   if (isSkillMagazine(itemId)) return "read";
   if (isWeaponBlueprint(itemId)) return "learn";
   if (itemId === "bandages" || itemId === "rags") return "bandage";
@@ -997,6 +1015,7 @@ export function canUseConsumable(
 ): boolean {
   const def = ITEM_BY_ID.get(itemId);
   if (!def?.consumeDurationMs) return false;
+  if (itemId === GIFT_BOX_ITEM_ID) return true;
   if (isWeaponBlueprint(itemId) || isSkillMagazine(itemId)) return true;
 
   if (def.treatsInfection) return true;
@@ -2102,6 +2121,66 @@ export function loanerSlotIndices(inventory: Inventory, itemId: string): number[
     if (slot?.id === itemId && slot.loaner === true) out.push(i);
   }
   return out;
+}
+
+function stripQuestBoundFromEntry(
+  entry: InventoryEntry | null,
+  bound: InventoryEntry[],
+): InventoryEntry | null {
+  if (!entry) return null;
+  if (isQuestBoundEntry(entry)) {
+    bound.push(cloneInventoryEntry(entry));
+    return null;
+  }
+  if (!entry.contents?.length) return entry;
+  const contents = entry.contents.map((cell) =>
+    stripQuestBoundFromEntry(cell, bound),
+  );
+  const next = cloneInventoryEntry(entry);
+  next.contents = contents;
+  return next;
+}
+
+/** Pull quest papers and loaners out of the pack so they are not dropped. */
+export function extractQuestBoundItems(inventory: Inventory): {
+  inventory: Inventory;
+  bound: InventoryEntry[];
+} {
+  const bound: InventoryEntry[] = [];
+  const next = cloneInventory(inventory);
+  for (let i = 0; i < next.length; i++) {
+    next[i] = stripQuestBoundFromEntry(next[i], bound);
+  }
+  return { inventory: next, bound };
+}
+
+function stripItemIdsFromEntry(
+  entry: InventoryEntry | null,
+  itemIds: ReadonlySet<string>,
+): InventoryEntry | null {
+  if (!entry) return null;
+  if (itemIds.has(entry.id)) return null;
+  if (!entry.contents?.length) return entry;
+  const contents = entry.contents.map((cell) =>
+    stripItemIdsFromEntry(cell, itemIds),
+  );
+  const next = cloneInventoryEntry(entry);
+  next.contents = contents;
+  return next;
+}
+
+/** Remove unique quest papers from the pack, including sealed backpacks. */
+export function removeItemIdsFromInventory(
+  inventory: Inventory,
+  itemIds: readonly string[],
+): Inventory {
+  if (itemIds.length === 0) return inventory;
+  const ids = new Set(itemIds);
+  const next = cloneInventory(inventory);
+  for (let i = 0; i < next.length; i++) {
+    next[i] = stripItemIdsFromEntry(next[i], ids);
+  }
+  return next;
 }
 
 export function getAmmoTypeForWeapon(weaponId: string): string | null {
@@ -3333,6 +3412,41 @@ export function serializeStorageBoxInventory(
     );
   }
   return JSON.stringify(slots);
+}
+
+/** Put stacks into empty or matching box slots. Null when they do not fit. */
+export function stowItemsInStorageBox(
+  container: Inventory,
+  items: readonly { id: string; quantity: number }[],
+  slotCount: number,
+): Inventory | null {
+  const next = parseStorageBoxInventory(
+    serializeStorageBoxInventory(container, slotCount),
+    slotCount,
+  );
+  for (const item of items) {
+    if (!getItemDefinition(item.id) || item.quantity <= 0) return null;
+    let remaining = item.quantity;
+    const cap = maxStackForItem(item.id);
+    if (cap <= 0) return null;
+    for (let i = 0; i < next.length && remaining > 0; i++) {
+      const slot = next[i];
+      if (!slot || slot.id !== item.id) continue;
+      const room = cap - slot.quantity;
+      if (room <= 0) continue;
+      const add = Math.min(room, remaining);
+      slot.quantity += add;
+      remaining -= add;
+    }
+    for (let i = 0; i < next.length && remaining > 0; i++) {
+      if (next[i]) continue;
+      const add = Math.min(cap, remaining);
+      next[i] = makeInventoryEntry(item.id, add);
+      remaining -= add;
+    }
+    if (remaining > 0) return null;
+  }
+  return next;
 }
 
 /** Move a player stack into a storage box. Swap only when the box item fits the player slot. */

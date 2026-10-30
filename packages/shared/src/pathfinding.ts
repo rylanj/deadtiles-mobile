@@ -31,6 +31,14 @@ const CONNECT_PROBE_MAX = 900;
  */
 export const ZOMBIE_PATHFIND_MAX_NODES = 900;
 
+/** Nodes expanded by the most recent {@link findPath} call. */
+let pathfindNodesExplored = 0;
+
+/** Read immediately after {@link findPath}. Later searches overwrite it. */
+export function lastPathfindNodes(): number {
+  return pathfindNodesExplored;
+}
+
 // Octile distance — admissible heuristic for 8-directional grids
 function heuristic(ax: number, ay: number, bx: number, by: number): number {
   const dx = Math.abs(ax - bx);
@@ -236,6 +244,8 @@ export function findPath(
   isWalkable: (tx: number, ty: number) => boolean,
   maxNodes?: number,
 ): PathPoint[] | null {
+  let explored = 0;
+  try {
   const sTX = Math.floor(startX);
   const sTY = Math.floor(startY);
   const gTX = Math.floor(goalX);
@@ -272,8 +282,6 @@ export function findPath(
     g: 0,
     f: heuristic(sTX, sTY, gTX, gTY),
   });
-
-  let explored = 0;
 
   while (open.length > 0 && explored < limit) {
     const cur = heapPop(open);
@@ -316,6 +324,9 @@ export function findPath(
   }
 
   return null;
+  } finally {
+    pathfindNodesExplored = explored;
+  }
 }
 
 /**

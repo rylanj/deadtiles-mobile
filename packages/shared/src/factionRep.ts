@@ -19,8 +19,12 @@ export const FACTION_REP_WARM = 1000;
 export const FACTION_REP_FRIENDLY = 2500;
 export const FACTION_REP_ALLIED = 5000;
 
-/** Hostile band recovers +1 toward 0 every this many wall-clock ms (online or offline). */
-export const FACTION_HOSTILE_RECOVERY_MS = 10 * 60 * 1000;
+/**
+ * Hostile climbs +1 toward 0 this often. The bottom of Hostile (-100) reaches
+ * Wary (0) in 30 real minutes, online or offline.
+ */
+export const FACTION_HOSTILE_RECOVERY_MS =
+  (30 * 60 * 1000) / (FACTION_REP_WARY - FACTION_REP_HOSTILE);
 export const FACTION_HOSTILE_RECOVERY_PER_INTERVAL = 1;
 
 export type FactionStanding =

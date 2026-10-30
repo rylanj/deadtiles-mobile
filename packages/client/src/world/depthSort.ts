@@ -257,6 +257,15 @@ export function overworldObjectDepthCeiling(): number {
 }
 
 /**
+ * Loot / interact hover diamond. Above world sprites (including walls) so the
+ * ring stays readable. The hovered asset keeps its normal depth and can stay
+ * hidden behind a wall. Night and weather sit higher.
+ */
+export function lootHoverOutlineDepth() {
+  return overworldObjectDepthCeiling() + 1;
+}
+
+/**
  * Sub-unit band a wall takes when it stands in front of a building cuboid:
  * above the cuboid (integer depth) but below entities, which lift into the
  * +1..+1.5 band so players walking the street still pass in front of walls

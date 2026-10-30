@@ -1,5 +1,7 @@
 /* Main menu and wallet picker touch sizes (design/mobile-dialogs PLAN, not mocked) */
 body.is-mobile .main-menu-sign-out,
+body.is-mobile .main-menu-admin,
+body.is-mobile .main-menu-referral,
 body.is-mobile .wallet-picker-cancel {
   min-height: 44px;
   padding-top: 10px;

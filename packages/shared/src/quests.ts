@@ -43,13 +43,26 @@ import {
 } from "./redOrder.js";
 import {
   CARAVAN_MANIFEST_ITEM_ID,
+  isQuestKeepsakeItem,
   SUPPLY_LIST_ITEM_ID,
   WAGON_NOTE_ITEM_ID,
 } from "./items.js";
-import { questTargetBuildingLabel } from "./questTargets.js";
+import { BIRCHPORT_BARRACKS_MESS_HALL } from "./birchportBarracks.js";
+import { findBirchportHospital } from "./birchport.js";
+import {
+  ashenMarketBuilding,
+  birchportRedOrderSupermarket,
+  questTargetBuildingLabel,
+} from "./questTargets.js";
 import { ASHEN_MARKET_TRADER_NAME } from "./trade.js";
 import { getBuildingAt } from "./worldgen.js";
-import { QUEST_ID_FOUND_ON_THE_ROAD, STORY_QUESTS } from "./storyQuests.js";
+import {
+  STORY_QUESTS,
+  STORY_TURN_IN_ITEMS,
+  storyReportPlace,
+  storyStepPlace,
+  type StoryStepPlace,
+} from "./storyQuests.js";
 
 export type QuestFaction = "redOrder" | "ashenTraders" | "ashenMilitia" | "none";
 
@@ -1223,6 +1236,21 @@ export function getQuestDefinition(
   return QUEST_BY_ID.get(questId);
 }
 
+/** Unique papers for this job. Dropped from the pack when the job is abandoned. */
+export function questBoundItemIds(questId: string): string[] {
+  const ids = new Set<string>();
+  const def = getQuestDefinition(questId);
+  if (def) {
+    for (const obj of def.objectives) {
+      if (obj.itemId && isQuestKeepsakeItem(obj.itemId)) ids.add(obj.itemId);
+    }
+  }
+  for (const id of STORY_TURN_IN_ITEMS[questId] ?? []) {
+    if (isQuestKeepsakeItem(id)) ids.add(id);
+  }
+  return [...ids];
+}
+
 export function createEmptyQuestsState(): PlayerQuestsState {
   return { quests: {}, taskCompletions: {} };
 }
@@ -1492,7 +1520,7 @@ export function canAbandonQuest(
   questId: string,
 ): boolean {
   const def = getQuestDefinition(questId);
-  if (def?.id === QUEST_ID_FOUND_ON_THE_ROAD) return false;
+  if (!def || def.story) return false;
   return isQuestActive(state, questId);
 }
 
@@ -1606,11 +1634,11 @@ function storyQuestFinished(
   return prev?.status === "completed" || (prev?.timesCompleted ?? 0) > 0;
 }
 
-/** Put the next story quest on the giver's dialog. The player still has to accept it. */
+/** Start the next story quest. It is active immediately. The player does not accept it. */
 export function offerStoryQuest(
   state: PlayerQuestsState,
   questId: string,
-  _now = Date.now(),
+  now = Date.now(),
   assignment?: QuestAcceptAssignment,
 ): PlayerQuestsState | null {
   const def = getQuestDefinition(questId);
@@ -1627,8 +1655,9 @@ export function offerStoryQuest(
       ...state.quests,
       [questId]: {
         questId,
-        status: "available",
+        status: "active",
         progress: {},
+        acceptedAt: now,
         timesCompleted: prev?.timesCompleted,
         targetX: assignment?.targetX,
         targetY: assignment?.targetY,
@@ -1639,7 +1668,27 @@ export function offerStoryQuest(
   };
 }
 
-/** Accept a story quest that is already offered. The first story quest is not accepted this way. */
+/**
+ * Turn story quests left on "available" by an older save into active ones.
+ * New offers already start active.
+ */
+export function activateOfferedStoryQuests(
+  state: PlayerQuestsState,
+  now = Date.now(),
+): PlayerQuestsState | null {
+  let current = state;
+  let changed = false;
+  for (const quest of STORY_QUESTS) {
+    if (current.quests[quest.id]?.status !== "available") continue;
+    const accepted = acceptStoryQuest(current, quest.id, now);
+    if (!accepted) continue;
+    current = accepted;
+    changed = true;
+  }
+  return changed ? current : null;
+}
+
+/** Activate a story quest that an older save left waiting. The first story quest is granted on its own. */
 export function acceptStoryQuest(
   state: PlayerQuestsState,
   questId: string,
@@ -2002,6 +2051,99 @@ function questBuildingMapPoint(ox: number, oy: number): { x: number; y: number }
   return { x: ox, y: oy };
 }
 
+type QuestNpcPlace = StoryStepPlace | QuestGiverId;
+
+const questNpcPointCache = new Map<QuestNpcPlace, { x: number; y: number } | null>();
+
+/** Where that person stands. Cached: the buildings do not move. */
+function questNpcMapPoint(place: QuestNpcPlace): { x: number; y: number } | null {
+  const cached = questNpcPointCache.get(place);
+  if (cached !== undefined) return cached;
+  let point: { x: number; y: number } | null = null;
+  if (place === "clark" || place === "ashenDoctor") {
+    const hospital = findBirchportHospital();
+    point = hospital ? questBuildingMapPoint(hospital.ox, hospital.oy) : null;
+  } else if (place === "davis" || place === "ashenCaptain") {
+    const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+    point = { x: mess.ox + mess.w / 2, y: mess.oy + mess.h / 2 };
+  } else if (place === "kevin" || place === "ashenTrader") {
+    const market = ashenMarketBuilding();
+    point = market ? questBuildingMapPoint(market.ox, market.oy) : null;
+  } else if (place === "redOrder") {
+    const market = birchportRedOrderSupermarket();
+    point = market ? questBuildingMapPoint(market.ox, market.oy) : null;
+  }
+  questNpcPointCache.set(place, point);
+  return point;
+}
+
+/** Who the player reports to once the field steps are done. */
+function questReportMapPoint(def: QuestDefinition): { x: number; y: number } | null {
+  if (def.story) return questNpcMapPoint(storyReportPlace(def.id));
+  if (!def.giver) return null;
+  return questNpcMapPoint(def.giver);
+}
+
+/**
+ * Building for this objective. The first unfinished objective is the stage
+ * the map should mark. A finished building is not returned here.
+ */
+function objectiveStagePoint(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+  obj: QuestObjective,
+): { x: number; y: number } | null {
+  if (obj.tileX != null && obj.tileY != null) {
+    return { x: obj.tileX, y: obj.tileY };
+  }
+  if (def.story) {
+    const place = storyStepPlace(obj.id);
+    if (place) return questNpcMapPoint(place);
+  }
+  const prev = state.quests[def.id];
+  if (def.id === QUEST_ID_BOTH_ENDS && obj.id === "search_shelves") {
+    if (prev?.altTargetX == null || prev.altTargetY == null) return null;
+    return questBuildingMapPoint(prev.altTargetX, prev.altTargetY);
+  }
+  if (
+    obj.kind === "clearBuilding" ||
+    obj.kind === "visitTile" ||
+    obj.kind === "searchShelf" ||
+    obj.kind === "haveItem" ||
+    obj.kind === "story"
+  ) {
+    if (prev?.targetX != null && prev.targetY != null) {
+      return questBuildingMapPoint(prev.targetX, prev.targetY);
+    }
+  }
+  if (def.mapPin?.x != null && def.mapPin.y != null) {
+    return { x: def.mapPin.x, y: def.mapPin.y };
+  }
+  return null;
+}
+
+/**
+ * Map point for the stage the player is on.
+ * Field work stays on its building. Once that work is done, the pin moves
+ * to the person who takes the report. Supply runs that never leave the
+ * giver have no building to update, so they stay unmarked.
+ */
+function currentQuestMapPoint(
+  state: PlayerQuestsState,
+  def: QuestDefinition,
+): { x: number; y: number } | null {
+  const prev = state.quests[def.id];
+  if (!prev || prev.status !== "active") return null;
+  const hasField = def.objectives.some((obj) => obj.kind !== "turnInItem");
+  for (const obj of def.objectives) {
+    if (obj.kind === "turnInItem") continue;
+    if (isQuestObjectiveDone(state, def, obj)) continue;
+    return objectiveStagePoint(state, def, obj);
+  }
+  if (!hasField) return null;
+  return questReportMapPoint(def);
+}
+
 export type QuestMapMarker = {
   questId: string;
   title: string;
@@ -2009,32 +2151,19 @@ export type QuestMapMarker = {
   y: number;
 };
 
-/** Overworld point for an accepted job, or null when it has no map location. */
+/** Overworld point for the current stage, or null when that stage has no place. */
 export function resolveQuestMapPoint(
   state: PlayerQuestsState,
   def: QuestDefinition,
 ): { x: number; y: number } | null {
-  const prev = state.quests[def.id];
-  if (!prev || prev.status !== "active") return null;
-  if (prev.targetX != null && prev.targetY != null) {
-    const bld = getBuildingAt(prev.targetX, prev.targetY);
-    if (bld) {
-      return { x: bld.ox + bld.w / 2, y: bld.oy + bld.h / 2 };
-    }
-    return { x: prev.targetX, y: prev.targetY };
-  }
-  if (def.mapPin?.x != null && def.mapPin?.y != null) {
-    return { x: def.mapPin.x, y: def.mapPin.y };
-  }
-  for (const obj of def.objectives) {
-    if (obj.tileX != null && obj.tileY != null) {
-      return { x: obj.tileX, y: obj.tileY };
-    }
-  }
-  return null;
+  return currentQuestMapPoint(state, def);
 }
 
-/** Accepted jobs that have a place to mark. Dropped on abandon / complete. */
+/**
+ * One pin per accepted job, on the building for the current stage.
+ * Pins that land on the same door are stepped apart so each name can be read.
+ * Dropped on abandon / complete.
+ */
 export function listActiveQuestMapMarkers(
   state: PlayerQuestsState,
 ): QuestMapMarker[] {
@@ -2043,16 +2172,27 @@ export function listActiveQuestMapMarkers(
     if (prev.status !== "active") continue;
     const def = getQuestDefinition(prev.questId);
     if (!def || def.stub) continue;
-    const pt = resolveQuestMapPoint(state, def);
+    const pt = currentQuestMapPoint(state, def);
     if (pt) out.push({ questId: def.id, title: def.title, x: pt.x, y: pt.y });
-    if (prev.altTargetX != null && prev.altTargetY != null) {
-      const alt = questBuildingMapPoint(prev.altTargetX, prev.altTargetY);
-      if (!pt || alt.x !== pt.x || alt.y !== pt.y) {
-        out.push({ questId: def.id, title: def.title, x: alt.x, y: alt.y });
-      }
-    }
   }
-  return out;
+  return spreadStackedQuestMarkers(out);
+}
+
+function spreadStackedQuestMarkers(markers: QuestMapMarker[]): QuestMapMarker[] {
+  const counts = new Map<string, number>();
+  for (const marker of markers) {
+    const key = `${Math.round(marker.x)},${Math.round(marker.y)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const used = new Map<string, number>();
+  return markers.map((marker) => {
+    const key = `${Math.round(marker.x)},${Math.round(marker.y)}`;
+    const total = counts.get(key) ?? 1;
+    const index = used.get(key) ?? 0;
+    used.set(key, index + 1);
+    if (total < 2) return marker;
+    return { ...marker, y: marker.y - index * 8 };
+  });
 }
 
 /** Building origins on active jobs (quest spawn occupancy). */

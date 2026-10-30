@@ -113,6 +113,16 @@ function itemLabel(itemId: string, quantity: number, condition: number, durabili
   return parts.join(", ");
 }
 
+/** Condition, remaining uses, and worn-gear effects. Shown after a row is opened. */
+function itemStatBits(itemId: string, condition: number, durability?: number): string[] {
+  const bits: string[] = [];
+  if (condition < 100) bits.push(`${condition}%`);
+  if (durability != null) bits.push(`${durability} uses`);
+  const effect = wornGearEffectHint(itemId);
+  if (effect) bits.push(effect);
+  return bits;
+}
+
 function listingFee(price: number, payout: number): number {
   if (!Number.isInteger(price) || !Number.isInteger(payout)) return 0;
   return Math.max(0, price - payout);
@@ -175,7 +185,7 @@ export class PlayerMarketUI {
   private desk: MarketDeskWire = {
     banknotes: 0,
     returns: [],
-    listingCap: 1,
+    listingCap: 3,
     activeCount: 0,
     feePercent: 10,
   };
@@ -1335,14 +1345,10 @@ export class PlayerMarketUI {
       const name = getItemDefinition(listing.itemId)?.name ?? listing.itemId;
       const meta: (string | Node)[] = [];
       if (listing.yours) meta.push(chip("Yours", "y"));
-      if (listing.condition < 100) meta.push(chip(`${listing.condition}%`));
       const bits: string[] = [];
       if (listing.quantity > 1) bits.push(`${eachPrice(listing.price, listing.quantity)} each`);
-      if (listing.durability != null) bits.push(`${listing.durability} uses`);
-      const effect = wornGearEffectHint(listing.itemId);
-      if (effect) bits.push(effect);
       if (!listing.yours) bits.push(timeLeft(listing.expiresAt, now));
-      meta.push(bits.join(" · "));
+      if (bits.length) meta.push(bits.join(" · "));
       children.push(
         sheetRow({
           iconItemId: listing.itemId,
@@ -1399,9 +1405,11 @@ export class PlayerMarketUI {
     });
     this.msDrawer = drawer;
     const now = Date.now();
-    const sub = listing.yours
+    const when = listing.yours
       ? `Your ad · ${timeLeft(listing.expiresAt, now)}`
       : timeLeft(listing.expiresAt, now);
+    const stats = itemStatBits(listing.itemId, listing.condition, listing.durability);
+    const sub = stats.length ? `${stats.join(" · ")} · ${when}` : when;
     const carried = this.msCarried();
     const rows: KvRow[] = [];
     if (listing.quantity > 1) rows.push({ label: "Price each", value: eachPrice(listing.price, listing.quantity) });
@@ -1469,11 +1477,13 @@ export class PlayerMarketUI {
     const name = getItemDefinition(selected.itemId)?.name ?? selected.itemId;
 
     body.push(sectionLabel("Item"));
+    const sellMeta: (string | Node)[] = [`You have ${selected.quantity}`];
+    sellMeta.push(...itemStatBits(selected.itemId, selected.condition, selected.durability));
     body.push(
       sheetRow({
         iconItemId: selected.itemId,
-        name: itemLabel(selected.itemId, 1, selected.condition, selected.durability),
-        meta: [`You have ${selected.quantity}`],
+        name,
+        meta: sellMeta,
         chevron: rows.length > 1,
         onTap: rows.length > 1 ? () => this.msOpenPicker() : undefined,
       }),
@@ -1555,13 +1565,16 @@ export class PlayerMarketUI {
     this.msDrawer = drawer;
     drawer.content.append(drawerHead({ title: "Pick an item", sub: "From your pockets and backpack" }));
     for (const row of this.listableSlots()) {
+      const picked = row.index === this.selectedIndex;
+      const meta: (string | Node)[] = [`Trader sells for ${traderRangeText(row.itemId)}`];
+      if (picked) meta.push(...itemStatBits(row.itemId, row.condition, row.durability));
       drawer.content.append(
         sheetRow({
           iconItemId: row.itemId,
           qty: row.quantity > 1 ? row.quantity : undefined,
-          name: itemLabel(row.itemId, 1, row.condition, row.durability),
-          meta: [`Trader sells for ${traderRangeText(row.itemId)}`],
-          state: row.index === this.selectedIndex ? "on" : undefined,
+          name: getItemDefinition(row.itemId)?.name ?? row.itemId,
+          meta,
+          state: picked ? "on" : undefined,
           onTap: () => {
             this.selectedIndex = row.index;
             this.msSellKey = "";

@@ -105,6 +105,13 @@ function createGame() {
       autoFocus: false,
     });
   bindGameViewport(game);
+  const blockContextMenu = (event: Event) => event.preventDefault();
+  document.getElementById("game")?.addEventListener("contextmenu", blockContextMenu);
+  const bindCanvasMenu = () => {
+    game?.canvas.addEventListener("contextmenu", blockContextMenu);
+  };
+  if (game.canvas) bindCanvasMenu();
+  else game.events.once(Phaser.Core.Events.READY, bindCanvasMenu);
 }
 
 function launch(): Promise<void> {

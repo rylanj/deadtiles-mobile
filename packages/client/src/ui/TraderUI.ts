@@ -7,6 +7,7 @@ import {
   ashenStandingLabel,
   backpackHoldsItems,
   getItemDefinition,
+  traderHidesPlayerSlot,
   isArmorSlot,
   isBackpackItem,
   isBackpackSlot,
@@ -599,7 +600,7 @@ export class TraderUI {
     if (side === "player") {
       for (let i = 0; i < this.playerInventory.length; i++) {
         const slot = this.playerInventory[i];
-        if (!slot || slot.id === "banknote") continue;
+        if (!slot || traderHidesPlayerSlot(slot)) continue;
         const def = getItemDefinition(slot.id);
         if (!def) continue;
         count++;
@@ -1070,7 +1071,10 @@ export class TraderUI {
 
   private addToOffer(quantity: number) {
     if (!this.selection || quantity <= 0) return;
-    if (this.selection.side === "player" && isQuestKeepsakeItem(this.selection.id)) {
+    if (
+      this.selection.side === "player" &&
+      traderHidesPlayerSlot(this.playerInventory[this.selection.slotIndex])
+    ) {
       return;
     }
     if (
@@ -1299,7 +1303,7 @@ export class TraderUI {
       });
     } else {
       this.playerInventory.forEach((slot, slotIndex) => {
-        if (!slot || slot.id === "banknote" || !getItemDefinition(slot.id)) return;
+        if (!slot || traderHidesPlayerSlot(slot) || !getItemDefinition(slot.id)) return;
         total++;
         if (!matches(slot.id)) return;
         rows.push(this.shopRow({ side: "player", slotIndex, id: slot.id, quantity: slot.quantity }));

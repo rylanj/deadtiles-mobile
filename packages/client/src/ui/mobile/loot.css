@@ -2,6 +2,15 @@
 .ms-loot .ms-row-end .ms-btn {
   min-width: 76px;
 }
+.ms-loot .ms-loot-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ms-loot .ms-loot-row-actions .ms-btn {
+  min-width: 64px;
+}
 .ms-loot-empty {
   margin: 28px 0;
   text-align: center;

@@ -34,6 +34,8 @@ import {
   getMaxDurability,
   WEAPON_SLOT_COUNT,
   isClothingItem,
+  GIFT_BOX_ITEM_ID,
+  isQuestBoundEntry,
   isConsumable,
   isWeaponBlueprint,
   isSkillMagazine,
@@ -314,7 +316,7 @@ export class InventoryUI {
     this.hintEl.className = "inventory-hint";
     this.hintEl.textContent = isMobileDevice()
       ? "Tap a slot, then tap another to move"
-      : "Drag to move · shift-drag moves half · double-click weapon to equip · Tab to close";
+      : "Drag to move · shift-drag moves half · double-click to use or equip · Tab to close";
     header.append(headerTop, this.hintEl);
 
     this.gridEl = document.createElement("div");
@@ -835,6 +837,23 @@ export class InventoryUI {
         }
       };
 
+      const doubleActivate = () => {
+        this.selectedSlot = index;
+        if (weaponIndex >= 0) {
+          toggleEquip();
+          return;
+        }
+        const itemCategory = def?.category ?? "";
+        const usable =
+          itemCategory === "food" ||
+          itemCategory === "drink" ||
+          itemCategory === "medical" ||
+          isConsumable(slot.id);
+        if (usable && canUseConsumable(slot.id, this.playerStats)) {
+          this.useSelected();
+        }
+      };
+
       bindSlotPointerDnD({
         cell,
         root: this.overlay,
@@ -890,7 +909,7 @@ export class InventoryUI {
           cell.classList.remove("inventory-cell--dragging");
           this.clearDragOverStates();
         },
-        onDoubleActivate: weaponIndex >= 0 ? toggleEquip : undefined,
+        onDoubleActivate: doubleActivate,
         clearHover: () => this.clearDragOverStates(),
         setHover: (target, valid) => {
           target.classList.toggle("inventory-cell--drag-over", valid);
@@ -1049,6 +1068,7 @@ export class InventoryUI {
     this.useBtn.disabled = false;
     if (isWeaponBlueprint(slot.id)) this.useBtn.textContent = "Learn";
     else if (isSkillMagazine(slot.id)) this.useBtn.textContent = "Read";
+    else if (slot.id === GIFT_BOX_ITEM_ID) this.useBtn.textContent = "Open";
     else if (isDrink) this.useBtn.textContent = "Drink";
     else if (isFood) this.useBtn.textContent = "Eat";
     else this.useBtn.textContent = "Use";
@@ -1067,11 +1087,12 @@ export class InventoryUI {
     this.unloadBtn.disabled = false;
     this.unloadBtn.textContent = "Unload";
 
-    this.dropBtn.hidden = false;
+    const questBound = isQuestBoundEntry(slot);
+    this.dropBtn.hidden = questBound;
     this.dropBtn.disabled = false;
     this.dropBtn.textContent = "Drop 1";
 
-    this.dropAllBtn.hidden = slot.quantity <= 1;
+    this.dropAllBtn.hidden = questBound || slot.quantity <= 1;
     this.dropAllBtn.disabled = false;
     this.dropAllBtn.textContent = "Drop All";
 
@@ -1735,16 +1756,18 @@ export class InventoryUI {
         }),
       );
     }
-    row.append(
-      sheetButton(slot.quantity > 1 ? "Drop…" : "Drop", "danger", () => {
-        if (slot.quantity > 1) {
-          this.msDropQty = 1;
-          this.msSyncDrawer();
-        } else {
-          this.handlers.onDrop(index, 1);
-        }
-      }),
-    );
+    if (!isQuestBoundEntry(slot)) {
+      row.append(
+        sheetButton(slot.quantity > 1 ? "Drop…" : "Drop", "danger", () => {
+          if (slot.quantity > 1) {
+            this.msDropQty = 1;
+            this.msSyncDrawer();
+          } else {
+            this.handlers.onDrop(index, 1);
+          }
+        }),
+      );
+    }
     drawer.bar.append(row);
   }
 
@@ -1816,6 +1839,7 @@ export class InventoryUI {
       let label = "Use";
       if (isWeaponBlueprint(slot.id)) label = "Learn";
       else if (isSkillMagazine(slot.id)) label = "Read";
+      else if (slot.id === GIFT_BOX_ITEM_ID) label = "Open";
       else if (def.category === "drink") label = "Drink one";
       else if (def.category === "food") label = "Eat one";
       return {

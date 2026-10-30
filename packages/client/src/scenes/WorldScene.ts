@@ -77,6 +77,7 @@ import {
   equippedJewelrySkillXp,
   parseInventory,
   countItemInInventory,
+  isQuestBoundEntry,
   PLAYER_MAX_HEALTH,
   HUNGER_MAX,
   THIRST_MAX,
@@ -97,6 +98,7 @@ import {
   getEntryWetness,
   isRawMeat,
   isInBirchport,
+  isBirchportHospital,
   isMilitiaCaptainSkin,
   isWatchItem,
   isMapItem,
@@ -178,7 +180,19 @@ import {
   INSPECT_BLOOD_ID_PREFIX,
   STORY_INSPECT_MS,
   QUEST_ID_TWO_BEHIND,
+  STORY_OBJECTIVE_FIND_NOTE,
+  STORY_OBJECTIVE_INSPECT_BLOOD,
+  STORY_OBJECTIVE_FIND_TAG,
+  COLEMAN_NOTE_ITEM_ID,
+  HOLLAND_DOGTAG_ITEM_ID,
   QUEST_ID_DEAL_WITH_DEVIL,
+  QUEST_ID_FOUND_ON_THE_ROAD,
+  isStoryQuestId,
+  STORY_OBJECTIVE_ASK_CLARK,
+  BIRCHPORT_BARRACKS_MESS_HALL,
+  isBirchportBarracksMessHall,
+  colemanHouse,
+  colemanMotel,
   furnitureNeedsCrack,
   SAFE_CRACK_DURATION_MS,
   furnitureIsStairs,
@@ -263,6 +277,7 @@ import {
   listNewlyCompletedQuests,
   listNewlyCompletedQuestStages,
   stepBirchportMapChart,
+  evictDistantCells,
   type QuestMapMarker,
   buildingEntranceRun,
   buildingEntranceTiles,
@@ -287,6 +302,8 @@ import {
   chainLinkFenceSortDepth,
   overworldPartitionDepth,
   setOverworldStructureFootprintProvider,
+  applyLootHoverTint,
+  clearLootHoverTint,
   strokeIsoFootprintOutline,
   strokeIsoTileOutline,
   tileIndicatorDepth,
@@ -336,6 +353,11 @@ import {
   type InteriorFenceTile,
   type InteriorFireplaceTile,
 } from "../world/InteriorView";
+import {
+  DOOR_LEAF_PICK_REACH,
+  doorLeafAxes,
+  doorLeafCoversWorldPoint,
+} from "../world/doorLeafHit";
 import { DoorCodeUI } from "../ui/DoorCodeUI";
 import {
   loadCachedAuthSession,
@@ -421,10 +443,14 @@ import type {
   TutorialEventMessage,
   TutorialTipId,
 } from "@zombie/shared";
-import { PlayerOccludedGhost } from "../sprites/PlayerOccludedGhost";
+import {
+  OccludedEntityGhosts,
+  PlayerOccludedGhost,
+} from "../sprites/PlayerOccludedGhost";
 import {
   nearestManhattanTile,
   pickTopOpaqueImageAtWorld,
+  spriteCoversWorldPointAboveDepth,
   spriteOpaqueAtWorldPoint,
 } from "../sprites/spritePixelHit";
 import {
@@ -870,6 +896,8 @@ export class WorldScene extends Phaser.Scene {
   private lastBargateEnterAt = 0;
   private barracksBargateAnimUntil = 0;
   private barracksBargateAnimEvents: Phaser.Time.TimerEvent[] = [];
+  /** Barracks bargate currently using the loot hover tint. */
+  private bargateHovering = false;
   /** Fireplace tile the player clicked while out of reach — walk up, then open UI. */
   private fireplaceTargetTile: { x: number; y: number } | null = null;
   private fireplaceSprint = false;
@@ -925,14 +953,15 @@ export class WorldScene extends Phaser.Scene {
   private consumeActionLabel = "Eating";
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private shiftKey?: Phaser.Input.Keyboard.Key;
-  private ctrlKey?: Phaser.Input.Keyboard.Key;
-  /** Local CTRL aim — firearm raised to Fire frame 1. */
+  /** Local right-click look. Firearms raise to Fire frame 1. Unarmed only rotates. */
   private aimHeld = false;
-  /** Mobile has no CTRL key — the HUD aim button latches the same state. */
+  /** Last combat-aim packet. Unarmed look does not raise a fighting stance. */
+  private lastSentCombatAim = false;
+  /** Mobile has no right-click. The HUD aim button latches the same state. */
   private mobileAimLatched = false;
-  /** WASD / stick cancelled this CTRL-hold. Aim again only after CTRL is released. */
+  /** WASD / stick cancelled this right-click hold. Aim again only after RMB is released. */
   private aimBrokeByMove = false;
-  /** 8-way facing from mouse while CTRL-aiming. Null when not aiming. */
+  /** 8-way facing from mouse while aiming. Null when not aiming. */
   private localAimFacing: number | null = null;
   private lastSentAimLookFacing = -1;
   /** Brief gunshot traces, oldest first. */
@@ -1025,8 +1054,13 @@ export class WorldScene extends Phaser.Scene {
   private moveStickY = 0;
   /** True while the stick is pushed into the outer sprint ring. */
   private moveStickSprint = false;
+  /** Knob is showing WASD / arrows while the thumb is off the stick. */
+  private moveStickKeyboardVisual = false;
   private static readonly MOVE_STICK_DEADZONE = 0.22;
   private static readonly MOVE_STICK_SPRINT = 0.88;
+  /** How far keys push the knob: a clear walk, or out into the sprint ring. */
+  private static readonly MOVE_STICK_KEY_WALK = 0.62;
+  private static readonly MOVE_STICK_KEY_SPRINT = 0.96;
   private mobileInventoryBtn?: HTMLButtonElement;
   private mobileJournalBtn?: HTMLButtonElement;
   private mobileMapBtn?: HTMLButtonElement;
@@ -1059,6 +1093,9 @@ export class WorldScene extends Phaser.Scene {
   private onboardingUI?: OnboardingUI;
   private tutorialVitals: { hunger: number; thirst: number } | null = null;
   private tutorialSawDeath = false;
+  private tutorialInsideHospital = false;
+  private tutorialWard: { x: number; y: number } | null = null;
+  private tutorialRationsKey = "";
   private lastTutorialWatchAt = 0;
   /** Last weather sample, so the rain tip fires when rain begins. */
   private tutorialPrecip: string | null = null;
@@ -1074,6 +1111,20 @@ export class WorldScene extends Phaser.Scene {
   private deathBody: { x: number; y: number; until: number } | null = null;
   /** Faint copy of the local player, drawn above buildings, trees, and walls. */
   private playerOccludedGhost?: PlayerOccludedGhost;
+  /**
+   * Faint copies of other sprites hidden by that same cover, when this player
+   * is looking at them and the sight line is clear.
+   */
+  private occludedEntityGhosts?: OccludedEntityGhosts;
+  /** Bumped once per visual refresh so every sprite shares one look sample. */
+  private seenThroughEpoch = 0;
+  private seenThroughEpochReady = -1;
+  private seenThroughViewerCache: { x: number; y: number; facing: number } | null =
+    null;
+  private seenLosCache = new Map<
+    string,
+    { key: string; ok: boolean; at: number }
+  >();
   private entityActionLabels?: EntityActionLabelManager;
   private tabKey?: Phaser.Input.Keyboard.Key;
   private mKey?: Phaser.Input.Keyboard.Key;
@@ -1136,7 +1187,7 @@ export class WorldScene extends Phaser.Scene {
   private localSkillsJson = "";
   /** Craft recipe ids unlocked by weapon blueprints. Owner-only. */
   private learnedRecipeIds = new Set<string>();
-  /** Cached settlement labels for the open M map (recomputed when tile center moves). */
+  /** Cached settlement labels for the open M map. */
   private mapSettlementCache: {
     tx: number;
     ty: number;
@@ -1167,10 +1218,15 @@ export class WorldScene extends Phaser.Scene {
   private moveTarget?: Phaser.GameObjects.Graphics;
   private moveTargetOccluded?: Phaser.GameObjects.Graphics;
   private moveTargetOcclusionMask?: BuildingOcclusionMask;
-  private moveTargetTile?: { wx: number; wy: number; sprint: boolean };
+  private moveTargetTile?: { wx: number; wy: number; sprint: boolean; w: number; h: number };
   private moveTargetFadeUntil = 0;
   /** ID of the searchable the cursor is currently hovering over */
   private hoveredSearchableId: string | null = null;
+  /** Overworld bag / corpse currently yellow-tinted for loot hover. */
+  private lootHoverTinted:
+    | Phaser.GameObjects.Image
+    | Phaser.GameObjects.Sprite
+    | null = null;
   /** Dead unlooted entity under the cursor (zombie, guard, or player corpse). */
   private hoveredLootableId: string | null = null;
   private hoveredLootableKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
@@ -1784,7 +1840,7 @@ export class WorldScene extends Phaser.Scene {
       }
       this.fireAnims.delete(entityId);
     }
-    // Local CTRL aim — raise a firearm immediately (before server stance sync).
+    // Local right-click aim: raise a firearm immediately (before server stance sync).
     // Melee stays on its idle pose until the swing; Hit frame 0 would look mid-swing.
     if (entityId === this.sessionId && this.aimHeld && !this.localEquippedIsMelee()) {
       return 0;
@@ -1818,15 +1874,22 @@ export class WorldScene extends Phaser.Scene {
     return !!weapon && isMeleeWeapon(weapon);
   }
 
-  /** CTRL held (or the mobile aim button latched) with a weapon → aim stance. */
+  /** Desktop aim is right mouse. Touch uses the HUD aim button instead. */
+  private rightMouseAimDown(): boolean {
+    const pointer = this.input.activePointer;
+    return !!pointer && !pointer.wasTouch && pointer.rightButtonDown();
+  }
+
+  /** Right mouse held (or the mobile aim button latched) with a weapon → aim stance. */
   private handleAimInput() {
-    if (!this.ctrlKey?.isDown) this.aimBrokeByMove = false;
+    const rmb = this.rightMouseAimDown();
+    if (!rmb) this.aimBrokeByMove = false;
     if (this.mobileAimLatched && !this.canHoldAimStance()) {
       this.mobileAimLatched = false;
     }
     const wantAim =
       !this.aimBrokeByMove &&
-      (this.mobileAimLatched || !!this.ctrlKey?.isDown) &&
+      (this.mobileAimLatched || rmb) &&
       this.canHoldAimStance();
     if (wantAim !== this.aimHeld) {
       this.setAimHeld(wantAim);
@@ -1875,7 +1938,7 @@ export class WorldScene extends Phaser.Scene {
     } else {
       this.localAimFacing = null;
       this.lastSentAimLookFacing = -1;
-      // Drop local post-fire stance hold when releasing CTRL.
+      // Drop local post-fire stance hold when releasing right-click.
       const fire = this.fireAnims.get(this.sessionId);
       if (fire && !this.isEntityFiring(this.sessionId)) {
         this.cancelEntityFireAnim(this.sessionId);
@@ -1892,7 +1955,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * While CTRL-aiming, face the 8-way octant toward the cursor.
+   * While right-click aiming, face the 8-way octant toward the cursor.
    * Local sprite updates immediately; server is told only when the octant changes.
    */
   private updateAimLookFromPointer(pointer?: Phaser.Input.Pointer) {
@@ -1973,6 +2036,12 @@ export class WorldScene extends Phaser.Scene {
   /** Server epoch ms. Entity damage blocks leaving the world until this time. */
   private combatLockUntil = 0;
   private combatLockShownSec = -1;
+  /** Local epoch ms when the 10- or 5-minute restart flash hides. */
+  private restartFlashUntil = 0;
+  private restartFlashMinutes = 0;
+  /** Local epoch ms when the midnight restart is due. 0 when no countdown is showing. */
+  private restartAtMs = 0;
+  private restartShownLabel = "";
   private combatReconnectAttempts = 0;
   private readonly onCombatBeforeUnload = (event: BeforeUnloadEvent) => {
     if (this.combatLockUntil <= Date.now()) return;
@@ -2006,6 +2075,10 @@ export class WorldScene extends Phaser.Scene {
     this.events.on(Phaser.Scenes.Events.RENDER, this.placeChatBubbleIcons, this);
     const joinGen = ++this.worldJoinGeneration;
     this.intentionalLeave = false;
+    this.restartFlashUntil = 0;
+    this.restartFlashMinutes = 0;
+    this.restartAtMs = 0;
+    this.restartShownLabel = "";
     this.worldRevealReady = false;
     this.exteriorSoftPurgeActive = false;
     // Scene instance is reused — drop transition caches from the previous join.
@@ -2109,8 +2182,10 @@ export class WorldScene extends Phaser.Scene {
         this.moveInContainer(containerId, fromSlot, toSlot),
       onStoreInContainer: (containerId, fromSlot, toSlot) =>
         this.storeInContainer(containerId, fromSlot, toSlot),
+      onUpgradeSafeDeposit: () => this.requestSafeDepositUpgrade(),
       onMovePlayerSlot: (fromSlot, toSlot, splitHalf) =>
         this.moveInventorySlot(fromSlot, toSlot, splitHalf),
+      onUse: (slotIndex) => this.sendConsumeStart(slotIndex),
       onClose: (containerId) => {
         if (this.suppressSafeDepositClose) return;
         if (containerId === SAFE_DEPOSIT_CONTAINER_ID) {
@@ -2252,6 +2327,7 @@ export class WorldScene extends Phaser.Scene {
     });
     this.setupStructureBuildHud();
     this.playerOccludedGhost = new PlayerOccludedGhost(this);
+    this.occludedEntityGhosts = new OccludedEntityGhosts(this);
     this.entityActionLabels = new EntityActionLabelManager(this);
     this.setupChatBar();
     this.setupMobileHud();
@@ -2287,7 +2363,6 @@ export class WorldScene extends Phaser.Scene {
         Phaser.Input.Keyboard.KeyCodes.LEFT,
         Phaser.Input.Keyboard.KeyCodes.RIGHT,
         Phaser.Input.Keyboard.KeyCodes.SHIFT,
-        Phaser.Input.Keyboard.KeyCodes.CTRL,
       ]);
       this.cursors = keyboard.createCursorKeys();
       this.keys = {
@@ -2299,7 +2374,6 @@ export class WorldScene extends Phaser.Scene {
         R: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R),
       };
       this.shiftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
-      this.ctrlKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL);
       this.tabKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
       this.mKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.M);
       this.jKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
@@ -2492,6 +2566,17 @@ export class WorldScene extends Phaser.Scene {
       room.onMessage("combatLock", (msg: { until?: number }) => {
         this.applyCombatLock(msg?.until);
       });
+      room.onMessage(
+        "restartWarning",
+        (msg: {
+          kind?: string;
+          minutes?: number;
+          holdMs?: number;
+          remainingMs?: number;
+        }) => {
+          this.applyRestartWarning(msg);
+        },
+      );
       // Server pushes inventorySync from onJoin before WorldScene finishes
       // setup — register immediately or Colyseus drops it with
       // "onMessage() not registered for type 'inventorySync'".
@@ -3357,6 +3442,11 @@ export class WorldScene extends Phaser.Scene {
     this.onboardingUI = undefined;
     this.playerOccludedGhost?.destroy();
     this.playerOccludedGhost = undefined;
+    this.occludedEntityGhosts?.destroy();
+    this.occludedEntityGhosts = undefined;
+    this.seenLosCache.clear();
+    this.seenThroughEpochReady = -1;
+    this.seenThroughViewerCache = null;
     this.clearShotTraces();
     this.entityActionLabels?.destroy();
     this.moveTargetOcclusionMask?.destroy();
@@ -3725,11 +3815,51 @@ export class WorldScene extends Phaser.Scene {
     this.moveStickX = 0;
     this.moveStickY = 0;
     this.moveStickSprint = false;
+    this.moveStickKeyboardVisual = false;
     if (this.moveStickKnob) this.moveStickKnob.style.transform = "";
     this.moveStickEl?.classList.remove("move-stick--sprint", "move-stick--active");
     if (pointerId !== null && this.moveStickEl?.hasPointerCapture(pointerId)) {
       this.moveStickEl.releasePointerCapture(pointerId);
     }
+  }
+
+  /**
+   * Push the knob to the WASD / arrow direction while the thumb is off the stick.
+   * Screen axes match the stick: right and down are positive.
+   */
+  private syncMoveStickFromKeys(screenDx: number, screenDy: number, sprint: boolean) {
+    const knob = this.moveStickKnob;
+    if (!this.moveStickEl || !knob) return;
+    if (this.moveStickPointerId !== null) return;
+
+    const mag = Math.hypot(screenDx, screenDy);
+    if (mag < 0.001) {
+      this.clearMoveStickKeyboardVisual();
+      return;
+    }
+
+    const base = this.moveStickEl.querySelector(".move-stick-base");
+    if (!(base instanceof HTMLElement)) return;
+    const rect = base.getBoundingClientRect();
+    const radius = Math.max(1, (rect.width - knob.offsetWidth) / 2);
+    const reach = sprint
+      ? WorldScene.MOVE_STICK_KEY_SPRINT
+      : WorldScene.MOVE_STICK_KEY_WALK;
+    const kx = (screenDx / mag) * radius * reach;
+    const ky = (screenDy / mag) * radius * reach;
+    knob.style.transform = `translate(${kx}px, ${ky}px)`;
+    this.moveStickEl.classList.add("move-stick--active");
+    this.moveStickEl.classList.toggle("move-stick--sprint", sprint);
+    this.moveStickKeyboardVisual = true;
+  }
+
+  /** Center the knob after keys let go, without disturbing a thumb that is on it. */
+  private clearMoveStickKeyboardVisual() {
+    if (!this.moveStickKeyboardVisual) return;
+    this.moveStickKeyboardVisual = false;
+    if (this.moveStickPointerId !== null) return;
+    if (this.moveStickKnob) this.moveStickKnob.style.transform = "";
+    this.moveStickEl?.classList.remove("move-stick--sprint", "move-stick--active");
   }
 
   /** Analog screen vector from the thumb stick. Zero inside the dead zone. */
@@ -3744,7 +3874,7 @@ export class WorldScene extends Phaser.Scene {
     return { screenDx: this.moveStickX, screenDy: this.moveStickY };
   }
 
-  /** Mobile stand-in for holding CTRL. Melee shows the weapon icon instead of a crosshair. */
+  /** Mobile stand-in for holding right-click. Melee shows the weapon icon instead of a crosshair. */
   private refreshMobileAimButton() {
     const btn = this.mobileAimBtn;
     if (!btn) return;
@@ -4316,7 +4446,9 @@ export class WorldScene extends Phaser.Scene {
       html.hud-hidden #move-stick,
       html.hud-hidden #search-progress,
       html.hud-hidden #structure-build-hud,
+      html.hud-hidden #notice-stack,
       html.hud-hidden #combat-lock-banner,
+      html.hud-hidden #restart-banner,
       html.hud-hidden #loot-popup-container,
       html.hud-hidden #radio-caption,
       html.hud-hidden #tutorial-stack,
@@ -4647,13 +4779,15 @@ export class WorldScene extends Phaser.Scene {
             ? "drink"
             : player.consumeAction === "bandage"
               ? "bandage"
-              : player.consumeAction === "use"
-                ? "use"
-                : player.consumeAction === "learn"
-                  ? "learn"
-                  : player.consumeAction === "read"
-                    ? "read"
-                    : "eat";
+              : player.consumeAction === "open"
+                ? "open"
+                : player.consumeAction === "use"
+                  ? "use"
+                  : player.consumeAction === "learn"
+                    ? "learn"
+                    : player.consumeAction === "read"
+                      ? "read"
+                      : "eat";
         const consuming =
           alive && player.isConsuming && player.consumeEndTime > now;
 
@@ -4682,6 +4816,13 @@ export class WorldScene extends Phaser.Scene {
           id,
           "use",
           consuming && consumeKind === "use",
+          labelSprite,
+          stackBelowPx,
+        );
+        this.entityActionLabels.sync(
+          id,
+          "open",
+          consuming && consumeKind === "open",
           labelSprite,
           stackBelowPx,
         );
@@ -5523,15 +5664,36 @@ export class WorldScene extends Phaser.Scene {
   /** Keep charting the map. The open map view is painted ahead of the player. */
   private stepMapChart() {
     const me = this.room?.state?.players?.get(this.sessionId);
-    let x = me ? (me.inInterior ? me.overworldX : me.x) : 0;
-    let y = me ? (me.inInterior ? me.overworldY : me.y) : 0;
+    const playerX = me ? (me.inInterior ? me.overworldX : me.x) : Number.NaN;
+    const playerY = me ? (me.inInterior ? me.overworldY : me.y) : Number.NaN;
+    let focusX = playerX;
+    let focusY = playerY;
     const mapOpen = this.mapOverlayUI?.isOpen() ?? false;
     if (mapOpen && this.mapOverlayUI) {
       const view = this.mapOverlayUI.viewTileBounds();
-      x = (view.minX + view.maxX) / 2;
-      y = (view.minY + view.maxY) / 2;
+      focusX = (view.minX + view.maxX) / 2;
+      focusY = (view.minY + view.maxY) / 2;
     }
-    stepBirchportMapChart(mapOpen ? 8 : 4, x, y);
+    // Keep distance matches the camera eviction, and the anchor is the player.
+    // The map focus only chooses which chart cells paint next.
+    const keep = this.tileManager?.worldgenKeepDist();
+    const retain =
+      me && typeof keep === "number"
+        ? { x: playerX, y: playerY, dist: keep }
+        : undefined;
+    stepBirchportMapChart(mapOpen ? 8 : 4, focusX, focusY, retain);
+  }
+
+  /** Drop worldgen the map chart or place-name pass warmed away from the player. */
+  private releaseFarMapWorldgen() {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const keep = this.tileManager?.worldgenKeepDist();
+    if (!me || typeof keep !== "number") return;
+    evictDistantCells(
+      me.inInterior ? me.overworldX : me.x,
+      me.inInterior ? me.overworldY : me.y,
+      keep,
+    );
   }
 
   private refreshMapOverlay() {
@@ -5557,9 +5719,13 @@ export class WorldScene extends Phaser.Scene {
     const maxX = view.maxX;
     const minY = view.minY;
     const maxY = view.maxY;
-    const tx = Math.floor((minX + maxX) / 2);
-    const ty = Math.floor((minY + maxY) / 2);
     const span = maxX - minX;
+    // Wide zooms cover thousands of tiles. Rebuilding every town name on each
+    // tile of a pan is what made a zoomed-out open stall. A short step still
+    // tracks the player at the default zoom.
+    const labelStep = Math.max(8, Math.min(48, Math.floor(span / 16) || 8));
+    const tx = Math.floor((minX + maxX) / 2 / labelStep);
+    const ty = Math.floor((minY + maxY) / 2 / labelStep);
     if (
       !this.mapSettlementCache ||
       this.mapSettlementCache.tx !== tx ||
@@ -5572,6 +5738,7 @@ export class WorldScene extends Phaser.Scene {
         span,
         labels: settlementsInTileRegion(minX, maxX, minY, maxY),
       };
+      this.releaseFarMapWorldgen();
     }
 
     this.mapOverlayUI.render(
@@ -5773,6 +5940,12 @@ export class WorldScene extends Phaser.Scene {
     const next = parseQuestsJson(questsJson);
     this.cachedQuestsJson = questsJson;
     this.lastQuestUiKey = "";
+    if (hadSnapshot) {
+      const started = listNewlyAcceptedQuests(prev, next).find((quest) =>
+        isStoryQuestId(quest.questId),
+      );
+      if (started) this.ashenMilitiaDialogUI?.focusStory(started.questId);
+    }
     this.refreshQuestPanels();
     const stages = listNewlyCompletedQuestStages(prev, next);
     for (const stage of stages) {
@@ -5791,6 +5964,14 @@ export class WorldScene extends Phaser.Scene {
       AudioManager.get().play("journal");
     }
     this.onboardingUI?.setQuestState(next);
+    const found = next.quests[QUEST_ID_FOUND_ON_THE_ROAD];
+    if (
+      found &&
+      (found.status === "completed" ||
+        (found.progress[STORY_OBJECTIVE_ASK_CLARK] ?? 0) >= 1)
+    ) {
+      this.notifyTutorial("talk_clark");
+    }
     this.hollandBuried = isHollandBuried(next);
     this.notifyStoryFactionTips(next);
   }
@@ -6027,6 +6208,8 @@ export class WorldScene extends Phaser.Scene {
         }
         this.tileManager.highlightBuilding(null, null);
         this.playerOccludedGhost?.hide();
+        this.occludedEntityGhosts?.hideAll();
+        this.seenThroughEpochReady = -1;
         this.clearCombatTarget();
         this.clearInteractTarget();
         this.clearLootTarget();
@@ -8015,6 +8198,21 @@ export class WorldScene extends Phaser.Scene {
     this.overworldFenceCornerSprites.delete(key);
   }
 
+  /**
+   * Solid overworld walls and doors, plus unfinished prefab wall/door tiles
+   * so a partially built row keeps the same facing as the prefab ghosts.
+   */
+  private overworldPartitionWallSet(): Set<string> {
+    const wallSet = new Set(this.structureWallKeysOverworld);
+    for (const key of this.structureDoorsOverworld.keys()) wallSet.add(key);
+    for (const tile of this.prefabsOverworld.values()) {
+      if (tile.kind === "wall" || tile.kind === "door") {
+        wallSet.add(`${tile.x},${tile.y}`);
+      }
+    }
+    return wallSet;
+  }
+
   /** Redraw persistent overworld walls + door leaves (open/closed poses). */
   private redrawOverworldStructures() {
     this.clearOverworldStructureSprites();
@@ -8022,16 +8220,9 @@ export class WorldScene extends Phaser.Scene {
       this.structureWallKeysOverworld.size > 0 ||
       this.structureDoorsOverworld.size > 0
     ) {
-      // Solid tiles to draw; adjacency also counts unfinished prefab wall/doors
-      // so a partially built row keeps the same facing as the prefab ghosts.
+      const wallSet = this.overworldPartitionWallSet();
       const solidKeys = new Set(this.structureWallKeysOverworld);
       for (const key of this.structureDoorsOverworld.keys()) solidKeys.add(key);
-      const wallSet = new Set(solidKeys);
-      for (const tile of this.prefabsOverworld.values()) {
-        if (tile.kind === "wall" || tile.kind === "door") {
-          wallSet.add(`${tile.x},${tile.y}`);
-        }
-      }
       for (const key of solidKeys) {
         const [xs, ys] = key.split(",");
         const tx = Number(xs);
@@ -8101,11 +8292,153 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Click-to-use a door: if already standing at the door-front tile centre,
-   * interact immediately (open+unlocked or open toggles directly; closed+locked
-   * opens the code prompt). Otherwise walk there first — `updateDoorPursuit`
-   * finishes the interaction once the player arrives. Returns true when the
-   * click was consumed (a door was under the cursor).
+   * Frontmost overworld door leaf under a world point. The graphic rises
+   * above the floor tile, so the tile under the cursor is often the one behind.
+   */
+  private pickOverworldDoorLeafAtWorld(
+    worldX: number,
+    worldY: number,
+  ): { x: number; y: number; depth: number } | null {
+    if (this.structureDoorsOverworld.size === 0) return null;
+    const cart = isoToCartesian(worldX, worldY);
+    const cx = Math.floor(cart.x);
+    const cy = Math.floor(cart.y);
+    const wallSet = this.overworldPartitionWallSet();
+    let best: { x: number; y: number; depth: number } | null = null;
+    for (const door of this.structureDoorsOverworld.values()) {
+      if (
+        Math.max(Math.abs(door.x - cx), Math.abs(door.y - cy)) >
+        DOOR_LEAF_PICK_REACH
+      ) {
+        continue;
+      }
+      const display = this.overworldStructureSprites.get(`${door.x},${door.y}`);
+      if (!display?.visible || display.alpha <= 0.05) continue;
+      const axes = doorLeafAxes(wallSet, door.x, door.y);
+      let hit = false;
+      for (const axis of axes) {
+        if (
+          doorLeafCoversWorldPoint(
+            door.x,
+            door.y,
+            axis,
+            door.isOpen,
+            worldX,
+            worldY,
+          )
+        ) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+      if (!best || display.depth > best.depth) {
+        best = { x: door.x, y: door.y, depth: display.depth };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Sprite drawn in front of a door leaf. A click there belongs to that
+   * sprite (a person, a tree, furniture), not the door behind it.
+   */
+  private nearerSpriteCoversDoor(
+    worldX: number,
+    worldY: number,
+    depth: number,
+    inInterior: boolean,
+  ): boolean {
+    const covers = (
+      sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite,
+    ) => spriteCoversWorldPointAboveDepth(sprite, worldX, worldY, depth);
+    const entities = [
+      this.playerSprites,
+      this.zombieSprites,
+      this.guardSprites,
+      this.coywolfSprites,
+      this.bearSprites,
+      this.crowSprites,
+      this.rabbitSprites,
+      this.corpseSprites,
+    ];
+    for (const map of entities) {
+      for (const sprite of map.values()) {
+        if (covers(sprite)) return true;
+      }
+    }
+    if (inInterior) {
+      return (
+        this.interiorView?.placeableCoversPointAboveDepth(
+          worldX,
+          worldY,
+          depth,
+        ) ?? false
+      );
+    }
+    const props = [
+      this.overworldFireplaceSprites,
+      this.overworldStorageBoxSprites,
+      this.overworldFenceSprites,
+      this.overworldFenceCornerSprites,
+    ];
+    for (const map of props) {
+      for (const sprite of map.values()) {
+        if (covers(sprite)) return true;
+      }
+    }
+    for (const sprite of this.overworldStructureSprites.values()) {
+      if (!(sprite instanceof Phaser.GameObjects.Image)) continue;
+      if (covers(sprite)) return true;
+    }
+    return this.tileManager?.opaqueCoverAboveDepth(worldX, worldY, depth) ?? false;
+  }
+
+  /**
+   * Door under a screen point. The floor tile still counts. So does the door
+   * graphic, which rises above that tile.
+   */
+  private doorAtScreen(
+    me: {
+      inInterior: boolean;
+      buildingX: number;
+      buildingY: number;
+      interiorLevel?: number;
+    },
+    screenX: number,
+    screenY: number,
+  ): { tx: number; ty: number; door: InteriorDoorTile } | null {
+    const world = this.cameras.main.getWorldPoint(screenX, screenY);
+    const cart = isoToCartesian(world.x, world.y);
+    const floorTx = Math.floor(cart.x);
+    const floorTy = Math.floor(cart.y);
+    const leaf = me.inInterior
+      ? (this.interiorView?.pickDoorLeafAtWorld(world.x, world.y) ?? null)
+      : this.pickOverworldDoorLeafAtWorld(world.x, world.y);
+    if (leaf) {
+      const onOwnTile = leaf.x === floorTx && leaf.y === floorTy;
+      const covered =
+        !onOwnTile &&
+        this.nearerSpriteCoversDoor(world.x, world.y, leaf.depth, me.inInterior);
+      if (!covered) {
+        const door = this.findDoorAt(me, leaf.x, leaf.y);
+        if (door) return { tx: leaf.x, ty: leaf.y, door };
+      }
+    }
+    const onTile = this.findDoorAt(me, floorTx, floorTy);
+    if (!onTile) return null;
+    return { tx: floorTx, ty: floorTy, door: onTile };
+  }
+
+  /**
+   * Click or tap a door to use it. The floor tile and the door graphic both
+   * count: the leaf is taller than the tile, so a click on the door itself
+   * often lands on the tile behind it.
+   * If the player is already at the door-front tile centre, interact
+   * immediately (an open or unlocked door toggles; a closed locked door opens
+   * the code prompt). Otherwise walk there first. updateDoorPursuit finishes
+   * the interaction once the player arrives. Returns true when the click was
+   * consumed.
    */
   private clearDoorTarget() {
     this.doorTargetTile = null;
@@ -8164,13 +8497,9 @@ export class WorldScene extends Phaser.Scene {
     if (!this.room) return false;
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me?.alive) return false;
-    const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-
-    const door = this.findDoorAt(me, tx, ty);
-    if (!door) return false;
+    const hit = this.doorAtScreen(me, screenX, screenY);
+    if (!hit) return false;
+    const { tx, ty, door } = hit;
 
     const now = Date.now();
     const clickKey = `${tx},${ty}`;
@@ -8415,26 +8744,22 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Each frame: highlight + pointer-cursor the tile under the cursor when it
-   * holds a persistent door, even out of reach (click walks the player up).
+   * Highlight and pointer-cursor a door under the cursor, including the
+   * graphic above its floor tile. A click walks the player up when they
+   * are out of reach.
    */
   private updateDoorHover(pointer: { x: number; y: number } = this.input.activePointer) {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me || this.isOverlayOpen() || this.chatOpen) return;
 
-    const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-
-    const door = this.findDoorAt(me, tx, ty);
-    if (!door) return;
+    const hit = this.doorAtScreen(me, pointer.x, pointer.y);
+    if (!hit) return;
 
     this.game.canvas.style.cursor = "pointer";
     if (me.inInterior) {
-      this.interiorView?.highlightTile(tx, ty);
+      this.interiorView?.highlightTile(hit.tx, hit.ty);
     } else {
-      this.tileManager?.highlightInteractionTile(tx, ty);
+      this.tileManager?.highlightInteractionTile(hit.tx, hit.ty);
     }
   }
 
@@ -10190,7 +10515,7 @@ export class WorldScene extends Phaser.Scene {
     if (!leavingInterior) this.updateEntityHover(pos);
 
     // Clicking an entity with a melee weapon → combat targeting. Firearms never
-    // reach here: their hover is suppressed unless CTRL is held.
+    // reach here: their hover is suppressed unless right-click aim is held.
     if (!leavingInterior && this.hoveredEntityId && this.hoveredEntityKind) {
       const me = this.room?.state?.players?.get(this.sessionId);
       if (me?.alive && (me.equippedWeaponIndex ?? -1) >= 0) {
@@ -10443,7 +10768,7 @@ export class WorldScene extends Phaser.Scene {
     strokeIsoTileOutline(this.moveTarget, tx, ty, color, 0.9);
     this.moveTarget.setAlpha(1);
 
-    this.moveTargetTile = { wx, wy, sprint };
+    this.moveTargetTile = { wx, wy, sprint, w: 1, h: 1 };
     this.syncMoveTargetOcclusion(tx, ty, sortDepth, color);
   }
 
@@ -10549,7 +10874,7 @@ export class WorldScene extends Phaser.Scene {
       (me.equippedWeaponIndex ?? -1) >= 0
         ? WEAPONS[me.equippedWeaponIndex]
         : undefined;
-    // Firearms only mark targets while CTRL-aiming, since a plain click no
+    // Firearms only mark targets while right-click aiming, since a plain click no
     // longer shoots. Melee keeps click-to-attack.
     const weaponEquipped =
       !!equippedWeapon && (isMeleeWeapon(equippedWeapon) || this.aimHeld);
@@ -11449,7 +11774,7 @@ export class WorldScene extends Phaser.Scene {
         // Furnaces are stations, not loot piles, so a depleted flag must not
         // cancel the walk-up that opens the fuel dialog.
         if (furnitureIsFurnace(item.objectType) || furnitureIsStairs(item.objectType)) return true;
-        return !item.depleted;
+        return this.searchableCanBeClicked(item);
       });
       if (!target) return null;
 
@@ -12396,7 +12721,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * CTRL-aim click with a melee weapon: swing toward the cursor. The server
+   * Right-click aim with a melee weapon: swing toward the cursor. The server
    * damages the closest target in range along that swing.
    */
   private swingMeleeAt(screenX: number, screenY: number) {
@@ -12495,7 +12820,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * CTRL-aim click: fire down the cursor line. The server traces the round and
+   * Right-click aim: fire down the cursor line. The server traces the round and
    * reports what it struck, so nothing is target-locked here.
    */
   private fireFreeAimAt(screenX: number, screenY: number) {
@@ -12604,7 +12929,7 @@ export class WorldScene extends Phaser.Scene {
     ignoreAim = false,
   ) {
     if (!this.room) return;
-    // CTRL aim blocks click-to-move; keyboard stopOnly (same tile) still allowed.
+    // Right-click aim blocks click-to-move; keyboard stopOnly (same tile) still allowed.
     // E can still step through a doorway while a firearm is aimed.
     if (this.aimHeld && !ignoreAim) {
       const me = this.room.state?.players?.get(this.sessionId);
@@ -12717,6 +13042,7 @@ export class WorldScene extends Phaser.Scene {
     this.moveStickEl?.classList.toggle("move-stick--blocked", blocked);
     if (blocked) {
       if (this.moveStickPointerId !== null) this.releaseMoveStick();
+      this.clearMoveStickKeyboardVisual();
       // UI steals keyup — clear stuck WASD/Shift so we don't keep walking.
       this.clearHeldMoveKeys();
       this.sendSteer(0, 0, false);
@@ -12725,16 +13051,23 @@ export class WorldScene extends Phaser.Scene {
 
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me?.alive) {
+      this.clearMoveStickKeyboardVisual();
       this.sendSteer(0, 0, false);
       return;
     }
 
-    const { screenDx, screenDy } = this.readKeyboardMoveVector();
+    const keys = this.readKeyMoveVector();
+    const usingKeys = keys.screenDx !== 0 || keys.screenDy !== 0;
+    const { screenDx, screenDy } = usingKeys ? keys : this.readMoveStickVector();
+    if (!usingKeys) this.clearMoveStickKeyboardVisual();
     if (screenDx === 0 && screenDy === 0) {
       this.pauseMoveAfterStairs = false;
       this.sendSteer(0, 0, false);
       return;
     }
+
+    const sprint = this.isSprintKeyDown() && (me.stamina ?? 0) > 0;
+    if (usingKeys) this.syncMoveStickFromKeys(screenDx, screenDy, sprint);
     if (this.aimHeld) this.cancelAimFromMove();
     if (this.pauseMoveAfterStairs) {
       this.sendSteer(0, 0, false);
@@ -12742,7 +13075,6 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const world = screenInputToWorldDelta(screenDx, screenDy);
-    const sprint = this.isSprintKeyDown() && (me.stamina ?? 0) > 0;
     this.sendSteer(world.x, world.y, sprint);
   }
 
@@ -12767,15 +13099,21 @@ export class WorldScene extends Phaser.Scene {
     this.shiftKey?.reset();
   }
 
-  /** Screen-space move vector from WASD, arrows, or the mobile thumb stick. */
-  private readKeyboardMoveVector(): { screenDx: number; screenDy: number } {
+  /** Screen-space move vector from WASD or the arrow keys. */
+  private readKeyMoveVector(): { screenDx: number; screenDy: number } {
     let screenDx = 0;
     let screenDy = 0;
     if (this.keys.A.isDown || this.cursors.left.isDown) screenDx -= 1;
     if (this.keys.D.isDown || this.cursors.right.isDown) screenDx += 1;
     if (this.keys.W.isDown || this.cursors.up.isDown) screenDy -= 1;
     if (this.keys.S.isDown || this.cursors.down.isDown) screenDy += 1;
-    if (screenDx !== 0 || screenDy !== 0) return { screenDx, screenDy };
+    return { screenDx, screenDy };
+  }
+
+  /** Screen-space move vector from WASD, arrows, or the mobile thumb stick. */
+  private readKeyboardMoveVector(): { screenDx: number; screenDy: number } {
+    const keys = this.readKeyMoveVector();
+    if (keys.screenDx !== 0 || keys.screenDy !== 0) return keys;
     return this.readMoveStickVector();
   }
 
@@ -12844,7 +13182,7 @@ export class WorldScene extends Phaser.Scene {
         ) {
           return true;
         }
-        return !item.depleted;
+        return this.searchableCanBeClicked(item);
       }) ?? null
     );
   }
@@ -12859,7 +13197,7 @@ export class WorldScene extends Phaser.Scene {
     if (!me) {
       if (this.hoveredSearchableId !== null) {
         this.hoveredSearchableId = null;
-        this.interiorView?.setHoveredItem(null, []);
+        this.interiorView?.setHoveredItem(null);
       }
       return;
     }
@@ -12916,7 +13254,7 @@ export class WorldScene extends Phaser.Scene {
     if (newId !== this.hoveredSearchableId) {
       this.hoveredSearchableId = newId;
       if (me.inInterior) {
-        this.interiorView?.setHoveredItem(newId, this.searchablesCache);
+        this.interiorView?.setHoveredItem(newId);
       } else if (hovered) {
         this.tileManager?.highlightInteractionTile(hovered.x, hovered.y);
       } else {
@@ -13885,6 +14223,439 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Screen position of a tile-space point, matching the camera used for chat icons.
+   * liftPx raises the point in camera pixels so a name can sit above a head.
+   */
+  private worldToClient(
+    worldX: number,
+    worldY: number,
+    liftPx = 0,
+  ): { x: number; y: number } | null {
+    const cam = this.cameras.main;
+    const canvas = this.game.canvas;
+    if (!cam || !canvas) return null;
+    const iso = cartesianToIso(worldX, worldY);
+    const rect = canvas.getBoundingClientRect();
+    const zoom = cam.zoom || 1;
+    const scaleX = canvas.width > 0 ? rect.width / canvas.width : 1;
+    const scaleY = canvas.height > 0 ? rect.height / canvas.height : 1;
+    let scrollX = cam.scrollX;
+    let scrollY = cam.scrollY;
+    if (cam.roundPixels) {
+      scrollX = Math.floor(scrollX);
+      scrollY = Math.floor(scrollY);
+    }
+    const originX = cam.width * cam.originX;
+    const originY = cam.height * cam.originY;
+    const localX =
+      zoom * (iso.x - scrollX - originX) + Math.floor(cam.x + originX + 0.5);
+    const localY =
+      zoom * (iso.y - liftPx - scrollY - originY) + Math.floor(cam.y + originY + 0.5);
+    return { x: rect.left + localX * scaleX, y: rect.top + localY * scaleY };
+  }
+
+  private guideOverworld(
+    me: { inInterior?: boolean; buildingX: number; buildingY: number },
+    tile: { x: number; y: number },
+    label: string,
+  ): { x: number; y: number; label: string } {
+    if (me.inInterior) {
+      const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
+      return { x: exit.insideX + 0.5, y: exit.insideY + 0.5, label };
+    }
+    return { x: tile.x + 0.5, y: tile.y + 0.5, label };
+  }
+
+  private guideDoor(
+    me: { inInterior?: boolean; buildingX: number; buildingY: number },
+    bld: Parameters<typeof buildingEntranceRun>[0] | null | undefined,
+    label: string,
+  ): { x: number; y: number; label: string } | null {
+    if (!bld) return null;
+    const door = this.buildingDoorwayPoint(bld);
+    return this.guideOverworld(me, { x: Math.floor(door.x), y: Math.floor(door.y) }, label);
+  }
+
+  /** Arrow target for the objective the tracker is showing. */
+  private tutorialGuideTile(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+    interiorLevel?: number;
+  }): { x: number; y: number; label: string } | null {
+    const step = this.onboardingUI?.currentStepId();
+    if (!step) return null;
+    const clarkSteps = new Set([
+      "intro",
+      "move",
+      "talk_clark",
+      "accept_aye_captain",
+    ]);
+    if (clarkSteps.has(step)) return this.guideDoctor(me, "Doctor Clark");
+    if (step === "leave_hospital") {
+      if (me.inInterior && isBirchportHospital(me.buildingX, me.buildingY)) {
+        const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
+        return { x: exit.insideX + 0.5, y: exit.insideY + 0.5, label: "Ward exit" };
+      }
+      return this.guideDoctor(me, "Ward exit");
+    }
+    if (step === "sprint" || step === "reach_gate") {
+      const gate = birchportBarracksBargateOutsideStand();
+      return this.guideOverworld(me, gate, "Barracks gate");
+    }
+    if (step === "reach_mess") {
+      const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+      return this.guideOverworld(
+        me,
+        { x: mess.entranceX, y: mess.entranceY },
+        "Mess hall",
+      );
+    }
+    if (
+      step === "talk_davis" ||
+      step === "turn_in_aye" ||
+      step === "accept_two_behind" ||
+      (step === "finish" &&
+        parseQuestsJson(this.cachedQuestsJson).quests[QUEST_ID_DEAL_WITH_DEVIL]
+          ?.status !== "active")
+    ) {
+      return this.guideDavis(me);
+    }
+    if (step === "search_coleman") return this.guideColemanReturn(me);
+    if (step === "finish") return this.guideDealReturn(me);
+    return null;
+  }
+
+  private guideDoctor(
+    me: {
+      inInterior?: boolean;
+      buildingX: number;
+      buildingY: number;
+      interiorLevel?: number;
+    },
+    label: string,
+  ): { x: number; y: number; label: string } | null {
+    const doctor = this.militiaGuideGuard((skin) => isMilitiaDoctorSkin(skin));
+    if (
+      doctor &&
+      me.inInterior &&
+      doctor.inInterior &&
+      me.buildingX === doctor.buildingX &&
+      me.buildingY === doctor.buildingY &&
+      (me.interiorLevel ?? 0) === 0
+    ) {
+      return { x: doctor.x, y: doctor.y, label };
+    }
+    const origin = doctor
+      ? { x: doctor.buildingX, y: doctor.buildingY }
+      : this.tutorialWard;
+    const bld = origin ? getBuildingAt(origin.x, origin.y) : null;
+    return this.guideDoor(me, bld, label);
+  }
+
+  private insideDealMotel(me: {
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): boolean {
+    const motel = colemanMotel();
+    return (
+      !!motel &&
+      !!me.inInterior &&
+      me.buildingX === motel.ox &&
+      me.buildingY === motel.oy
+    );
+  }
+
+  /** Blood is inspected and the dog tag is in hand or already marked found. */
+  private dealCluesSecured(): boolean {
+    const quest = parseQuestsJson(this.cachedQuestsJson).quests[QUEST_ID_DEAL_WITH_DEVIL];
+    if (quest?.status !== "active") return false;
+    if ((quest.progress[STORY_OBJECTIVE_INSPECT_BLOOD] ?? 0) < 1) return false;
+    if ((quest.progress[STORY_OBJECTIVE_FIND_TAG] ?? 0) >= 1) return true;
+    if (quest.flags?.tagFound) return true;
+    const pack =
+      this.localInventorySync?.inventoryJson ??
+      this.room?.state?.players?.get(this.sessionId)?.inventoryJson ??
+      "";
+    return countItemInInventory(parseInventory(pack), HOLLAND_DOGTAG_ITEM_ID) > 0;
+  }
+
+  /**
+   * After both motel clues, walk them out, through the gate, into the mess, then to Davis.
+   * Before that, the marker stays on the motel, and the search line shows once they are inside.
+   */
+  private dealReturnLeg(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): "travel" | "search" | "exit" | "gate" | "mess" | "davis" {
+    if (!this.dealCluesSecured()) {
+      return this.insideDealMotel(me) ? "search" : "travel";
+    }
+    if (this.insideDealMotel(me)) return "exit";
+    if (me.inInterior && isBirchportBarracksMessHall(me.buildingX, me.buildingY)) {
+      return "davis";
+    }
+    if (
+      !me.inInterior &&
+      isInBirchportBarracksYard(Math.floor(me.x), Math.floor(me.y))
+    ) {
+      return "mess";
+    }
+    return "gate";
+  }
+
+  private guideDealReturn(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): { x: number; y: number; label: string } | null {
+    const leg = this.dealReturnLeg(me);
+    if (leg === "search") return null;
+    if (leg === "exit") {
+      const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
+      return { x: exit.insideX + 0.5, y: exit.insideY + 0.5, label: "Motel exit" };
+    }
+    if (leg === "gate") {
+      return this.guideOverworld(me, birchportBarracksBargateOutsideStand(), "Barracks gate");
+    }
+    if (leg === "mess") {
+      const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+      return this.guideOverworld(
+        me,
+        { x: mess.entranceX, y: mess.entranceY },
+        "Mess hall",
+      );
+    }
+    if (leg === "davis") return this.guideDavis(me);
+    return this.guideDoor(me, colemanMotel(), "East Forestford motel");
+  }
+
+  /** Note is in hand, or the find step is already marked. */
+  private colemanNoteSecured(): boolean {
+    const quest = parseQuestsJson(this.cachedQuestsJson).quests[QUEST_ID_TWO_BEHIND];
+    if (quest?.status !== "active") return false;
+    if ((quest.progress[STORY_OBJECTIVE_FIND_NOTE] ?? 0) >= 1) return true;
+    if (quest.flags?.noteFound) return true;
+    const pack =
+      this.localInventorySync?.inventoryJson ??
+      this.room?.state?.players?.get(this.sessionId)?.inventoryJson ??
+      "";
+    return countItemInInventory(parseInventory(pack), COLEMAN_NOTE_ITEM_ID) > 0;
+  }
+
+  /**
+   * After the note, walk them out, through the gate, into the mess, then to Davis.
+   * Before that, the marker stays on the house.
+   */
+  private colemanReturnLeg(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): "search" | "exit" | "gate" | "mess" | "davis" {
+    if (!this.colemanNoteSecured()) return "search";
+    const house = colemanHouse();
+    if (
+      house &&
+      me.inInterior &&
+      me.buildingX === house.ox &&
+      me.buildingY === house.oy
+    ) {
+      return "exit";
+    }
+    if (me.inInterior && isBirchportBarracksMessHall(me.buildingX, me.buildingY)) {
+      return "davis";
+    }
+    if (
+      !me.inInterior &&
+      isInBirchportBarracksYard(Math.floor(me.x), Math.floor(me.y))
+    ) {
+      return "mess";
+    }
+    return "gate";
+  }
+
+  private guideColemanReturn(me: {
+    x: number;
+    y: number;
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+  }): { x: number; y: number; label: string } | null {
+    const leg = this.colemanReturnLeg(me);
+    if (leg === "exit") {
+      const exit = interiorExitForBuildingAt(me.buildingX, me.buildingY);
+      return { x: exit.insideX + 0.5, y: exit.insideY + 0.5, label: "House exit" };
+    }
+    if (leg === "gate") {
+      return this.guideOverworld(me, birchportBarracksBargateOutsideStand(), "Barracks gate");
+    }
+    if (leg === "mess") {
+      const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+      return this.guideOverworld(
+        me,
+        { x: mess.entranceX, y: mess.entranceY },
+        "Mess hall",
+      );
+    }
+    if (leg === "davis") return this.guideDavis(me);
+    const house = colemanHouse();
+    if (
+      house &&
+      me.inInterior &&
+      me.buildingX === house.ox &&
+      me.buildingY === house.oy
+    ) {
+      return null;
+    }
+    return this.guideDoor(me, house, "Coleman's house");
+  }
+
+  private guideDavis(me: {
+    inInterior?: boolean;
+    buildingX: number;
+    buildingY: number;
+    interiorLevel?: number;
+  }): { x: number; y: number; label: string } | null {
+    const davis = this.militiaGuideGuard(
+      (skin) => isMilitiaCaptainSkin(skin),
+      true,
+    );
+    if (
+      davis &&
+      me.inInterior &&
+      davis.inInterior &&
+      me.buildingX === davis.buildingX &&
+      me.buildingY === davis.buildingY
+    ) {
+      return { x: davis.x, y: davis.y, label: "Captain Davis" };
+    }
+    const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+    return this.guideOverworld(
+      me,
+      { x: mess.entranceX, y: mess.entranceY },
+      "Mess hall",
+    );
+  }
+
+  private militiaGuideGuard(
+    match: (skin: number) => boolean,
+    preferMess = false,
+  ): {
+    x: number;
+    y: number;
+    skin: number;
+    alive: boolean;
+    inInterior: boolean;
+    buildingX: number;
+    buildingY: number;
+  } | null {
+    const guards = this.room?.state?.guards;
+    if (!guards) return null;
+    const found: {
+      mess: {
+        x: number;
+        y: number;
+        skin: number;
+        alive: boolean;
+        inInterior: boolean;
+        buildingX: number;
+        buildingY: number;
+      } | null;
+      fallback: {
+        x: number;
+        y: number;
+        skin: number;
+        alive: boolean;
+        inInterior: boolean;
+        buildingX: number;
+        buildingY: number;
+      } | null;
+    } = { mess: null, fallback: null };
+    guards.forEach((guard) => {
+      if (!guard.alive || !match(guard.skin)) return;
+      if (
+        preferMess &&
+        guard.inInterior &&
+        isBirchportBarracksMessHall(guard.buildingX, guard.buildingY)
+      ) {
+        found.mess = guard;
+        return;
+      }
+      found.fallback = guard;
+    });
+    return found.mess ?? found.fallback;
+  }
+
+  /**
+   * Camera pixels from the feet tile up to a small gap above a standing human.
+   * Sprite origin is 0.95 of the 80px body, then 6px of frame padding.
+   * Zero for doors, gates, and other ground markers.
+   */
+  private tutorialNameAboveHead(label: string | undefined): number {
+    if (label !== "Doctor Clark" && label !== "Captain Davis") return 0;
+    return Math.round(ENTITY_RENDER_HEIGHT * 0.95 - 6 + 10);
+  }
+
+  /** Keep the objective pin and Clark's name on the current tutorial target. */
+  private syncTutorialGuide() {
+    const ui = this.onboardingUI;
+    if (!ui?.isTutorialActive()) {
+      ui?.setGuide(null);
+      ui?.setClarkPlate(null);
+      ui?.setColemanLeg("search");
+      ui?.setMotelLeg("travel");
+      return;
+    }
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me?.alive) {
+      ui.setGuide(null);
+      ui.setClarkPlate(null);
+      ui.setColemanLeg("search");
+      ui.setMotelLeg("travel");
+      return;
+    }
+    if (me.inInterior && isBirchportHospital(me.buildingX, me.buildingY)) {
+      this.tutorialWard = { x: me.buildingX, y: me.buildingY };
+    }
+    ui.setColemanLeg(this.colemanReturnLeg(me));
+    ui.setMotelLeg(this.dealReturnLeg(me));
+    const guide = this.tutorialGuideTile(me);
+    const aboveHead = this.tutorialNameAboveHead(guide?.label);
+    const screen = guide
+      ? this.worldToClient(guide.x, guide.y, aboveHead)
+      : null;
+    ui.setGuide(
+      guide && screen ? { ...screen, label: guide.label, aboveHead: aboveHead > 0 } : null,
+    );
+    if (guide?.label === "Doctor Clark" || ui.hasStep("talk_clark")) {
+      ui.setClarkPlate(null);
+      return;
+    }
+    const doctor = this.militiaGuideGuard((skin) => isMilitiaDoctorSkin(skin));
+    const sameRoom =
+      !!doctor &&
+      !!me.inInterior &&
+      doctor.inInterior &&
+      me.buildingX === doctor.buildingX &&
+      me.buildingY === doctor.buildingY;
+    ui.setClarkPlate(
+      sameRoom
+        ? this.worldToClient(doctor.x, doctor.y, this.tutorialNameAboveHead("Doctor Clark"))
+        : null,
+    );
+  }
+
   /** Throttled checks that advance tutorial steps and raise one-time tips. */
   private updateTutorialWatch(
     me: {
@@ -13939,6 +14710,45 @@ export class WorldScene extends Phaser.Scene {
 
     if (me.inInterior === false) {
       ui.notifyStep("leave_hospital");
+    }
+
+    const inHospital =
+      !!me.inInterior && isBirchportHospital(me.buildingX, me.buildingY);
+    if (ui.isTutorialActive() && this.tutorialInsideHospital && !me.inInterior) {
+      ui.notifyTip("town_quiet");
+    }
+    this.tutorialInsideHospital = inHospital;
+
+    const rationsJson =
+      this.localInventorySync?.inventoryJson ??
+      this.room?.state?.players?.get(this.sessionId)?.inventoryJson ??
+      "";
+    if (rationsJson !== this.tutorialRationsKey) {
+      this.tutorialRationsKey = rationsJson;
+      const pack = parseInventory(rationsJson);
+      ui.setRationsReady(
+        countItemInInventory(pack, "canned_tuna") > 0 ||
+          countItemInInventory(pack, "water") > 0,
+      );
+    }
+
+    if (!me.inInterior) {
+      const inYard = isInBirchportBarracksYard(Math.floor(me.x), Math.floor(me.y));
+      if (inYard) {
+        ui.notifyStep("sprint");
+        ui.notifyStep("reach_gate");
+      }
+      const mess = BIRCHPORT_BARRACKS_MESS_HALL;
+      if (
+        inYard &&
+        Math.hypot(me.x - mess.entranceX, me.y - mess.entranceY) < 4
+      ) {
+        ui.notifyStep("reach_mess");
+      }
+    } else if (isBirchportBarracksMessHall(me.buildingX, me.buildingY)) {
+      ui.notifyStep("sprint");
+      ui.notifyStep("reach_gate");
+      ui.notifyStep("reach_mess");
     }
 
     if (me.hunger <= HUNGER_MAX * 0.25) ui.notifyTip("hungry");
@@ -14211,6 +15021,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.updateTutorialWatch(me, health, maxHp, staminaPct, tempLook.fx);
+    this.syncTutorialGuide();
 
     // Progress from a local start time (not server absolute end timestamps),
     // so RTT doesn't make the bar jump to ~30% and vanish before loot arrives.
@@ -14509,12 +15320,79 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * Interiors share one local tile grid. A hit only draws when the target is
+   * in the same room as the viewer, or both are outdoors.
+   */
+  private hitSharesView(targetId: string): boolean {
+    const me = this.room?.state?.players?.get(this.sessionId);
+    const state = this.room?.state;
+    if (!me || !state) return false;
+
+    const player = state.players.get(targetId);
+    if (player) {
+      return this.sameCombatSpace(
+        me,
+        player.inInterior,
+        player.buildingX,
+        player.buildingY,
+        player.interiorLevel,
+      );
+    }
+    const zombie = state.zombies.get(targetId);
+    if (zombie) {
+      return this.sameCombatSpace(
+        me,
+        zombie.inInterior,
+        zombie.buildingX,
+        zombie.buildingY,
+        0,
+      );
+    }
+    const guard = state.guards.get(targetId);
+    if (guard) {
+      return this.sameCombatSpace(
+        me,
+        guard.inInterior,
+        guard.buildingX,
+        guard.buildingY,
+        0,
+      );
+    }
+    if (
+      state.coywolves?.get(targetId) ||
+      state.bears?.get(targetId) ||
+      state.crows?.get(targetId) ||
+      state.rabbits?.get(targetId)
+    ) {
+      return !me.inInterior;
+    }
+    return false;
+  }
+
+  private sameCombatSpace(
+    me: { inInterior: boolean; buildingX: number; buildingY: number; interiorLevel: number },
+    inInterior: boolean,
+    buildingX: number,
+    buildingY: number,
+    interiorLevel: number,
+  ): boolean {
+    if (!!inInterior !== !!me.inInterior) return false;
+    if (!inInterior) return true;
+    return (
+      buildingX === me.buildingX &&
+      buildingY === me.buildingY &&
+      interiorLevel === (me.interiorLevel ?? 0)
+    );
+  }
+
   private handleEntityHit(
     targetId: string,
     worldX: number,
     worldY: number,
     weaponIndex: number,
   ) {
+    if (!this.hitSharesView(targetId)) return;
     this.recentGunHits.add(targetId);
     this.time.delayedCall(700, () => this.recentGunHits.delete(targetId));
     const crowAltitude = this.crowAltitude(targetId);
@@ -15128,7 +16006,7 @@ export class WorldScene extends Phaser.Scene {
         const starving =
           id === this.sessionId &&
           (data.hunger <= 0 || data.thirst <= 0);
-        if (!starving && !this.recentGunHits.has(id)) {
+        if (!starving && !this.recentGunHits.has(id) && this.hitSharesView(id)) {
           this.spawnBlood(data.x, data.y);
         }
       }
@@ -15302,6 +16180,7 @@ export class WorldScene extends Phaser.Scene {
    */
   private tryStayInCombat(room: WorldRoom, code: number, reason?: string): boolean {
     if (code === 4001 || code === 4002 || code === 4003) return false;
+    if (this.restartAtMs > 0) return false;
     if (this.combatLockUntil <= Date.now()) return false;
     const client = this.colyseusClient;
     const token = room.reconnectionToken;
@@ -15361,7 +16240,9 @@ export class WorldScene extends Phaser.Scene {
             : "You have been kicked from the server"
           : code === 4003
             ? "You are banned from the server"
-            : "Lost connection with the server";
+            : this.restartAtMs > 0
+              ? "The server is restarting. Join again in a moment."
+              : "Lost connection with the server";
     this.registry.set("menuError", detail);
     document.body.classList.remove("game-ready");
     hideWorldEntering();
@@ -15385,11 +16266,13 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private refreshCombatLockBanner() {
+    this.refreshRestartBanner();
     const leftMs = this.combatLockUntil - Date.now();
     let banner = this.combatLockBanner();
     if (leftMs <= 0) {
       banner?.remove();
       this.combatLockShownSec = -1;
+      this.releaseNoticeStack();
       return;
     }
     const secs = Math.max(1, Math.ceil(leftMs / 1000));
@@ -15398,9 +16281,101 @@ export class WorldScene extends Phaser.Scene {
     if (!banner) {
       banner = document.createElement("div");
       banner.id = "combat-lock-banner";
-      document.body.appendChild(banner);
+      this.noticeStack().appendChild(banner);
     }
     banner.textContent = `In combat. You can't leave for ${secs}s.`;
+  }
+
+  private applyRestartWarning(msg: {
+    kind?: string;
+    minutes?: number;
+    holdMs?: number;
+    remainingMs?: number;
+  }) {
+    if (msg?.kind === "clear") {
+      this.restartAtMs = 0;
+      this.restartFlashUntil = 0;
+      this.restartFlashMinutes = 0;
+      this.restartShownLabel = "";
+      this.refreshCombatLockBanner();
+      return;
+    }
+    if (msg?.kind === "countdown") {
+      const remaining = typeof msg.remainingMs === "number" ? msg.remainingMs : 0;
+      this.restartAtMs = Date.now() + Math.max(0, remaining);
+      this.restartFlashUntil = 0;
+      this.restartFlashMinutes = 0;
+      this.refreshCombatLockBanner();
+      return;
+    }
+    if (
+      msg?.kind === "flash" &&
+      (msg.minutes === 10 || msg.minutes === 5) &&
+      this.restartAtMs <= 0
+    ) {
+      const hold = typeof msg.holdMs === "number" && msg.holdMs > 0 ? msg.holdMs : 10_000;
+      this.restartFlashMinutes = msg.minutes;
+      this.restartFlashUntil = Date.now() + hold;
+      this.refreshCombatLockBanner();
+    }
+  }
+
+  /** Restart copy is the top line. Combat lock sits under it when both show. */
+  private refreshRestartBanner() {
+    const now = Date.now();
+    let text = "";
+    if (this.restartAtMs > 0) {
+      const secs = Math.max(1, Math.ceil((this.restartAtMs - now) / 1000));
+      text = this.restartBannerText("second", secs);
+    } else if (this.restartFlashUntil > now && this.restartFlashMinutes > 0) {
+      text = this.restartBannerText("minute", this.restartFlashMinutes);
+    } else {
+      this.restartFlashUntil = 0;
+      this.restartFlashMinutes = 0;
+      this.restartShownLabel = "";
+      this.restartBanner()?.remove();
+      this.releaseNoticeStack();
+      return;
+    }
+    const banner = this.ensureRestartBanner();
+    if (banner.textContent !== text) {
+      this.restartShownLabel = text;
+      banner.textContent = text;
+    }
+  }
+
+  private restartBannerText(unit: "minute" | "second", count: number): string {
+    const label = count === 1 ? unit : `${unit}s`;
+    return `The server will automatically restart in ${count} ${label}.`;
+  }
+
+  private restartBanner(): HTMLElement | null {
+    return document.getElementById("restart-banner");
+  }
+
+  private ensureRestartBanner(): HTMLElement {
+    let banner = this.restartBanner();
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "restart-banner";
+      this.noticeStack().prepend(banner);
+    }
+    return banner;
+  }
+
+  private noticeStack(): HTMLElement {
+    let stack = document.getElementById("notice-stack");
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.id = "notice-stack";
+      document.body.appendChild(stack);
+    }
+    return stack;
+  }
+
+  private releaseNoticeStack() {
+    const stack = document.getElementById("notice-stack");
+    if (stack && stack.childElementCount === 0) stack.remove();
   }
 
   private entityVisible(
@@ -16584,6 +17559,7 @@ export class WorldScene extends Phaser.Scene {
    * glTexture (that aborts the whole WebGL frame: buildings + NPCs vanish).
    */
   private softHideEntitySprite(sprite: EntitySprite) {
+    if (sprite.entityId) this.occludedEntityGhosts?.hide(sprite.entityId);
     sprite.setData("visualKey", "");
     const key = sprite.texture?.key;
     if (
@@ -16666,11 +17642,14 @@ export class WorldScene extends Phaser.Scene {
     if (!image) return;
     this.clearEntityDieAnim(id);
     this.entityActionLabels?.clearEntity(id);
+    this.occludedEntityGhosts?.hide(id);
+    this.seenLosCache.delete(id);
     image.destroy();
     map.delete(id);
   }
 
   private refreshAllVisuals(delta = 0) {
+    this.seenThroughEpoch++;
     this.tickZombieWalkAnims(delta / 1000);
     this.tickCoywolfWalkAnims(delta / 1000);
     this.tickBearWalkAnims(delta / 1000);
@@ -17296,6 +18275,7 @@ export class WorldScene extends Phaser.Scene {
       | undefined;
 
     if (!data) {
+      this.occludedEntityGhosts?.hide(entityId);
       return;
     }
 
@@ -17548,6 +18528,78 @@ export class WorldScene extends Phaser.Scene {
     if (entityId === this.sessionId && kind === "player") {
       this.cameras.main.centerOn(iso.x, iso.y);
     }
+
+    this.occludedEntityGhosts?.sync({
+      id: entityId,
+      kind,
+      sprite,
+      tileX: Math.floor(renderPos.x),
+      tileY: Math.floor(renderPos.y),
+      depth,
+      worldX: renderPos.x,
+      worldY: renderPos.y,
+      skip: entityId === this.sessionId,
+      viewer: this.seenThroughViewer(),
+      hasLineOfSight: (fromX, fromY, toX, toY) =>
+        this.seenThroughHasLos(entityId, fromX, fromY, toX, toY),
+    });
+  }
+
+  /**
+   * Where the local player is looking from this frame. Null when dead or
+   * indoors: exterior cuboids are not on screen inside a building.
+   * Aim bearing while aiming, otherwise the body facing. Position matches
+   * shot sight lines (server tile, not the interpolated sprite).
+   */
+  private seenThroughViewer(): { x: number; y: number; facing: number } | null {
+    if (this.seenThroughEpochReady === this.seenThroughEpoch) {
+      return this.seenThroughViewerCache;
+    }
+    this.seenThroughEpochReady = this.seenThroughEpoch;
+    const me = this.room?.state?.players?.get(this.sessionId);
+    if (!me || !me.alive || me.inInterior) {
+      this.seenThroughViewerCache = null;
+      return null;
+    }
+    this.seenThroughViewerCache = {
+      x: me.x,
+      y: me.y,
+      facing:
+        this.aimHeld && this.localAimFacing != null
+          ? this.localAimFacing
+          : (me.facing ?? 4),
+    };
+    return this.seenThroughViewerCache;
+  }
+
+  /**
+   * Gameplay sight line (buildings, closed doors, player walls). Cached on the
+   * tile pair so a crowd behind one block does not ray-march every frame.
+   */
+  private seenThroughHasLos(
+    id: string,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+  ): boolean {
+    const key = `${Math.floor(fromX)},${Math.floor(fromY)},${Math.floor(toX)},${Math.floor(toY)}`;
+    const now = Date.now();
+    const cached = this.seenLosCache.get(id);
+    if (cached && cached.key === key && now - cached.at < 150) return cached.ok;
+    const ok = hasEntityLineOfSight({
+      fromX,
+      fromY,
+      toX,
+      toY,
+      inInterior: false,
+      blocksSightAt: (tx, ty) => this.overworldSightBlockedAt(tx, ty),
+    });
+    if (!this.seenLosCache.has(id) && this.seenLosCache.size > 400) {
+      this.seenLosCache.clear();
+    }
+    this.seenLosCache.set(id, { key, ok, at: now });
+    return ok;
   }
 
   private equipWeaponBySlot(slotIndex: number) {
@@ -17595,6 +18647,11 @@ export class WorldScene extends Phaser.Scene {
 
   private dropItem(slotIndex: number, quantity = 1) {
     if (!this.room) return;
+    const pack =
+      this.localInventorySync?.inventoryJson ??
+      this.room.state.players.get(this.sessionId)?.inventoryJson ??
+      "";
+    if (isQuestBoundEntry(parseInventory(pack)[slotIndex])) return;
     const message: ClientMessage = {
       type: "dropItem",
       payload: { slotIndex, quantity },
@@ -18518,6 +19575,12 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
   }
 
+  private requestSafeDepositUpgrade() {
+    if (!this.room) return;
+    const message: ClientMessage = { type: "safeDepositUpgrade" };
+    this.room.send("action", message);
+  }
+
   private requestMarketOpen(traderId: string) {
     if (!this.room || !traderId) return;
     if (this.playerMarketUI?.isOpen() && this.playerMarketUI.getTraderId() === traderId) {
@@ -18925,7 +19988,6 @@ export class WorldScene extends Phaser.Scene {
     if (this.playerMarketUI?.isOpen()) this.closePlayerMarketUI();
     if (this.redOrderDialogUI?.isOpen()) this.closeRedOrderDialog();
     if (this.ashenTraderDialogUI?.isOpen()) this.closeAshenTraderDialog();
-    if (isMilitiaDoctorSkin(payload.npcSkin)) this.notifyTutorial("talk_clark");
     if (isMilitiaCaptainSkin(payload.npcSkin)) this.notifyTutorial("talk_davis");
     const me = this.room?.state?.players?.get(this.sessionId);
     const inventoryJson =

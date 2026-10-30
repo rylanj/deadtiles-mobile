@@ -1,4 +1,5 @@
 import {
+  GIFT_BOX_ITEM_ID,
   INVENTORY_ITEMS,
   addToInventory,
   backpackHoldsItems,
@@ -7,6 +8,7 @@ import {
   cloneInventory,
   countItemInInventory,
   getItemDefinition,
+  isQuestBoundEntry,
   isQuestKeepsakeItem,
   maxStackForItem,
   rollWatchVariant,
@@ -16,6 +18,11 @@ import {
   type Inventory,
   type InventoryEntry,
 } from "./items.js";
+import {
+  SAFE_DEPOSIT_MAX_SLOTS,
+  SAFE_DEPOSIT_SLOTS,
+  SAFE_DEPOSIT_UPGRADE_SLOTS,
+} from "./buildCosts.js";
 import { DEADMARK_MIN_WIRE } from "./deadmark.js";
 import {
   FACTION_REP_ALLIED,
@@ -46,9 +53,47 @@ export const ASHEN_MARKET_BANKNOTES_MAX = 20000;
 /** One-time banknote fee for a Birchport market safe deposit box. */
 export const SAFE_DEPOSIT_COST = 1000;
 
+/** Banknote fee to add four more safe deposit slots. */
+export const SAFE_DEPOSIT_UPGRADE_COST = 4000;
+
 /** True once the player has paid for a safe deposit box. Empty means unpaid. */
 export function safeDepositIsRented(json: string | null | undefined): boolean {
   return typeof json === "string" && json.length > 0 && json !== "[]";
+}
+
+/** Snap a stored array length to 8, 12, 16, or 20. Never below the default. */
+export function snapSafeDepositSlots(length: number): number {
+  const n = Math.floor(length);
+  if (!Number.isFinite(n) || n <= SAFE_DEPOSIT_SLOTS) return SAFE_DEPOSIT_SLOTS;
+  if (n >= SAFE_DEPOSIT_MAX_SLOTS) return SAFE_DEPOSIT_MAX_SLOTS;
+  if (n >= SAFE_DEPOSIT_SLOTS + SAFE_DEPOSIT_UPGRADE_SLOTS * 2) {
+    return SAFE_DEPOSIT_SLOTS + SAFE_DEPOSIT_UPGRADE_SLOTS * 2;
+  }
+  if (n >= SAFE_DEPOSIT_SLOTS + SAFE_DEPOSIT_UPGRADE_SLOTS) {
+    return SAFE_DEPOSIT_SLOTS + SAFE_DEPOSIT_UPGRADE_SLOTS;
+  }
+  return SAFE_DEPOSIT_SLOTS;
+}
+
+/** Slot count for a rented box. Unpaid JSON still reports the default size. */
+export function safeDepositSlotCountFromJson(
+  json: string | null | undefined,
+): number {
+  if (!safeDepositIsRented(json)) return SAFE_DEPOSIT_SLOTS;
+  try {
+    const parsed = JSON.parse(json as string);
+    if (!Array.isArray(parsed)) return SAFE_DEPOSIT_SLOTS;
+    return snapSafeDepositSlots(parsed.length);
+  } catch {
+    return SAFE_DEPOSIT_SLOTS;
+  }
+}
+
+/** Next size after one upgrade, or null at the cap. */
+export function nextSafeDepositSlotCount(slots: number): number | null {
+  const current = snapSafeDepositSlots(slots);
+  if (current >= SAFE_DEPOSIT_MAX_SLOTS) return null;
+  return current + SAFE_DEPOSIT_UPGRADE_SLOTS;
 }
 
 /**
@@ -214,6 +259,10 @@ export type AshenDialogLine = {
   npcMarketAllied?: readonly string[];
   /** Speech shown once the safe deposit fee is already paid. */
   playerRented?: string;
+  /** Speech shown when bought notes are waiting at Kevin's desk. */
+  playerCollect?: string;
+  /** Kevin's reply while those notes are waiting to be collected. */
+  npcMarketCollect?: readonly string[];
 };
 
 /** Talk options for TraderMan / TraderGuard caravans. */
@@ -298,6 +347,7 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
   {
     id: "buyback",
     player: "Can I trade in my Deadmarks?",
+    playerCollect: "Collect my banknotes",
     npcMan: [
       "That's Kevin, at the Birchport market. He sells paper for marks.",
     ],
@@ -308,6 +358,10 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     npcMarketAllied: [
       "For an ally, one mark buys one note. I can only offer the banknotes that have already been put aside to be shipped east. When that paper is gone, I wait until more is set aside.",
       "Yes. You get those notes one for one. They're the banknotes already put aside for the eastbound shipment, and I don't have any others to sell.",
+    ],
+    npcMarketCollect: [
+      "They're on the desk. That's the same trade. Take the paper when you're ready.",
+      "Your notes are here. Collect them from this desk, then we can talk about another trade.",
     ],
     npcGuard: [
       "That's Kevin's book. Talk to the man with the ledger.",
@@ -496,7 +550,8 @@ export function dropAshenReputationLevel(reputation: number): number {
 }
 
 /**
- * Apply Hostile passive recovery toward 0 (+1 per 10 real-life minutes).
+ * Apply Hostile passive recovery toward 0.
+ * +1 per interval, so -100 reaches Wary in 30 real minutes.
  * Uses wall-clock time, online or offline. Exiled never recovers.
  */
 export function applyAshenHostileRecovery(
@@ -535,7 +590,13 @@ export function ashenTraderRates(reputation: number): {
 }
 
 export function itemBaseTradeValue(itemId: string): number {
-  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
+  if (
+    itemId === "banknote" ||
+    itemId === GIFT_BOX_ITEM_ID ||
+    isQuestKeepsakeItem(itemId)
+  ) {
+    return 0;
+  }
   return Math.max(1, ITEM_TRADE_VALUES[itemId] ?? 5);
 }
 
@@ -545,7 +606,13 @@ export function traderSellPrice(
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
+  if (
+    itemId === "banknote" ||
+    itemId === GIFT_BOX_ITEM_ID ||
+    isQuestKeepsakeItem(itemId)
+  ) {
+    return 0;
+  }
   const { buyRate } = ashenTraderRates(reputation);
   const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
   const rate = Math.max(0.65, buyRate * (1 - 0.1 * t));
@@ -568,7 +635,13 @@ export function traderBuyPrice(
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (itemId === "banknote" || isQuestKeepsakeItem(itemId)) return 0;
+  if (
+    itemId === "banknote" ||
+    itemId === GIFT_BOX_ITEM_ID ||
+    isQuestKeepsakeItem(itemId)
+  ) {
+    return 0;
+  }
   const { sellRate } = ashenTraderRates(reputation);
   const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
   const rate = Math.min(0.5, sellRate * (1 + 0.1 * t));
@@ -807,7 +880,8 @@ const TRADER_CATALOG: Readonly<
     map: row("wary", 1, 3),
     old_teddy: row("wary", 1, 3),
     teddy: row("wary", 1, 3),
-    dogtag: row("wary", 1, 3),
+    // Dog tags only return if a player sold one.
+    dogtag: row("wary"),
     gold_chain: row("wary", 1, 3),
     gold_earrings: row("wary", 1, 3),
     gold_ring: row("wary", 1, 3),
@@ -847,12 +921,14 @@ const TRADER_CATALOG: Readonly<
     blueprint_pistol: row("neutral"),
 
     // Warm. Civilian guns and the tools they would not hand a stranger.
+    // The shotgun, antibiotics, and lockpicks only return if a player sold one.
+    // Parts and shells still roll.
     weapon_revolver: row("warm", 1, 1),
-    weapon_shotgun: row("warm", 1, 1),
+    weapon_shotgun: row("warm"),
     ammo_44: row("warm", 1, 50),
     ammo_buckshot: row("warm", 8, 24),
-    antibiotics: row("warm", 1, 3),
-    lockpick: row("warm", 1, 1),
+    antibiotics: row("warm"),
+    lockpick: row("warm"),
     backpack_small: row("warm", 1, 1),
     revolver_frame: row("warm", 1, 2),
     revolver_cylinder: row("warm", 1, 2),
@@ -866,11 +942,12 @@ const TRADER_CATALOG: Readonly<
     blueprint_revolver: row("warm"),
     blueprint_shotgun: row("warm"),
 
-    // Friendly. Hunting rifle only returns if a player sold one. 7.62 still rolls.
+    // Friendly. Hunting rifle and the leather backpack only return if a player sold one.
+    // 7.62 still rolls.
     weapon_hunting_rifle: row("friendly"),
     ammo_762x39: row("friendly", 8, 24),
     backpack_hunting: row("friendly", 1, 1),
-    backpack_leather: row("friendly", 1, 1),
+    backpack_leather: row("friendly"),
     rifle_receiver: row("friendly", 1, 2),
     rifle_barrel: row("friendly", 1, 2),
     rifle_stock: row("friendly", 1, 2),
@@ -891,9 +968,10 @@ const TRADER_CATALOG: Readonly<
     magazine_persuasion: row("friendly"),
     magazine_bartering: row("friendly"),
 
-    // Allied. Military parts and rounds. Whole rifles only come back if a player sold one.
+    // Allied. Military parts and rounds. Whole rifles and the hiking backpack
+    // only come back if a player sold one.
     ammo_556x45: row("allied", 8, 24),
-    backpack_hiking: row("allied", 1, 1),
+    backpack_hiking: row("allied"),
     ak_receiver: row("allied", 1, 2),
     ak_barrel: row("allied", 1, 2),
     ak_stock: row("allied", 1, 2),
@@ -1058,6 +1136,13 @@ export function generateTraderShop(traderId?: string): TraderShopState {
   return { banknotes, stock, capacity: limits.capacity };
 }
 
+/** Banknotes, gift boxes, and unique quest papers stay out of the sell grid. */
+export function traderHidesPlayerSlot(slot: InventoryEntry | null | undefined): boolean {
+  if (!slot || slot.quantity <= 0) return true;
+  if (slot.id === "banknote" || slot.id === GIFT_BOX_ITEM_ID) return true;
+  return isQuestBoundEntry(slot);
+}
+
 /** Player-side sellable stacks (excludes banknotes / empty). */
 export function playerTradeEntries(inventory: Inventory): {
   slotIndex: number;
@@ -1067,8 +1152,7 @@ export function playerTradeEntries(inventory: Inventory): {
   const out: { slotIndex: number; id: string; quantity: number }[] = [];
   for (let i = 0; i < inventory.length; i++) {
     const slot = inventory[i];
-    if (!slot || slot.id === "banknote" || slot.quantity <= 0) continue;
-    if (!getItemDefinition(slot.id)) continue;
+    if (!slot || traderHidesPlayerSlot(slot) || !getItemDefinition(slot.id)) continue;
     out.push({ slotIndex: i, id: slot.id, quantity: slot.quantity });
   }
   return out;
@@ -1077,7 +1161,10 @@ export function playerTradeEntries(inventory: Inventory): {
 /** Ensure every catalog item has a price entry (dev sanity). */
 export function missingTradeValueItemIds(): string[] {
   return INVENTORY_ITEMS.map((i) => i.id).filter(
-    (id) => id !== "banknote" && ITEM_TRADE_VALUES[id] == null,
+    (id) =>
+      id !== "banknote" &&
+      id !== GIFT_BOX_ITEM_ID &&
+      ITEM_TRADE_VALUES[id] == null,
   );
 }
 
@@ -1236,13 +1323,12 @@ export function applyTradeOffer(
     if (
       !slot ||
       slot.id !== line.itemId ||
-      slot.id === "banknote" ||
+      traderHidesPlayerSlot(slot) ||
       slot.quantity < line.quantity
     ) {
       return null;
     }
     if (!getItemDefinition(line.itemId)) return null;
-    if (isQuestKeepsakeItem(line.itemId)) return null;
     if (backpackHoldsItems(playerInv, line.slotIndex)) return null;
   }
 
@@ -1252,6 +1338,7 @@ export function applyTradeOffer(
       !entry ||
       entry.id !== line.itemId ||
       entry.id === "banknote" ||
+      entry.id === GIFT_BOX_ITEM_ID ||
       entry.quantity < line.quantity
     ) {
       return null;

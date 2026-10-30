@@ -402,6 +402,7 @@ export class AshenMilitiaDialogUI {
   }
 
   close() {
+    this.sheet.cancelByeClose();
     this.visible = false;
     this.overlay.hidden = true;
     this.overlay.classList.remove("talk-sheet-mode");
@@ -476,7 +477,13 @@ export class AshenMilitiaDialogUI {
     if (this.visible) this.render();
   }
 
-  /** Davis's words on a story hand-in, kept on screen while the next quest is offered. */
+  /** Open the story card for a quest that just started, so the briefing is on screen. */
+  focusStory(questId: string) {
+    if (!this.visible) return;
+    this.expandedTaskId = questId;
+  }
+
+  /** Davis's words on a story hand-in, kept on screen while the next quest is already active. */
   showReply(text: string) {
     this.scriptedLineId = "story_turn_in";
     this.scriptedReply = text;
@@ -576,8 +583,12 @@ export class AshenMilitiaDialogUI {
             ? "bandages"
             : undefined;
       fillSpeechButton(btn, line.player, iconId);
+      btn.dataset.lineId = line.id;
+      const storyNext = this.isQuestChat(line.id) && this.storyPromptPending(line.id);
       if (this.isQuestChat(line.id)) markSpeechQuest(btn);
+      if (storyNext) btn.classList.add("ashen-dialog-speech-btn--next");
       btn.addEventListener("click", () => {
+        this.sheet.cancelByeClose();
         this.phoneNav.resetForLine();
         if (this.activeLineId !== line.id) this.expandedTaskId = null;
         this.activeLineId = line.id;
@@ -595,8 +606,15 @@ export class AshenMilitiaDialogUI {
           this.scriptedReply = null;
         }
         this.render();
+        if (line.id === "bye") {
+          this.sheet.scheduleByeClose(
+            () => this.handlers.onClose(),
+            this.responseEl.textContent ?? "",
+          );
+        }
       });
       this.speechListEl.appendChild(btn);
+      if (storyNext) btn.scrollIntoView({ block: "nearest" });
     }
 
     let active = lines.find((l) => l.id === this.activeLineId);

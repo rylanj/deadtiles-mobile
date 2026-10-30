@@ -2,6 +2,7 @@ import { armSharedAudioContext } from "./audio/audioContext";
 import { applyMobileBodyClass } from "./device";
 import { beginWorldJoin, endWorldJoin, isBootReady } from "./gameLoadState";
 import type { AuthSession } from "./network/ColyseusClient";
+import { captureReferralFromUrl } from "./network/referral";
 import { MainMenu } from "./ui/MainMenu";
 import {
   beginCodeLoadProgress,
@@ -10,6 +11,11 @@ import {
   showBootLoading,
 } from "./ui/bootLoading";
 
+try {
+  captureReferralFromUrl();
+} catch (err) {
+  console.error(err);
+}
 try {
   applyMobileBodyClass();
 } catch (err) {

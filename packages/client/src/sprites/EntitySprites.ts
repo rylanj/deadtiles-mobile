@@ -315,6 +315,21 @@ const RABBIT_IDLE_RENDER_SCALE: Record<DirectionLabel, number> = {
   W: 0.87,
   NW: 0.79,
 };
+/**
+ * Skinned art sits on a 128 canvas and fills more of it than the death pose,
+ * whose canvas is 132 to 160. The same height makes a looted rabbit look larger.
+ * Each scale matches that direction's carcass to the death pose.
+ */
+const RABBIT_SKINNED_RENDER_SCALE: Record<DirectionLabel, number> = {
+  N: 0.64,
+  NE: 0.78,
+  E: 0.78,
+  SE: 0.88,
+  S: 0.86,
+  SW: 0.88,
+  W: 0.78,
+  NW: 0.78,
+};
 
 function applyRabbitFrame(
   sprite: Phaser.GameObjects.Sprite,
@@ -1623,7 +1638,11 @@ export function updateEntityVisual(
 
   if (kind === "rabbit") {
     if (isDead && state.looted) {
-      applyRabbitFrame(sprite, rabbitSkinnedKey(dir));
+      applyRabbitFrame(
+        sprite,
+        rabbitSkinnedKey(dir),
+        RABBIT_RENDER_HEIGHT * RABBIT_SKINNED_RENDER_SCALE[dir],
+      );
     } else if (isDead) {
       const frame = Math.min(
         RABBIT_DIE_FRAMES,

@@ -5,8 +5,11 @@ import {
   ONBOARDING_STEP_IDS,
   ONBOARDING_STEPS,
   QUEST_ID_AYE_CAPTAIN,
+  QUEST_ID_DEAL_WITH_DEVIL,
   QUEST_ID_FOUND_ON_THE_ROAD,
   QUEST_ID_TWO_BEHIND,
+  STORY_OBJECTIVE_ASK_CLARK,
+  STORY_OBJECTIVE_ASK_DAVIS,
   TUTORIAL_TIPS,
   onboardingChapterTitle,
   parseTutorialFlagsJson,
@@ -47,8 +50,9 @@ const STEP_DONE_FLASH_MS = 900;
 
 /**
  * Tutorial coach: a small non-modal tracker with one objective at a time,
- * full cards for the intro and finish, and one-time contextual tips.
- * Nothing here blocks play. The player can hide or end it at any point.
+ * a full card for the intro, and one-time contextual tips.
+ * Nothing here blocks play. Hide, End, and the phone collapse stay hidden
+ * until the player has walked out of the hospital ward.
  */
 export class OnboardingUI {
   private flags: TutorialFlagsState = parseTutorialFlagsJson("");
@@ -65,7 +69,10 @@ export class OnboardingUI {
   private titleEl: HTMLElement;
   private bodyEl: HTMLElement;
   private pill: HTMLElement;
+  private hideBtn: HTMLButtonElement;
+  private skipBtn: HTMLButtonElement;
   private endBtn: HTMLButtonElement;
+  private tipsOffBtn: HTMLButtonElement | null = null;
   private endConfirmTimer: number | null = null;
   private flashTimer: number | null = null;
 
@@ -74,7 +81,6 @@ export class OnboardingUI {
   private cardTitleEl: HTMLElement;
   private cardBodyEl: HTMLElement;
   private cardBtn: HTMLButtonElement;
-  private cardSkipBtn: HTMLButtonElement;
   private cardOpen = false;
 
   private legendEl: HTMLElement;
@@ -91,6 +97,15 @@ export class OnboardingUI {
   private lineTitleEl?: HTMLElement;
   private lineChevronEl?: HTMLElement;
   private trackerExpanded = false;
+  private rationsReady = false;
+  /** Where the Coleman note return is pointing, once the note is found. */
+  private colemanLeg: "search" | "exit" | "gate" | "mess" | "davis" = "search";
+  /** Motel step on A Deal with the Devil: travel, search, then the walk back to Davis. */
+  private motelLeg: "travel" | "search" | "exit" | "gate" | "mess" | "davis" = "travel";
+  private guideEl: HTMLElement;
+  private guideArrow: HTMLElement;
+  private guideLabel: HTMLElement;
+  private clarkEl: HTMLElement;
 
   constructor(private handlers: OnboardingUIHandlers) {
     this.stack = document.createElement("div");
@@ -109,10 +124,10 @@ export class OnboardingUI {
     this.chapterEl.className = "tutorial-tracker-chapter";
     this.progressEl = document.createElement("span");
     this.progressEl.className = "tutorial-tracker-progress";
-    const hideBtn = makeButton("Hide", "tutorial-btn tutorial-btn--quiet", () =>
+    this.hideBtn = makeButton("Hide", "tutorial-btn tutorial-btn--quiet", () =>
       this.setMinimized(true),
     );
-    head.append(this.chapterEl, this.progressEl, hideBtn);
+    head.append(this.chapterEl, this.progressEl, this.hideBtn);
 
     this.titleEl = document.createElement("div");
     this.titleEl.className = "tutorial-tracker-title";
@@ -121,18 +136,21 @@ export class OnboardingUI {
 
     const actions = document.createElement("div");
     actions.className = "tutorial-tracker-actions";
-    const skipBtn = makeButton("Skip step", "tutorial-btn", () => this.skipCurrent());
     const controlsBtn = makeButton("Controls", "tutorial-btn", () => this.openLegend());
+    this.skipBtn = makeButton("Skip", "tutorial-btn tutorial-btn--quiet", () =>
+      this.skipCurrent(),
+    );
     this.endBtn = makeButton("End tutorial", "tutorial-btn tutorial-btn--quiet", () =>
       this.confirmEnd(),
     );
-    actions.append(skipBtn, controlsBtn, this.endBtn);
+    actions.append(controlsBtn, this.skipBtn, this.endBtn);
 
     this.tracker.append(head, this.titleEl, this.bodyEl, actions);
     if (this.mobile) {
       // One 44px line under the HUD. The arrow opens the step text and actions.
       this.tracker.classList.add("tutorial-tracker--phone");
       const line = makeButton("", "tutorial-line", () => {
+        if (!this.pastWard()) return;
         this.trackerExpanded = !this.trackerExpanded;
         this.syncTrackerExpanded();
       });
@@ -145,14 +163,13 @@ export class OnboardingUI {
       this.lineChevronEl.setAttribute("aria-hidden", "true");
       line.append(this.lineProgressEl, this.lineTitleEl, this.lineChevronEl);
       this.tracker.prepend(line);
-      actions.append(
-        makeButton("Turn off tips", "tutorial-btn tutorial-btn--quiet", () => {
-          this.flags.tipsOff = true;
-          this.handlers.send({ tipsOff: true });
-          this.tipQueue = [];
-          if (this.tipShowing) this.dismissTip();
-        }),
-      );
+      this.tipsOffBtn = makeButton("Turn off tips", "tutorial-btn tutorial-btn--quiet", () => {
+        this.flags.tipsOff = true;
+        this.handlers.send({ tipsOff: true });
+        this.tipQueue = [];
+        if (this.tipShowing) this.dismissTip();
+      });
+      actions.append(this.tipsOffBtn);
       this.syncTrackerExpanded();
     }
 
@@ -176,14 +193,10 @@ export class OnboardingUI {
     const cardActions = document.createElement("div");
     cardActions.className = "onboarding-actions";
     this.cardBtn = makeButton("Begin", "onboarding-next", () => this.completeCard());
-    this.cardSkipBtn = makeButton("Skip tutorial", "onboarding-skip", () => {
-      this.closeCard();
-      this.endTutorial();
-    });
     const cardControls = makeButton("Controls", "onboarding-legend-btn", () =>
       this.openLegend(),
     );
-    cardActions.append(this.cardBtn, this.cardSkipBtn, cardControls);
+    cardActions.append(this.cardBtn, cardControls);
     card.append(this.cardChapterEl, this.cardTitleEl, this.cardBodyEl, cardActions);
     this.cardOverlay.appendChild(card);
     document.body.appendChild(this.cardOverlay);
@@ -266,6 +279,22 @@ export class OnboardingUI {
     } else {
       this.stack.appendChild(this.tipEl);
     }
+
+    this.guideEl = document.createElement("div");
+    this.guideEl.id = "tutorial-beacon";
+    this.guideEl.hidden = true;
+    this.guideArrow = document.createElement("div");
+    this.guideArrow.className = "tutorial-beacon-arrow";
+    this.guideLabel = document.createElement("div");
+    this.guideLabel.className = "tutorial-beacon-label";
+    this.guideEl.append(this.guideArrow, this.guideLabel);
+    document.body.appendChild(this.guideEl);
+
+    this.clarkEl = document.createElement("div");
+    this.clarkEl.id = "tutorial-clark-label";
+    this.clarkEl.hidden = true;
+    this.clarkEl.textContent = "Doctor Clark";
+    document.body.appendChild(this.clarkEl);
   }
 
   private syncTrackerExpanded() {
@@ -285,6 +314,103 @@ export class OnboardingUI {
   /** True once the player finishes or ends the tutorial. */
   isFinished() {
     return this.flags.done === true;
+  }
+
+  /** Step the tracker is showing, if the tutorial is still running. */
+  currentStepId(): OnboardingStepId | null {
+    return this.isTutorialActive() ? this.currentId : null;
+  }
+
+  /** True once they have walked out of the ward, even if later steps are open. */
+  private pastWard(): boolean {
+    return this.flags.replay === true || this.flags.steps?.leave_hospital === true;
+  }
+
+  private isReplay(): boolean {
+    return this.flags.replay === true;
+  }
+
+  /**
+   * Return trip after the note in Coleman's house.
+   * The world marker and the tracker stay on the same stop.
+   */
+  setColemanLeg(leg: "search" | "exit" | "gate" | "mess" | "davis") {
+    if (this.colemanLeg === leg) return;
+    this.colemanLeg = leg;
+    if (this.loaded && this.currentId === "search_coleman") this.render();
+  }
+
+  /** Last tutorial step: search the motel, then walk the clues back to Davis. */
+  setMotelLeg(leg: "travel" | "search" | "exit" | "gate" | "mess" | "davis") {
+    if (this.motelLeg === leg) return;
+    this.motelLeg = leg;
+    if (this.loaded && this.currentId === "finish") this.render();
+  }
+
+  /** Tuna or water from Clark is actually in the pack. */
+  setRationsReady(ready: boolean) {
+    if (this.rationsReady === ready) return;
+    this.rationsReady = ready;
+    if (this.loaded) this.render();
+  }
+
+  /**
+   * World-space target already converted to viewport pixels.
+   * Off-screen targets pin to the edge with an arrow.
+   */
+  setGuide(point: { x: number; y: number; label: string; aboveHead?: boolean } | null) {
+    if (!point || !this.isTutorialActive() || this.cardOpen) {
+      this.guideEl.hidden = true;
+      this.guideEl.classList.remove("tutorial-beacon--head");
+      return;
+    }
+    const pad = 36;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const onScreen =
+      point.x >= pad && point.y >= pad && point.x <= w - pad && point.y <= h - pad;
+    this.guideLabel.textContent = point.label;
+    this.guideEl.classList.toggle("tutorial-beacon--pin", onScreen);
+    this.guideEl.classList.toggle("tutorial-beacon--head", onScreen && point.aboveHead === true);
+    let left = point.x;
+    let top = point.y;
+    if (!onScreen) {
+      const cx = w / 2;
+      const cy = h / 2;
+      const dx = point.x - cx;
+      const dy = point.y - cy;
+      const maxX = Math.max(1, w / 2 - pad);
+      const maxY = Math.max(1, h / 2 - pad);
+      const scale = Math.max(Math.abs(dx) / maxX, Math.abs(dy) / maxY, 0.001);
+      left = cx + dx / scale;
+      top = cy + dy / scale;
+      const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+      this.guideArrow.style.transform = `rotate(${deg}deg)`;
+    }
+    this.guideEl.style.left = `${left}px`;
+    this.guideEl.style.top = `${top}px`;
+    this.guideEl.hidden = false;
+  }
+
+  /** Name over Doctor Clark while he can still be mistaken for another player. */
+  setClarkPlate(point: { x: number; y: number } | null) {
+    if (!point || !this.isTutorialActive() || this.cardOpen || this.hasStep("talk_clark")) {
+      this.clarkEl.hidden = true;
+      return;
+    }
+    const pad = 24;
+    const onScreen =
+      point.x >= pad &&
+      point.y >= pad &&
+      point.x <= window.innerWidth - pad &&
+      point.y <= window.innerHeight - pad;
+    if (!onScreen) {
+      this.clarkEl.hidden = true;
+      return;
+    }
+    this.clarkEl.style.left = `${point.x}px`;
+    this.clarkEl.style.top = `${point.y}px`;
+    this.clarkEl.hidden = false;
   }
 
   applyFlagsJson(json: string) {
@@ -321,13 +447,14 @@ export class OnboardingUI {
     this.pumpTips();
   }
 
-  /** Restart from the intro card. Seen tips stay seen. */
+  /** Restart from the intro card. Seen tips stay seen. Skip is allowed. */
   replay() {
     this.flags = {
       ...this.flags,
       done: false,
       steps: {},
       minimized: false,
+      replay: true,
     };
     this.handlers.send({ reset: true });
     this.render();
@@ -371,6 +498,8 @@ export class OnboardingUI {
     this.tipEl.remove();
     this.cardOverlay.remove();
     this.legendEl.remove();
+    this.guideEl.remove();
+    this.clarkEl.remove();
   }
 
   private markStep(stepId: OnboardingStepId) {
@@ -378,7 +507,17 @@ export class OnboardingUI {
     this.handlers.send({ stepId });
     if (ONBOARDING_STEP_IDS.every((id) => this.flags.steps?.[id])) {
       this.flags.done = true;
+      this.flags.replay = false;
     }
+  }
+
+  /** Replay only: pass a step that cannot be done again, or that the player already knows. */
+  private skipCurrent() {
+    if (!this.loaded || this.flags.done || !this.isReplay()) return;
+    const id = this.currentId;
+    if (!id) return;
+    this.markStep(id);
+    this.render();
   }
 
   private storyActive(questId: string): boolean {
@@ -401,10 +540,27 @@ export class OnboardingUI {
     const noteFound = this.storyDone(QUEST_ID_TWO_BEHIND);
     const autoDone: OnboardingStepId[] = [];
     if (ayeOn) autoDone.push("accept_aye_captain");
+    if (ayeDone || this.flags.steps?.talk_davis) {
+      autoDone.push("reach_gate", "reach_mess");
+    }
     if (ayeDone) autoDone.push("talk_davis", "turn_in_aye");
+    const ayeQuest = this.quests.quests[QUEST_ID_AYE_CAPTAIN];
+    if ((ayeQuest?.progress[STORY_OBJECTIVE_ASK_DAVIS] ?? 0) >= 1) {
+      autoDone.push("talk_davis");
+    }
     if (twoOn) autoDone.push("accept_two_behind");
     if (noteFound) autoDone.push("search_coleman");
+    if (this.storyDone(QUEST_ID_DEAL_WITH_DEVIL)) autoDone.push("finish");
     const found = this.quests.quests[QUEST_ID_FOUND_ON_THE_ROAD];
+    if (
+      found &&
+      (found.status === "completed" ||
+        (found.timesCompleted ?? 0) > 0 ||
+        (found.progress[STORY_OBJECTIVE_ASK_CLARK] ?? 0) >= 1)
+    ) {
+      autoDone.push("talk_clark");
+    }
+    if (this.isReplay() && !this.rationsReady) autoDone.push("eat_drink");
     const onStory =
       ayeOn ||
       found?.status === "active" ||
@@ -421,8 +577,13 @@ export class OnboardingUI {
     for (const id of autoDone) {
       if (!this.flags.steps?.[id]) this.markStep(id);
     }
+    let eatWaiting = false;
     for (const id of ONBOARDING_STEP_IDS) {
       if (this.flags.steps?.[id]) continue;
+      if (id === "eat_drink" && !this.rationsReady) {
+        eatWaiting = true;
+        continue;
+      }
       if (id === "talk_davis" && onStory && !ayeOn) return "accept_aye_captain";
       if (id === "turn_in_aye" && !ayeOn) return "accept_aye_captain";
       if ((id === "accept_two_behind" || id === "search_coleman") && !ayeDone) {
@@ -431,7 +592,7 @@ export class OnboardingUI {
       if (id === "search_coleman" && !twoOn) return "accept_two_behind";
       return id;
     }
-    return null;
+    return eatWaiting ? "eat_drink" : null;
   }
 
   private render() {
@@ -439,6 +600,8 @@ export class OnboardingUI {
       this.currentId = null;
       this.tracker.hidden = true;
       this.pill.hidden = true;
+      this.guideEl.hidden = true;
+      this.clarkEl.hidden = true;
       this.closeCard();
       return;
     }
@@ -447,6 +610,8 @@ export class OnboardingUI {
       this.currentId = null;
       this.tracker.hidden = true;
       this.pill.hidden = true;
+      this.guideEl.hidden = true;
+      this.clarkEl.hidden = true;
       this.closeCard();
       return;
     }
@@ -462,18 +627,34 @@ export class OnboardingUI {
     }
     this.closeCard();
 
+    const coleman = nextId === "search_coleman" ? this.colemanCue() : null;
+    const motel = nextId === "finish" ? this.motelCue() : null;
+    const cue = coleman ?? motel;
+    const title = cue?.title ?? def.title;
     this.chapterEl.textContent = onboardingChapterTitle(def.chapter);
     this.progressEl.textContent = this.progressLabel();
-    this.titleEl.textContent = def.title;
-    this.bodyEl.textContent = this.bodyFor(def);
-    this.pill.textContent = `Tutorial: ${def.title}`;
+    this.titleEl.textContent = title;
+    this.bodyEl.textContent = cue?.body ?? this.bodyForStep(def);
+    this.pill.textContent = `Tutorial: ${title}`;
     if (this.lineTitleEl && this.lineProgressEl) {
-      this.lineTitleEl.textContent = def.title;
+      this.lineTitleEl.textContent = title;
       this.lineProgressEl.textContent = this.progressLabel();
     }
-    const minimized = !this.mobile && this.flags.minimized === true;
+    const locked = !this.pastWard();
+    if (this.mobile && locked) this.trackerExpanded = true;
+    if (this.mobile) this.syncTrackerExpanded();
+    if (this.lineChevronEl) this.lineChevronEl.hidden = locked;
+    this.hideBtn.hidden = locked;
+    this.skipBtn.hidden = locked || !this.isReplay();
+    this.endBtn.hidden = locked;
+    if (this.tipsOffBtn) this.tipsOffBtn.hidden = locked;
+    const minimized = !this.mobile && !locked && this.flags.minimized === true;
     this.tracker.hidden = minimized;
     this.pill.hidden = !minimized;
+    if (!this.isTutorialActive()) {
+      this.guideEl.hidden = true;
+      this.clarkEl.hidden = true;
+    }
     if (advanced) this.flashAdvance();
   }
 
@@ -485,6 +666,92 @@ export class OnboardingUI {
 
   private bodyFor(def: OnboardingStepDef): string {
     return this.mobile && def.mobileBody ? def.mobileBody : def.body;
+  }
+
+  /** Tracker copy for the walk back to Davis. Null while they are still searching. */
+  private colemanCue(): { title: string; body: string } | null {
+    if (this.colemanLeg === "exit") {
+      return {
+        title: "Leave the house",
+        body: "You found the note. The door is marked. Head outside.",
+      };
+    }
+    if (this.colemanLeg === "gate") {
+      return {
+        title: "The barracks gate",
+        body: "Take the note back to Captain Davis. The barracks gate is marked.",
+      };
+    }
+    if (this.colemanLeg === "mess") {
+      return {
+        title: "The mess hall",
+        body: "Cross the yard to the mess hall. Captain Davis is inside.",
+      };
+    }
+    if (this.colemanLeg === "davis") {
+      return {
+        title: "Turn in the note",
+        body: this.mobile
+          ? "Captain Davis is marked. Tap him and turn Two Behind It in."
+          : "Captain Davis is marked. Walk up to him and turn Two Behind It in.",
+      };
+    }
+    return null;
+  }
+
+  /** Shown once they walk into the motel, then again for the walk back to Davis. */
+  private motelCue(): { title: string; body: string } | null {
+    if (this.motelLeg === "travel") return null;
+    const deal = this.quests.quests[QUEST_ID_DEAL_WITH_DEVIL];
+    if (deal?.status !== "active") return null;
+    if (this.motelLeg === "search") {
+      return {
+        title: "Search for clues",
+        body: this.mobile
+          ? "Search this building for clues to complete the quest. Tap the furniture and anything out of place."
+          : "Search this building for clues to complete the quest.",
+      };
+    }
+    if (this.motelLeg === "exit") {
+      return {
+        title: "Leave the motel",
+        body: "You found the clues. The door is marked. Head outside.",
+      };
+    }
+    if (this.motelLeg === "gate") {
+      return {
+        title: "The barracks gate",
+        body: "Take what you found back to Captain Davis. The barracks gate is marked.",
+      };
+    }
+    if (this.motelLeg === "mess") {
+      return {
+        title: "The mess hall",
+        body: "Cross the yard to the mess hall. Captain Davis is inside.",
+      };
+    }
+    if (this.motelLeg === "davis") {
+      return {
+        title: "Turn in to Davis",
+        body: this.mobile
+          ? "Captain Davis is marked. Tap him and turn A Deal with the Devil in."
+          : "Captain Davis is marked. Walk up to him and turn A Deal with the Devil in.",
+      };
+    }
+    return null;
+  }
+
+  private bodyForStep(def: OnboardingStepDef): string {
+    if (def.id === "eat_drink" && !this.rationsReady) {
+      return "Ask Doctor Clark what happened. He will put tuna and water in your pack.";
+    }
+    if (def.id === "finish") {
+      const deal = this.quests.quests[QUEST_ID_DEAL_WITH_DEVIL];
+      if (deal?.status !== "active") {
+        return "The next part of the story is with Captain Davis at the barracks. It's in your Journal.";
+      }
+    }
+    return this.bodyFor(def);
   }
 
   private tipBodyFor(tip: TutorialTipDef): string {
@@ -509,7 +776,6 @@ export class OnboardingUI {
     this.cardTitleEl.textContent = def.title;
     this.cardBodyEl.textContent = this.bodyFor(def);
     this.cardBtn.textContent = def.card?.button ?? "Continue";
-    this.cardSkipBtn.hidden = def.id !== "intro";
     if (this.cardOpen) return;
     this.cardOpen = true;
     this.cardOverlay.hidden = false;
@@ -535,28 +801,6 @@ export class OnboardingUI {
     this.render();
   }
 
-  private skipCurrent() {
-    if (!this.currentId) return;
-    // Skipping the first story accept moves on past the rest of that chapter.
-    if (
-      this.currentId === "accept_aye_captain" &&
-      !this.storyActive(QUEST_ID_AYE_CAPTAIN) &&
-      !this.storyDone(QUEST_ID_AYE_CAPTAIN)
-    ) {
-      for (const id of [
-        "accept_aye_captain",
-        "turn_in_aye",
-        "accept_two_behind",
-        "search_coleman",
-      ] as const) {
-        if (!this.flags.steps?.[id]) this.markStep(id);
-      }
-    } else {
-      this.markStep(this.currentId);
-    }
-    this.render();
-  }
-
   private confirmEnd() {
     if (this.endConfirmTimer != null) {
       window.clearTimeout(this.endConfirmTimer);
@@ -574,11 +818,13 @@ export class OnboardingUI {
 
   private endTutorial() {
     this.flags.done = true;
+    this.flags.replay = false;
     this.handlers.send({ done: true });
     this.render();
   }
 
   private setMinimized(minimized: boolean) {
+    if (minimized && !this.pastWard()) return;
     if ((this.flags.minimized === true) === minimized) return;
     this.flags.minimized = minimized;
     this.handlers.send({ minimized });

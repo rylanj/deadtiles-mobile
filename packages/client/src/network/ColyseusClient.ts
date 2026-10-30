@@ -46,6 +46,8 @@ export type PlayerPreview = {
   clothingSkin?: number;
   infected?: boolean;
   infection?: number;
+  /** Invited survivor who has not finished the tutorial yet. */
+  inviteBonusPending?: boolean;
 };
 
 export type AuthSession = {
@@ -54,6 +56,7 @@ export type AuthSession = {
   needsName: boolean;
   name: string | null;
   preview: PlayerPreview;
+  isAdmin: boolean;
 };
 
 type StoredSessionMeta = {
@@ -61,6 +64,7 @@ type StoredSessionMeta = {
   needsName: boolean;
   name: string | null;
   preview: PlayerPreview;
+  isAdmin?: boolean;
 };
 
 function configuredServerUrl(): string | null {
@@ -103,6 +107,7 @@ export function storeAuthSession(session: AuthSession) {
       needsName: session.needsName,
       name: session.name,
       preview: session.preview,
+      isAdmin: session.isAdmin,
     };
     localStorage.setItem(SESSION_META_KEY, JSON.stringify(meta));
   } catch {
@@ -125,6 +130,7 @@ export function loadCachedAuthSession(): AuthSession | null {
       needsName: Boolean(meta.needsName),
       name: meta.name ?? null,
       preview: meta.preview ?? { exists: Boolean(meta.name) },
+      isAdmin: meta.isAdmin === true,
     };
   } catch {
     return null;
@@ -166,6 +172,7 @@ export async function restoreAuthSession(): Promise<AuthSession | null> {
       needsName: boolean;
       name: string | null;
       preview: PlayerPreview;
+      isAdmin?: boolean;
     }>(`${serverUrl()}/auth/session`, {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
@@ -175,6 +182,7 @@ export async function restoreAuthSession(): Promise<AuthSession | null> {
       needsName: data.needsName,
       name: data.name,
       preview: data.preview,
+      isAdmin: data.isAdmin === true,
     };
     storeAuthSession(session);
     return session;
@@ -231,25 +239,28 @@ export async function completeSignedLogin(
     headers: { "Content-Type": "application/json" },
     json: { wallet, nonce, signature },
   });
-  storeAuthSession(data);
-  return data;
+  const session: AuthSession = { ...data, isAdmin: data.isAdmin === true };
+  storeAuthSession(session);
+  return session;
 }
 
 export async function registerSurvivorName(
   sessionToken: string,
   name: string,
+  ref = "",
 ): Promise<AuthSession> {
   const data = await apiRequest<{
     name: string;
     wallet: string;
     preview: PlayerPreview;
+    isAdmin?: boolean;
   }>(`${serverUrl()}/auth/register`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${sessionToken}`,
     },
-    json: { name },
+    json: ref ? { name, ref } : { name },
   });
   const session: AuthSession = {
     sessionToken,
@@ -257,9 +268,134 @@ export async function registerSurvivorName(
     needsName: false,
     name: data.name,
     preview: data.preview,
+    isAdmin: data.isAdmin === true,
   };
   storeAuthSession(session);
   return session;
+}
+
+export type ReferralSignup = {
+  name: string;
+  createdAt: number;
+  tutorialDone: boolean;
+};
+
+export type ReferralPayout = {
+  referredUserId: string;
+  referrerName: string;
+  referredName: string;
+  amount: number;
+  createdAt: number;
+};
+
+export type ReferralBoard = {
+  signups: ReferralSignup[];
+};
+
+export type AdminOnlinePlayer = {
+  playerId: string;
+  name: string;
+  wallet: string;
+};
+
+export type AdminBan = {
+  wallet: string;
+  name: string;
+  bannedAt: number;
+  reason: string;
+};
+
+export type AdminBoard = {
+  players: AdminOnlinePlayer[];
+  payouts: ReferralPayout[];
+  bans: AdminBan[];
+};
+
+export async function fetchReferralBoard(
+  sessionToken: string,
+): Promise<ReferralBoard> {
+  const data = await apiRequest<{
+    signups?: ReferralSignup[];
+  }>(`${serverUrl()}/auth/referrals`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  return {
+    signups: Array.isArray(data.signups) ? data.signups : [],
+  };
+}
+
+export async function fetchAdminBoard(
+  sessionToken: string,
+): Promise<AdminBoard> {
+  const data = await apiRequest<{
+    players?: AdminOnlinePlayer[];
+    payouts?: ReferralPayout[];
+    bans?: AdminBan[];
+  }>(`${serverUrl()}/auth/admin`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  return {
+    players: Array.isArray(data.players) ? data.players : [],
+    payouts: Array.isArray(data.payouts) ? data.payouts : [],
+    bans: Array.isArray(data.bans) ? data.bans : [],
+  };
+}
+
+export async function kickAdminPlayer(
+  sessionToken: string,
+  playerId: string,
+  reason = "",
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/admin/kick`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: reason ? { playerId, reason } : { playerId },
+  });
+}
+
+export async function banAdminPlayer(
+  sessionToken: string,
+  target: string,
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/admin/ban`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: { target },
+  });
+}
+
+export async function unbanAdminPlayer(
+  sessionToken: string,
+  wallet: string,
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/admin/unban`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: { wallet },
+  });
+}
+
+export async function approveReferralPayout(
+  sessionToken: string,
+  referredUserId: string,
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/referrals/approve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: { referredUserId },
+  });
 }
 
 export async function fetchPlayerPreview(
@@ -735,6 +871,8 @@ export type DialogOpenEvent = {
     taskCompletionsJson?: string;
     /** Kevin only. True after the safe deposit fee is paid. */
     safeDepositRented?: boolean;
+    /** Kevin only. Notes waiting on the desk after a Deadmark buy. */
+    buybackReadyNotes?: number;
   };
 };
 

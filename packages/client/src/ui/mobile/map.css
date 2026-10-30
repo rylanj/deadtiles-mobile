@@ -125,6 +125,9 @@
   visibility: visible;
   font-size: 12px;
 }
+#map-overlay.map-phone .map-you-label {
+  font-size: 12px;
+}
 #map-overlay.map-phone .map-custom-pin,
 #map-overlay.map-phone .map-marker-shape {
   width: 28px;

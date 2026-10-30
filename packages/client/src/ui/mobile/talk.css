@@ -127,6 +127,11 @@
 .talk-bar .ms-tile--on {
   border-color: var(--ms-pri-line);
 }
+.talk-bar .ms-tile--ready {
+  border-color: #7dff88;
+  box-shadow: inset 0 0 0 1px rgba(125, 255, 136, 0.45);
+  background: rgba(18, 48, 22, 0.92);
+}
 .talk-bye {
   flex: 0 0 96px !important;
 }
