@@ -185,7 +185,7 @@ const WHITE_HOVER_PIPELINE = "WhiteHover";
 
 type LootHoverSprite = Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
 
-/** Lift the sprite toward white on the normal frame UVs. A white multiply tint is a no-op. */
+/** Lift the sprite toward white. Output is premultiplied so empty padding stays clear. */
 const WHITE_HOVER_FRAG = `
 #define SHADER_NAME WHITE_HOVER_FS
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -197,7 +197,13 @@ uniform sampler2D uMainSampler;
 varying vec2 outTexCoord;
 void main(void) {
   vec4 color = texture2D(uMainSampler, outTexCoord);
-  color.rgb = mix(color.rgb, vec3(1.0), 0.55);
+  if (color.a > 0.001) {
+    vec3 straight = clamp(color.rgb / color.a, 0.0, 1.0);
+    straight = mix(straight, vec3(1.0), 0.55);
+    color.rgb = straight * color.a;
+  } else {
+    color = vec4(0.0);
+  }
   gl_FragColor = color;
 }
 `;
