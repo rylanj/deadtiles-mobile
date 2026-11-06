@@ -16,8 +16,8 @@ export type CraftItemQty = { itemId: string; quantity: number };
 /** Single required stack, or any one option from a list (e.g. Old Teddy / Teddy). */
 export type CraftIngredient = CraftItemQty | { anyOf: CraftItemQty[] };
 
-/** Workbench for cloth and wood. Furnace for metal, and only while the fire is lit. */
-export type CraftStationKind = "workbench" | "furnace";
+/** Workbench for cloth and wood. Furnace for metal, and only while the fire is lit. Gun bench for firearms. */
+export type CraftStationKind = "workbench" | "furnace" | "gunbench";
 
 export type CraftRecipe = {
   id: string;
@@ -31,8 +31,8 @@ export type CraftRecipe = {
   /** Extra line on a breakdown card. */
   note?: string;
   /**
-   * When set, the recipe is hidden at the bench until this blueprint has
-   * been learned. The item id is the blueprint sheet, not the weapon.
+   * When set, the recipe stays hidden until this blueprint has been learned.
+   * The item id is the blueprint sheet, not the weapon.
    */
   blueprintItemId?: string;
 };
@@ -90,11 +90,21 @@ export function craftRecipeDurationMs(recipe: CraftRecipe): number {
 }
 
 /** Furniture types that open the craft UI instead of search loot. */
-export const CRAFT_STATION_TYPES = ["workbench"] as const;
+export const CRAFT_STATION_TYPES = ["workbench", "gunbench1"] as const;
 export type CraftStationType = (typeof CRAFT_STATION_TYPES)[number];
 
 export function furnitureIsCraftStation(objectType: string): boolean {
   return (CRAFT_STATION_TYPES as readonly string[]).includes(objectType);
+}
+
+/** Recipe list for this furniture, or null when it is not a craft station. */
+export function craftStationKindForFurniture(
+  objectType: string,
+): CraftStationKind | null {
+  if (objectType === "workbench") return "workbench";
+  if (objectType === "furnace") return "furnace";
+  if (objectType === "gunbench1") return "gunbench";
+  return null;
 }
 
 export const CRAFT_RECIPES: readonly CraftRecipe[] = [
@@ -193,7 +203,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_pistol",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_pistol",
     output: { itemId: "weapon_pistol", quantity: 1 },
     inputs: [
@@ -205,7 +215,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_revolver",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_revolver",
     output: { itemId: "weapon_revolver", quantity: 1 },
     inputs: [
@@ -218,7 +228,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_shotgun",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_shotgun",
     output: { itemId: "weapon_shotgun", quantity: 1 },
     inputs: [
@@ -231,7 +241,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_hunting_rifle",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_hunting_rifle",
     output: { itemId: "weapon_hunting_rifle", quantity: 1 },
     inputs: [
@@ -245,7 +255,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_ak",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_ak",
     output: { itemId: "weapon_assault_rifle", quantity: 1 },
     inputs: [
@@ -258,7 +268,7 @@ export const CRAFT_RECIPES: readonly CraftRecipe[] = [
   },
   {
     id: "craft_m4",
-    station: "workbench",
+    station: "gunbench",
     blueprintItemId: "blueprint_m4",
     output: { itemId: "weapon_m4a1", quantity: 1 },
     inputs: [
@@ -400,7 +410,7 @@ export const DISASSEMBLY_DURATION_MS = 15_000;
 
 export type DisassemblyRecipe = {
   id: string;
-  station: "workbench";
+  station: "gunbench";
   weaponId: string;
   parts: readonly string[];
   returnCount: number;
@@ -410,7 +420,7 @@ export type DisassemblyRecipe = {
 export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   {
     id: "disassemble_pistol",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_pistol",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,
@@ -418,7 +428,7 @@ export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   },
   {
     id: "disassemble_revolver",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_revolver",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,
@@ -432,7 +442,7 @@ export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   },
   {
     id: "disassemble_shotgun",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_shotgun",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,
@@ -446,7 +456,7 @@ export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   },
   {
     id: "disassemble_hunting_rifle",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_hunting_rifle",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,
@@ -461,7 +471,7 @@ export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   },
   {
     id: "disassemble_ak",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_assault_rifle",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,
@@ -475,7 +485,7 @@ export const DISASSEMBLY_RECIPES: readonly DisassemblyRecipe[] = [
   },
   {
     id: "disassemble_m4",
-    station: "workbench",
+    station: "gunbench",
     weaponId: "weapon_m4a1",
     returnCount: DISASSEMBLY_RETURN_COUNT,
     durationMs: DISASSEMBLY_DURATION_MS,

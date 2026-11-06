@@ -8,6 +8,7 @@ import {
   setButtonLabel,
   sheetBackButton,
   sheetButton,
+  money,
   sheetCloseButton,
   sheetRow,
   type Drawer,
@@ -66,7 +67,7 @@ const JOB_RANK: Record<JobRank, number> = {
 /** Reward line shown on a job tile in the phone sheet. */
 export function talkJobReward(notes: number, rep: number, left: number | null): string {
   const parts: string[] = [];
-  if (notes > 0) parts.push(`$${notes}`);
+  if (notes > 0) parts.push(money(notes));
   if (rep > 0) parts.push(`+${rep} rep`);
   if (left != null && left > 0) parts.push(`${left} left today`);
   return parts.join(" · ");

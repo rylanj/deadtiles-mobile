@@ -11,6 +11,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 
@@ -56,6 +57,17 @@ public class SolanaMWAPlugin extends Plugin {
     public void isAvailable(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("available", queryWallets().size() > 0);
+        call.resolve(ret);
+    }
+
+    @PluginMethod()
+    public void appDeviceId(PluginCall call) {
+        String id = Settings.Secure.getString(
+            getContext().getContentResolver(),
+            Settings.Secure.ANDROID_ID
+        );
+        JSObject ret = new JSObject();
+        ret.put("id", id == null ? "" : id);
         call.resolve(ret);
     }
 

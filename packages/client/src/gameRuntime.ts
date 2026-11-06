@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { AudioManager } from "./audio/AudioManager";
 import { armSharedAudioContext } from "./audio/audioContext";
+import { isNativeApp } from "./native";
 import {
   beginWorldJoin,
   bootAssetsReady,
@@ -78,14 +79,16 @@ function createGame() {
   } catch (err) {
     console.error(err);
   }
+  // MSAA crashes the Mali driver in the Seeker WebView. Desktop keeps it.
+  const native = isNativeApp();
   game = new Phaser.Game({
       type: Phaser.AUTO,
       parent: "game",
       backgroundColor: "#1a2332",
       roundPixels: true,
       render: {
-        antialias: true,
-        antialiasGL: true,
+        antialias: !native,
+        antialiasGL: !native,
         pixelArt: false,
         powerPreference: "default",
       },

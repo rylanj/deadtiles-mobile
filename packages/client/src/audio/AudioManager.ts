@@ -2,15 +2,23 @@
  * Client audio — placeholder registry so real files can be dropped in later.
  *
  * How to add a sound:
- * 1. Drop a file under `public/assets/audio/` (gunshots, fireplace, ambience, rain, thunder, eat/drink, search, zombie groans live in folders)
- * 2. Add the matching id to {@link SFX_READY} (or a gunshot bank / groan bank below)
- * 3. Restart the client
+ * 1. Drop `Name.m4a` and `Name.ogg` under `public/assets/audio/` (gunshots, fireplace, ambience, rain, thunder, eat/drink, search, zombie groans live in folders)
+ * 2. Point the loader at the `.m4a` path. The `.ogg` sibling is queued automatically.
+ * 3. Add the matching id to {@link SFX_READY} (or a gunshot bank / groan bank below)
+ * 4. Restart the client
  *
  * Missing / not-listed ids stay silent — no 404s, no code churn elsewhere.
  */
 
 import type Phaser from "phaser";
 import { getSharedAudioContext } from "./audioContext";
+import {
+  menuBedPlaying,
+  setMenuBedGain,
+  startMenuBed,
+  stopMenuBed,
+  whenMenuBufferReady,
+} from "./menuPreload";
 import {
   GUNSHOT_VARIANT_COUNT,
   cartesianToIso,
@@ -59,7 +67,7 @@ export type SfxId =
   | "fireplace";
 
 /**
- * Relative paths under `public/`. Prefer `.ogg` then `.mp3`.
+ * Relative paths under `public/`. `.m4a` is preferred. A matching `.ogg` is the fallback.
  */
 export const SFX_FILES: Record<SfxId, readonly string[]> = {
   gunshot: ["assets/audio/gunshot.ogg", "assets/audio/gunshot.mp3"],
@@ -76,19 +84,18 @@ export const SFX_FILES: Record<SfxId, readonly string[]> = {
   ],
   ui_open: ["assets/audio/ui_open.ogg", "assets/audio/ui_open.mp3"],
   ui_close: ["assets/audio/ui_close.ogg", "assets/audio/ui_close.mp3"],
-  inventory_open: ["assets/audio/Inventory/OpenInventory.wav"],
-  inventory_close: ["assets/audio/Inventory/CloseInventory.wav"],
-  journal: ["assets/audio/Journal.wav"],
-  quest: ["assets/audio/Quest.wav"],
-  trade: ["assets/audio/Trade.wav"],
+  inventory_open: ["assets/audio/Inventory/OpenInventory.m4a"],
+  inventory_close: ["assets/audio/Inventory/CloseInventory.m4a"],
+  journal: ["assets/audio/Journal.m4a"],
+  quest: ["assets/audio/Quest.m4a"],
+  trade: ["assets/audio/Trade.m4a"],
   death: ["assets/audio/death.ogg", "assets/audio/death.mp3"],
-  fireplace: ["assets/audio/Fireplace/Fireplace1.wav"],
+  fireplace: ["assets/audio/Fireplace/Fireplace1.m4a"],
 };
 
 /**
- * Per-weapon shot banks. Files are `{stem}1.wav` … `{stem}{variants}.wav`.
- * Browser Web Audio only decodes 8/16-bit PCM WAV (not 24-bit / 96 kHz masters).
- * Re-run `node scripts/convert-gunshot-wavs.mjs` if new files fail to decode.
+ * Per-weapon shot banks. Files are `{stem}1.m4a` … `{stem}{variants}.m4a`,
+ * with an `.ogg` sibling of the same name.
  */
 const GUNSHOT_BANKS: Record<
   string,
@@ -188,7 +195,7 @@ const TREE_FALL_HEAR_RADIUS = 50;
 const TREE_FALL_FULL_DIST = 12;
 const TREE_FALL_GAIN = 0.75;
 /**
- * Phaser playback rate for Tree/Chop1.wav. 1 = file speed.
+ * Phaser playback rate for Tree/Chop1.m4a. 1 = file speed.
  * Below 1 slows the take, above 1 speeds it up.
  */
 export const TREE_CHOP_RATE = 1.2;
@@ -220,17 +227,17 @@ const LOCKPICK_GAIN = 0.15;
 const CONSUME_GAIN = 0.35;
 const INVENTORY_UI_GAIN = 0.12;
 /**
- * Journal.wav peaks near OpenDoor1. Wooden doors play at 0.3, so this
+ * Journal.m4a peaks near OpenDoor1. Wooden doors play at 0.3, so this
  * stays under that baseline.
  */
 const JOURNAL_GAIN = 0.25;
 /**
- * Quest.wav peaks hotter than Journal.wav. 0.1 keeps the sting at the
+ * Quest.m4a peaks hotter than Journal.m4a. 0.1 keeps the sting at the
  * journal level, under the wooden door.
  */
 const QUEST_GAIN = 0.1;
 /**
- * Trade.wav peaks at 0.34. Journal plays at 0.25 on a 0.20 peak and
+ * Trade.m4a peaks at 0.34. Journal plays at 0.25 on a 0.20 peak and
  * quest at 0.1 on a 0.51 peak, so both land near 0.05. 0.15 matches that.
  */
 const TRADE_GAIN = 0.15;
@@ -372,6 +379,7 @@ export class AudioManager {
   private exteriorRain: RainPlaylist = emptyRainPlaylist();
   private interiorRain: FadedLoop = { sound: null, gain: 0 };
   private menuSound: Phaser.Sound.BaseSound | null = null;
+  private menuBufferHooked = false;
   private menuWanted = false;
   private menuFade = 1;
   private menuFading = false;
@@ -380,7 +388,7 @@ export class AudioManager {
   private lastThunderVariant = -1;
   private backgroundAudioHooked = false;
   private phaserUnlockCalled = false;
-  /** Cache key -> relative WAV path, for play debug logs. */
+  /** Cache key -> relative audio path, for play debug logs. */
   private sourceFiles = new Map<string, string>();
 
   static get(): AudioManager {
@@ -407,6 +415,7 @@ export class AudioManager {
     this.scene = scene;
     this.volume = readStoredVolume();
     this.muted = readStoredMute();
+    this.refreshMenu();
     scene.sound.pauseOnBlur = false;
 
     // Boot queues sprites with setPath("/assets"). Phaser prepends that to
@@ -415,15 +424,18 @@ export class AudioManager {
     const prevPath = scene.load.path;
     scene.load.setPath("");
 
-    const loadWav = (key: string, rel: string) => {
-      scene.load.audio(key, [audioUrl(rel)]);
+    const loadClip = (key: string, rel: string) => {
+      scene.load.audio(key, audioSources(rel));
       this.sourceFiles.set(key, rel);
     };
 
     for (const id of SFX_READY) {
       const paths = SFX_FILES[id];
       if (!paths?.length) continue;
-      scene.load.audio(sfxKey(id), paths.map(audioUrl));
+      scene.load.audio(
+        sfxKey(id),
+        paths.flatMap((p) => audioSources(p)),
+      );
       this.sourceFiles.set(sfxKey(id), paths[0]!);
     }
 
@@ -431,74 +443,75 @@ export class AudioManager {
       const count = gunshotBankVariants(itemId);
       for (let i = 0; i < count; i++) {
         const n = i + 1;
-        loadWav(gunshotKey(itemId, i), `${bank.dir}/${bank.stem}${n}.wav`);
+        loadClip(gunshotKey(itemId, i), `${bank.dir}/${bank.stem}${n}.m4a`);
       }
     }
 
-    loadWav(menuKey(), "Menu.wav");
-    loadWav(windAmbienceKey(), "Ambience/WindAmbience1.wav");
+    // Menu.m4a is fetched from the page entry (menuPreload) so it is not
+    // stuck behind this world queue.
+    loadClip(windAmbienceKey(), "Ambience/WindAmbience1.m4a");
     for (let i = 0; i < EXTERIOR_RAIN_VARIANTS; i++) {
-      loadWav(rainAmbienceKey("exterior", i), `Weather/ExteriorRain${i + 1}.wav`);
+      loadClip(rainAmbienceKey("exterior", i), `Weather/ExteriorRain${i + 1}.m4a`);
     }
-    loadWav(rainAmbienceKey("interior", 0), "Weather/InteriorRain1.wav");
+    loadClip(rainAmbienceKey("interior", 0), "Weather/InteriorRain1.m4a");
     for (const kind of ["exterior", "interior"] as const) {
       const stem = kind === "exterior" ? "ExteriorThunder" : "InteriorThunder";
       for (let i = 0; i < THUNDER_COUNT; i++) {
-        loadWav(thunderKey(kind, i), `Weather/${stem}${i + 1}.wav`);
+        loadClip(thunderKey(kind, i), `Weather/${stem}${i + 1}.m4a`);
       }
     }
     for (const period of ["day", "night"] as const) {
       const count = FOREST_AMBIENCE_VARIANTS[period];
       for (let i = 0; i < count; i++) {
-        loadWav(forestAmbienceKey(period, i), forestAmbienceFile(period, i));
+        loadClip(forestAmbienceKey(period, i), forestAmbienceFile(period, i));
       }
     }
-    loadWav(consumeKey("drink", 0), "Drink/Drink1.wav");
-    loadWav(consumeKey("drink", 1), "Drink/Drink2.wav");
-    loadWav(consumeKey("eat", 0), "Eat/Eat1.wav");
-    loadWav(consumeKey("eat", 1), "Eat/Eat2.wav");
-    loadWav(consumeKey("eat", 2), "Eat/Eat3.wav");
-    loadWav(consumeKey("bandage", 0), "Medical/Bandage1.wav");
-    loadWav(consumeKey("tincture", 0), "Medical/Tincture1.wav");
-    loadWav(consumeKey("vitamins", 0), "Medical/Vitamins1.wav");
-    loadWav(consumeKey("pills", 0), "Medical/Pills1.wav");
-    loadWav(fireplaceExtinguishKey(), "Fireplace/ExtinguishFireplace1.wav");
-    loadWav(treeFallKey(), "Tree/Fall1.wav");
-    loadWav(treeChopKey(), "Tree/Chop1.wav");
+    loadClip(consumeKey("drink", 0), "Drink/Drink1.m4a");
+    loadClip(consumeKey("drink", 1), "Drink/Drink2.m4a");
+    loadClip(consumeKey("eat", 0), "Eat/Eat1.m4a");
+    loadClip(consumeKey("eat", 1), "Eat/Eat2.m4a");
+    loadClip(consumeKey("eat", 2), "Eat/Eat3.m4a");
+    loadClip(consumeKey("bandage", 0), "Medical/Bandage1.m4a");
+    loadClip(consumeKey("tincture", 0), "Medical/Tincture1.m4a");
+    loadClip(consumeKey("vitamins", 0), "Medical/Vitamins1.m4a");
+    loadClip(consumeKey("pills", 0), "Medical/Pills1.m4a");
+    loadClip(fireplaceExtinguishKey(), "Fireplace/ExtinguishFireplace1.m4a");
+    loadClip(treeFallKey(), "Tree/Fall1.m4a");
+    loadClip(treeChopKey(), "Tree/Chop1.m4a");
     for (const bank of MELEE_HIT_BANKS) {
       const dir = bank === "blade" ? "Blade" : "Blunt";
       for (let i = 0; i < MELEE_HIT_COUNT; i++) {
-        loadWav(meleeHitKey(bank, i), `${dir}/Hit${i + 1}.wav`);
+        loadClip(meleeHitKey(bank, i), `${dir}/Hit${i + 1}.m4a`);
       }
     }
-    loadWav(doorCloseKey("wood"), "Door/CloseDoor1.wav");
-    loadWav(doorOpenKey("wood"), "Door/OpenDoor1.wav");
-    loadWav(doorLockedKey(), "Door/LockedDoor1.wav");
-    loadWav(doorLockpickKey(), "Door/Lockpicking1.wav");
-    loadWav(doorCloseKey("hospital"), "Door/CloseDoor2.wav");
-    loadWav(doorOpenKey("hospital"), "Door/OpenDoor2.wav");
-    loadWav(searchKey("body", 0), "Search/SearchBody1.wav");
+    loadClip(doorCloseKey("wood"), "Door/CloseDoor1.m4a");
+    loadClip(doorOpenKey("wood"), "Door/OpenDoor1.m4a");
+    loadClip(doorLockedKey(), "Door/LockedDoor1.m4a");
+    loadClip(doorLockpickKey(), "Door/Lockpicking1.m4a");
+    loadClip(doorCloseKey("hospital"), "Door/CloseDoor2.m4a");
+    loadClip(doorOpenKey("hospital"), "Door/OpenDoor2.m4a");
+    loadClip(searchKey("body", 0), "Search/SearchBody1.m4a");
     for (let i = 1; i <= FURNITURE_SEARCH_BANK_COUNT; i++) {
-      loadWav(furnitureSearchKey(i), `Search/Search${i}.wav`);
+      loadClip(furnitureSearchKey(i), `Search/Search${i}.m4a`);
     }
-    loadWav(reloadKey("pistol", 0), "Pistol/ReloadPistol1.wav");
-    loadWav(reloadKey("ak", 0), "AK/ReloadAK1.wav");
-    loadWav(reloadKey("m4", 0), "M4/ReloadM41.wav");
-    loadWav(reloadKey("revolver", 0), "Revolver/ReloadRevolver1.wav");
-    loadWav(reloadKey("hunting", 0), "HuntingRifle/ReloadHuntingRifle1.wav");
-    loadWav(reloadKey("shotgun", 0), "Shotgun/ReloadShotgun1.wav");
-    loadWav(unloadKey("pistol", 0), "Pistol/UnloadPistol1.wav");
-    loadWav(unloadKey("ak", 0), "AK/UnloadAK1.wav");
-    loadWav(unloadKey("m4", 0), "M4/UnloadM41.wav");
-    loadWav(unloadKey("revolver", 0), "Revolver/UnloadRevolver1.wav");
-    loadWav(unloadKey("hunting", 0), "HuntingRifle/UnloadHuntingRifle1.wav");
-    loadWav(unloadKey("shotgun", 0), "Shotgun/UnloadShotgun1.wav");
+    loadClip(reloadKey("pistol", 0), "Pistol/ReloadPistol1.m4a");
+    loadClip(reloadKey("ak", 0), "AK/ReloadAK1.m4a");
+    loadClip(reloadKey("m4", 0), "M4/ReloadM41.m4a");
+    loadClip(reloadKey("revolver", 0), "Revolver/ReloadRevolver1.m4a");
+    loadClip(reloadKey("hunting", 0), "HuntingRifle/ReloadHuntingRifle1.m4a");
+    loadClip(reloadKey("shotgun", 0), "Shotgun/ReloadShotgun1.m4a");
+    loadClip(unloadKey("pistol", 0), "Pistol/UnloadPistol1.m4a");
+    loadClip(unloadKey("ak", 0), "AK/UnloadAK1.m4a");
+    loadClip(unloadKey("m4", 0), "M4/UnloadM41.m4a");
+    loadClip(unloadKey("revolver", 0), "Revolver/UnloadRevolver1.m4a");
+    loadClip(unloadKey("hunting", 0), "HuntingRifle/UnloadHuntingRifle1.m4a");
+    loadClip(unloadKey("shotgun", 0), "Shotgun/UnloadShotgun1.m4a");
     for (let i = 0; i < ZOMBIE_GROAN_COUNT; i++) {
-      loadWav(zombieGroanKey(i), `Zombie/ZombieGroan${i + 1}.wav`);
+      loadClip(zombieGroanKey(i), `Zombie/ZombieGroan${i + 1}.m4a`);
     }
     for (const surface of FOOTSTEP_SURFACES) {
       for (const gait of FOOTSTEP_GAITS) {
-        loadWav(footstepKey(surface, gait), FOOTSTEP_FILE[surface][gait]);
+        loadClip(footstepKey(surface, gait), FOOTSTEP_FILE[surface][gait]);
       }
     }
 
@@ -1561,11 +1574,16 @@ export class AudioManager {
     this.lastForestVariant = -1;
   }
 
-  /** Loop Menu.wav under the login screen. */
+  /** Loop the login bed. The file is already downloading from the page entry. */
   playMenu() {
     this.menuWanted = true;
     this.stopMenuFade();
     this.menuFade = 1;
+    if (!this.scene) {
+      this.volume = readStoredVolume();
+      this.muted = readStoredMute();
+    }
+    this.hookMenuBuffer();
     this.unlockAudio();
   }
 
@@ -1580,7 +1598,7 @@ export class AudioManager {
   fadeOutMenu(durationMs = MENU_FADE_OUT_MS) {
     this.menuWanted = false;
     this.stopMenuRetry();
-    if (this.muted || !this.menuSound) {
+    if (this.muted || (!this.menuSound && !menuBedPlaying())) {
       this.stopMenuFade();
       this.stopMenuSound();
       return;
@@ -1605,29 +1623,30 @@ export class AudioManager {
     this.menuFadeRaf = requestAnimationFrame(step);
   }
 
+  private hookMenuBuffer() {
+    if (this.menuBufferHooked) return;
+    this.menuBufferHooked = true;
+    whenMenuBufferReady(() => this.ensureMenu());
+  }
+
   private ensureMenu() {
     if (!this.menuWanted || this.muted) {
       this.stopMenuRetry();
       if (!this.menuFading) this.stopMenuSound();
       return;
     }
-    // Buffer sources started while the context is still locked stay silent
-    // after resume. Wait until running, then create (or recreate) the bed.
-    if (!this.scene || this.audioContextBlocked()) {
+    // The login screen is up before Phaser. Wait until the context is running,
+    // then start the bed that was downloaded ahead of the world assets.
+    if (this.audioContextBlocked()) {
       this.scheduleMenuRetry();
       return;
     }
-    if (this.menuSound && loopSoundAlive(this.menuSound)) {
+    if (menuBedPlaying()) {
       this.refreshMenu();
       this.stopMenuRetry();
       return;
     }
-    this.stopMenuSound();
-    this.menuSound = this.playKey(menuKey(), menuKey(), {
-      volume: MENU_GAIN * this.menuFade,
-      loop: true,
-    });
-    if (this.menuSound && loopSoundAlive(this.menuSound)) {
+    if (startMenuBed(this.volume * MENU_GAIN * this.menuFade)) {
       this.stopMenuRetry();
       return;
     }
@@ -1652,6 +1671,7 @@ export class AudioManager {
   }
 
   private refreshMenu() {
+    setMenuBedGain(this.volume * MENU_GAIN * this.menuFade);
     if (!this.menuSound) return;
     try {
       applySoundVolume(this.menuSound, this.volume * MENU_GAIN * this.menuFade);
@@ -1669,6 +1689,7 @@ export class AudioManager {
   }
 
   private stopMenuSound() {
+    stopMenuBed();
     if (!this.menuSound) return;
     this.stopSound(this.menuSound);
     this.menuSound = null;
@@ -2685,6 +2706,19 @@ function audioUrl(rel: string): string {
   return `/assets/audio/${trimmed}`;
 }
 
+/**
+ * AAC (`.m4a`) plays on Chrome, Edge, Safari, and Android.
+ * Vorbis (`.ogg`) covers browsers that do not advertise AAC.
+ * Phaser downloads the first format the device can play.
+ */
+function audioSources(rel: string): string[] {
+  const url = audioUrl(rel);
+  if (/\.m4a$/i.test(url)) {
+    return [url, url.replace(/\.m4a$/i, ".ogg")];
+  }
+  return [url];
+}
+
 function sfxKey(id: SfxId): string {
   return `sfx:${id}`;
 }
@@ -2721,7 +2755,7 @@ function forestAmbienceKey(period: ForestAmbiencePeriod, variant: number): strin
 
 function forestAmbienceFile(period: ForestAmbiencePeriod, variant: number): string {
   const stem = period === "day" ? "DayForestAmbience" : "NightForestAmbience";
-  return `Ambience/${stem}${variant + 1}.wav`;
+  return `Ambience/${stem}${variant + 1}.m4a`;
 }
 
 function consumeKey(
@@ -2765,10 +2799,10 @@ function doorLockpickKey(): string {
 
 const FURNITURE_SEARCH_BANK_COUNT = 19;
 const SEARCH_GAIN_DEFAULT = 0.15;
-/** SearchBody1.wav */
+/** SearchBody1.m4a */
 const BODY_SEARCH_GAIN = 0.15;
 /**
- * Per SearchN.wav gain. Unlisted banks use SEARCH_GAIN_DEFAULT.
+ * Per SearchN.m4a gain. Unlisted banks use SEARCH_GAIN_DEFAULT.
  * 1 desk/dresser  2 beds  3 boxes  4 kitchen  5 fridges  6 cabinets
  * 7 lockers  8 bookshelves  9 bags/chairs  10 water  11 trash
  * 12 checkout  13 store shelves  14 IV  15 counter  16 vending
@@ -2796,7 +2830,7 @@ const FURNITURE_SEARCH_GAIN: Partial<Record<number, number>> = {
   19: 0.15,
 };
 
-/** objectType → SearchN.wav. Body-search types are handled in searchKeyForFurniture. */
+/** objectType → SearchN.m4a. Body-search types are handled in searchKeyForFurniture. */
 const FURNITURE_SEARCH_BANK: Record<string, number> = {
   desk: 1,
   dresser: 1,

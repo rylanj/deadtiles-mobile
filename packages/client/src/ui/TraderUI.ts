@@ -22,17 +22,17 @@ import {
   isWeaponItem,
   isWeaponSlot,
   parseInventory,
-  tradeOfferTotals,
+  quoteTradeDraft,
+  tradeOfferQuotes,
   tradeOfferCashSettlement,
   tradeOfferStockFitProblem,
   traderItemMinStanding,
   traderPurchaseLock,
   TRADER_SHOP_CAPACITY,
-  traderBuyPrice,
-  traderSellPrice,
   type Inventory,
   type InventoryEntry,
   type TradeOfferBuyLine,
+  type TradeOfferLineQuote,
   type TradeOfferSellLine,
 } from "@zombie/shared";
 import { appendItemIcon, markQuestKeepsake } from "./itemIcons";
@@ -48,6 +48,7 @@ import {
   drawerHead,
   kvCard,
   markSheetOpen,
+  count,
   money,
   openDrawer,
   quickAmounts,
@@ -77,7 +78,7 @@ const TRADER_AVATAR = "/assets/UI/TraderMan1/TraderMan1_Avatar.png";
 const OFFER_DOUBLE_CLICK_MS = 500;
 
 function formatNotes(amount: number): string {
-  return `$${amount}`;
+  return money(amount);
 }
 
 function formatRep(value: number): string {
@@ -86,13 +87,24 @@ function formatRep(value: number): string {
     : value.toFixed(1);
 }
 
+function unitSpan(first: number, last: number): string {
+  if (first === last) return `${money(first)} each`;
+  return `${money(first)} to ${money(last)} each`;
+}
+
+/** Compact tag for a line whose units are not all the same price. */
+function offerPriceText(quote: { first: number; last: number }): string {
+  if (quote.first === quote.last) return money(quote.first);
+  return `${money(quote.first)}-${money(quote.last)}`;
+}
+
 function makeAmountPill(
-  amount: number,
+  amount: number | string,
   className = "trader-notes-pill",
 ): HTMLElement {
   const el = document.createElement("div");
   el.className = className;
-  el.textContent = formatNotes(amount);
+  el.textContent = typeof amount === "number" ? formatNotes(amount) : amount;
   return el;
 }
 
@@ -678,7 +690,7 @@ export class TraderUI {
     if (opts.quantity > 1) {
       const qty = document.createElement("span");
       qty.className = "inventory-cell-qty";
-      qty.textContent = String(opts.quantity);
+      qty.textContent = count(opts.quantity);
       cell.appendChild(qty);
     }
 
@@ -696,11 +708,8 @@ export class TraderUI {
       cell.appendChild(offerBadge);
     }
 
-    const amount =
-      opts.side === "player"
-        ? traderBuyPrice(opts.id, this.ashenReputation, this.barterT)
-        : traderSellPrice(opts.id, this.ashenReputation, this.barterT);
-    cell.appendChild(makeAmountPill(amount, "trader-cell-price"));
+    const priceText = this.offerPriceLabel(opts);
+    cell.appendChild(makeAmountPill(priceText, "trader-cell-price"));
 
     const def = getItemDefinition(opts.id);
     const itemName = def?.name ?? opts.id;
@@ -712,7 +721,7 @@ export class TraderUI {
     if (effect || equipped || buyLock) cell.title = titleBits.join(" · ");
     cell.setAttribute(
       "aria-label",
-      `${itemName}${opts.quantity > 1 ? ` ×${opts.quantity}` : ""}${
+      `${itemName}${opts.quantity > 1 ? ` ×${count(opts.quantity)}` : ""}${
         effect ? ` · ${effect}` : ""
       }${equipped ? " · equipped" : ""}${buyLock ? ` · ${buyLock}` : ""}`,
     );
@@ -961,7 +970,7 @@ export class TraderUI {
           : shortfallRep.toFixed(1);
       this.settlementEl.title =
         cash.shortfall > 0
-          ? `Trader is short $${cash.shortfall}. You still get their remaining cash, plus +${shortfallRepText} Ashen reputation`
+          ? `Trader is short ${formatNotes(cash.shortfall)}. You still get their remaining cash, plus +${shortfallRepText} Ashen reputation`
           : "";
     } else {
       cashLine.append("You pay ");
@@ -1122,10 +1131,74 @@ export class TraderUI {
     this.handlers.onConfirm(sells, buys);
   }
 
+  /**
+   * Price tag for this line, including units already in the offer.
+   * Nothing offered yet: the next unit, after the rest of the offer.
+   * Some of the line offered, some left: the next unit still on the shelf.
+   * The whole line offered: the span of those units, when they are not one price.
+   */
+  private offerPriceLabel(opts: {
+    side: "player" | "trader";
+    slotIndex?: number;
+    stockIndex?: number;
+    id: string;
+    quantity: number;
+  }): string {
+    const selection: Selection =
+      opts.side === "player"
+        ? { side: "player", slotIndex: opts.slotIndex!, id: opts.id, quantity: opts.quantity }
+        : { side: "trader", stockIndex: opts.stockIndex!, id: opts.id, quantity: opts.quantity };
+    const offered =
+      opts.side === "player"
+        ? this.offeredSellQty(opts.slotIndex!)
+        : this.offeredBuyQty(opts.stockIndex!);
+    if (offered > 0 && offered < opts.quantity) {
+      const throughNext = this.draftQuote(selection, offered + 1);
+      return money(throughNext.last);
+    }
+    const quote = this.draftQuote(selection, Math.max(1, offered));
+    return offerPriceText(quote);
+  }
+
+  /** Line total for a quantity, after the rest of the offer has moved the shelf. */
+  private draftQuote(selection: Selection, quantity: number): TradeOfferLineQuote {
+    const sells = [...this.sellOffers.values()];
+    const buys = [...this.buyOffers.values()];
+    if (selection.side === "player") {
+      return quoteTradeDraft(
+        this.stock,
+        sells,
+        buys,
+        {
+          side: "sell",
+          slotIndex: selection.slotIndex,
+          itemId: selection.id,
+          quantity,
+        },
+        this.ashenReputation,
+        this.barterT,
+      );
+    }
+    return quoteTradeDraft(
+      this.stock,
+      sells,
+      buys,
+      {
+        side: "buy",
+        stockIndex: selection.stockIndex,
+        itemId: selection.id,
+        quantity,
+      },
+      this.ashenReputation,
+      this.barterT,
+    );
+  }
+
   private offerFacts() {
     const sells = [...this.sellOffers.values()];
     const buys = [...this.buyOffers.values()];
-    const totals = tradeOfferTotals(
+    const totals = tradeOfferQuotes(
+      this.stock,
       sells,
       buys,
       this.ashenReputation,
@@ -1330,9 +1403,7 @@ export class TraderUI {
     const offered = player
       ? this.offeredSellQty(selection.slotIndex)
       : this.offeredBuyQty(selection.stockIndex);
-    const each = player
-      ? traderBuyPrice(selection.id, this.ashenReputation, this.barterT)
-      : traderSellPrice(selection.id, this.ashenReputation, this.barterT);
+    const each = this.offerPriceLabel(selection);
     const lock = player
       ? this.playerOfferLock(selection.slotIndex, selection.id)
       : this.traderOfferLock(selection.id);
@@ -1353,7 +1424,7 @@ export class TraderUI {
       name: def?.name ?? selection.id,
       meta,
       metaTone: !repNeed && lock ? "warn" : undefined,
-      end: money(each),
+      end: each,
       state: offered > 0 ? "on" : !repNeed && lock ? "dim" : undefined,
       onTap: () => this.openItem(selection),
     });
@@ -1400,13 +1471,11 @@ export class TraderUI {
     const player = sel.side === "player";
     const def = getItemDefinition(sel.id);
     const name = def?.name ?? sel.id;
-    const each = player
-      ? traderBuyPrice(sel.id, this.ashenReputation, this.barterT)
-      : traderSellPrice(sel.id, this.ashenReputation, this.barterT);
     const offered = player ? this.offeredSellQty(sel.slotIndex) : this.offeredBuyQty(sel.stockIndex);
     const lock = player ? this.playerOfferLock(sel.slotIndex, sel.id) : this.traderOfferLock(sel.id);
     const repNeed = player ? "" : this.traderRepRequirement(sel.id);
-    const subBits = [`${money(each)} each`];
+    const seed = this.draftQuote(sel, Math.max(1, offered));
+    const subBits = [unitSpan(seed.first, seed.last)];
     const effect = wornGearEffectHint(sel.id);
     if (effect) subBits.push(effect);
     if (!player) subBits.push(`${sel.quantity} in stock`);
@@ -1458,8 +1527,22 @@ export class TraderUI {
           paint();
         }),
       );
+      const quote = this.draftQuote(sel, draft);
+      const sub = drawer.content.querySelector(".ms-dhead-sub");
+      if (sub) {
+        const bits = [unitSpan(quote.first, quote.last)];
+        if (effect) bits.push(effect);
+        if (!player) bits.push(`${sel.quantity} in stock`);
+        else if (this.isEquippedSellSlot(sel.slotIndex, sel.id)) bits.push("Worn");
+        else if (sel.quantity > 1) bits.push(`You have ${sel.quantity}`);
+        sub.textContent = bits.join(" · ");
+      }
+      const label =
+        quote.first === quote.last
+          ? `${draft} × ${money(quote.first)}`
+          : `${draft} · ${unitSpan(quote.first, quote.last)}`;
       totalSlot.replaceChildren(
-        kvCard([{ label: `${draft} × ${money(each)}`, value: money(draft * each), total: true }]),
+        kvCard([{ label, value: money(quote.total), total: true }]),
       );
       const same = offered > 0 && draft === offered;
       setButtonLabel(commit, same ? "In the offer" : offered > 0 ? "Update offer" : "Add to offer");
@@ -1520,32 +1603,32 @@ export class TraderUI {
     const body: HTMLElement[] = [];
     if (facts.sells.length) {
       body.push(sectionLabel("You get"));
-      for (const line of facts.sells) {
+      facts.sells.forEach((line, index) => {
         const slot = this.playerInventory[line.slotIndex];
-        const each = traderBuyPrice(line.itemId, this.ashenReputation, this.barterT);
+        const quote = facts.sellQuotes[index] ?? { first: 0, last: 0, total: 0 };
         const where = this.isEquippedSellSlot(line.slotIndex, line.itemId) ? "Worn" : "From your pack";
         body.push(
-          this.reviewRow(line.itemId, line.quantity, where, each * line.quantity, () => {
+          this.reviewRow(line.itemId, line.quantity, `${where} · ${unitSpan(quote.first, quote.last)}`, quote.total, () => {
             if (slot) {
               this.openItem({ side: "player", slotIndex: line.slotIndex, id: slot.id, quantity: slot.quantity });
             }
           }),
         );
-      }
+      });
     }
     if (facts.buys.length) {
       body.push(sectionLabel("You give"));
-      for (const line of facts.buys) {
+      facts.buys.forEach((line, index) => {
         const entry = this.stock[line.stockIndex];
-        const each = traderSellPrice(line.itemId, this.ashenReputation, this.barterT);
+        const quote = facts.buyQuotes[index] ?? { first: 0, last: 0, total: 0 };
         body.push(
-          this.reviewRow(line.itemId, line.quantity, `${money(each)} each`, each * line.quantity, () => {
+          this.reviewRow(line.itemId, line.quantity, unitSpan(quote.first, quote.last), quote.total, () => {
             if (entry) {
               this.openItem({ side: "trader", stockIndex: line.stockIndex, id: entry.id, quantity: entry.quantity });
             }
           }),
         );
-      }
+      });
     }
     const rows: KvRow[] = [];
     if (facts.sellTotal > 0) rows.push({ label: "You get", value: money(facts.sellTotal) });

@@ -254,6 +254,9 @@ body.chat-open #tutorial-tip {
 body.is-mobile.game-ready:not(.main-menu-open) #loot-popup-container {
   z-index: 75;
 }
+body.is-mobile.game-ready.container-loot-open:not(.main-menu-open) #loot-popup-container {
+  z-index: 140;
+}
 body.is-mobile #loot-popup-container .loot-card {
   pointer-events: auto;
   cursor: pointer;

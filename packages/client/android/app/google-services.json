@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "676788643173",
+    "project_id": "deadtiles-a39d9",
+    "storage_bucket": "deadtiles-a39d9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:676788643173:android:6cd6dd65977fb2cafd2d8c",
+        "android_client_info": {
+          "package_name": "com.deadtiles.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA48Ee5jUd2a3sv1aMmLnkUdhZAGkAtZyM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

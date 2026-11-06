@@ -25,6 +25,18 @@ export const INTERIOR_HEIGHT = 4;
 export const INTERIOR_ZOMBIE_DENSITY_REF_TILES = 12;
 /** Hard cap on zombies inside residential (`house`) buildings. */
 export const RESIDENTIAL_ZOMBIE_MAX = 4;
+/** Cleared interiors restock on a later empty visit, after 1 to 5 real hours. */
+export const INTERIOR_ZOMBIE_RESPAWN_MIN_MS = 60 * 60 * 1000;
+export const INTERIOR_ZOMBIE_RESPAWN_MAX_MS = 5 * 60 * 60 * 1000;
+
+/** Random wait from 1 hour up to (but not including) 5 hours. */
+export function rollInteriorZombieRespawnDelayMs(): number {
+  const span = INTERIOR_ZOMBIE_RESPAWN_MAX_MS - INTERIOR_ZOMBIE_RESPAWN_MIN_MS;
+  return (
+    INTERIOR_ZOMBIE_RESPAWN_MIN_MS +
+    Math.floor(Math.random() * Math.max(span, 1))
+  );
+}
 /** Forced walker count when a quest has claimed a building. */
 export const QUEST_INTERIOR_ZOMBIE_MIN = 2;
 export const QUEST_INTERIOR_ZOMBIE_MAX = 8;
@@ -341,7 +353,7 @@ export const FURNITURE_TYPES = [
   "gunrack4",
   /** Gun shop ammunition shelf. Placed by layout. */
   "ammoshelf1",
-  /** Gun shop gunsmith bench. Not loot. */
+  /** Gun shop gunsmith bench. Firearm crafting. Not loot. */
   "gunbench1",
 ] as const;
 
@@ -1120,6 +1132,36 @@ export function furnitureFrontApproachTiles(obj: {
 }
 
 /**
+ * Scratch grids for entrance floods. Placement checks call this in a tight
+ * loop and never nest, so one pair of buffers is reused instead of allocating
+ * a set per flood.
+ */
+let reachScratchN = 0;
+let reachBlock: Uint8Array | null = null;
+let reachSeen: Uint8Array | null = null;
+let reachQx: Int16Array | null = null;
+let reachQy: Int16Array | null = null;
+
+function reachScratch(n: number): {
+  block: Uint8Array;
+  seen: Uint8Array;
+  qx: Int16Array;
+  qy: Int16Array;
+} {
+  if (!reachBlock || !reachSeen || !reachQx || !reachQy || reachScratchN < n) {
+    reachScratchN = n;
+    reachBlock = new Uint8Array(n);
+    reachSeen = new Uint8Array(n);
+    reachQx = new Int16Array(n);
+    reachQy = new Int16Array(n);
+  } else {
+    reachBlock.fill(0, 0, n);
+    reachSeen.fill(0, 0, n);
+  }
+  return { block: reachBlock, seen: reachSeen, qx: reachQx, qy: reachQy };
+}
+
+/**
  * Tiles you can walk to from the building entrance. Room doors are gaps in
  * `walls`, so this treats them as open: the player can open a closed door.
  * Diagonal steps need both corners clear, so 4-connected reachability matches
@@ -1137,26 +1179,38 @@ function tilesReachableFromEntrance(
     facing?: string;
   }[],
 ): Set<string> {
-  const wallSet = new Set<string>();
+  const reachable = new Set<string>();
+  if (iW <= 0 || iH <= 0) return reachable;
+  const n = iW * iH;
+  const { block, seen, qx, qy } = reachScratch(n);
+  const index = (tx: number, ty: number) => ty * iW + tx;
   if (walls) {
-    for (const w of walls) wallSet.add(`${w.x},${w.y}`);
+    for (const w of walls) {
+      if (w.x < 0 || w.y < 0 || w.x >= iW || w.y >= iH) continue;
+      block[index(w.x, w.y)] = 1;
+    }
   }
-  const blocked = new Set<string>();
   for (const f of furnitures) {
     if (f.objectType === "groundbackpack") continue;
     const { w, h } = furnitureFootprint(f.objectType ?? "", f.facing);
     for (let ty = f.y; ty < f.y + h; ty++) {
-      for (let tx = f.x; tx < f.x + w; tx++) blocked.add(`${tx},${ty}`);
+      if (ty < 0 || ty >= iH) continue;
+      for (let tx = f.x; tx < f.x + w; tx++) {
+        if (tx < 0 || tx >= iW) continue;
+        block[index(tx, ty)] = 1;
+      }
     }
   }
-  const reachable = new Set<string>();
-  const queue: { x: number; y: number }[] = [];
+  let qt = 0;
   const seed = (tx: number, ty: number) => {
     if (tx < 0 || ty < 0 || tx >= iW || ty >= iH) return;
-    const key = `${tx},${ty}`;
-    if (reachable.has(key) || wallSet.has(key) || blocked.has(key)) return;
-    reachable.add(key);
-    queue.push({ x: tx, y: ty });
+    const i = index(tx, ty);
+    if (seen[i] || block[i]) return;
+    seen[i] = 1;
+    reachable.add(`${tx},${ty}`);
+    qx[qt] = tx;
+    qy[qt] = ty;
+    qt += 1;
   };
   if (exit.face === "SE") {
     for (let y = exit.alongMin; y <= exit.alongMax; y++) seed(exit.insideX, y);
@@ -1164,12 +1218,13 @@ function tilesReachableFromEntrance(
     for (let x = exit.alongMin; x <= exit.alongMax; x++) seed(x, exit.insideY);
   }
   seed(exit.insideX, exit.insideY);
-  for (let i = 0; i < queue.length; i++) {
-    const cur = queue[i]!;
-    seed(cur.x + 1, cur.y);
-    seed(cur.x - 1, cur.y);
-    seed(cur.x, cur.y + 1);
-    seed(cur.x, cur.y - 1);
+  for (let qh = 0; qh < qt; qh++) {
+    const tx = qx[qh]!;
+    const ty = qy[qh]!;
+    seed(tx + 1, ty);
+    seed(tx - 1, ty);
+    seed(tx, ty + 1);
+    seed(tx, ty - 1);
   }
   return reachable;
 }
@@ -1185,6 +1240,39 @@ function furnitureHasReachableApproach(
     y: obj.y,
     facing: obj.facing,
   }).some((t) => reachable.has(`${t.x},${t.y}`));
+}
+
+/**
+ * True when adding this footprint still leaves a walk from the entrance to
+ * every piece that was already reachable, and to the new piece itself.
+ * Upper-floor copies share ground tiles and are ignored here.
+ */
+function placementPreservesAccess(
+  iW: number,
+  iH: number,
+  exit: InteriorExit,
+  walls: readonly InteriorWallTile[] | undefined,
+  existing: readonly {
+    objectType?: string;
+    x: number;
+    y: number;
+    facing?: string;
+    level?: number;
+  }[],
+  candidate: { objectType: string; x: number; y: number; facing?: string },
+): boolean {
+  const ground = existing.filter((piece) => (piece.level ?? 0) === 0);
+  const before = tilesReachableFromEntrance(iW, iH, exit, walls, ground);
+  const after = tilesReachableFromEntrance(iW, iH, exit, walls, [
+    ...ground,
+    candidate,
+  ]);
+  if (!furnitureHasReachableApproach(candidate, after)) return false;
+  for (const piece of ground) {
+    if (!furnitureHasReachableApproach(piece, before)) continue;
+    if (!furnitureHasReachableApproach(piece, after)) return false;
+  }
+  return true;
 }
 
 /**
@@ -3713,6 +3801,12 @@ function placePoliceTrashCans(
   startIndex: number,
   rng: () => number,
   blocked: (tx: number, ty: number) => boolean = () => false,
+  allow?: (
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+    already: readonly SearchableObject[],
+  ) => boolean,
 ): SearchableObject[] {
   if (desks.length === 0) return [];
 
@@ -3766,6 +3860,7 @@ function placePoliceTrashCans(
       }
     }
     if (!approachesOk) continue;
+    if (allow && !allow(ox, oy, canFacing, furnitures)) continue;
 
     occupied.add(`${ox},${oy}`);
     for (const t of approaches) occupied.add(`${t.x},${t.y}`);
@@ -10619,6 +10714,26 @@ function placeFixedSafe(
   });
 }
 
+/** Meeting-room and manager-office partitions. Furniture does not add walls. */
+function officePartitionWalls(
+  room: OfficeMeetingRoom,
+  manager: OfficeManagerRoom | null,
+): InteriorWallTile[] {
+  const walls: InteriorWallTile[] = [];
+  const seen = new Set<string>();
+  const add = (w: InteriorWallTile) => {
+    const key = `${w.x},${w.y}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    walls.push(w);
+  };
+  for (const w of room.wallTiles) add(w);
+  if (manager) {
+    for (const w of manager.wallTiles) add(w);
+  }
+  return walls;
+}
+
 /**
  * Walled meeting room and manager's office on the back wall, then a desk bullpen.
  * ConferenceTable1 already includes its chairs, so OfficeChair1 is only at
@@ -10721,6 +10836,27 @@ function placeOffice(
     return true;
   };
 
+  const accessWalls = (): InteriorWallTile[] => [
+    ...room.wallTiles,
+    ...(manager?.wallTiles ?? []),
+  ];
+
+  const keepsAccess = (
+    objectType: string,
+    x: number,
+    y: number,
+    facing: FurnitureFacing,
+    extra: readonly SearchableObject[] = [],
+  ): boolean =>
+    placementPreservesAccess(
+      iW,
+      iH,
+      exit,
+      accessWalls(),
+      extra.length > 0 ? [...furnitures, ...extra] : furnitures,
+      { objectType, x, y, facing },
+    );
+
   const commit = (
     objectType: FurnitureType,
     ox: number,
@@ -10728,6 +10864,7 @@ function placeOffice(
     facing: FurnitureFacing,
   ): boolean => {
     if (!canPlace(objectType, ox, oy, facing)) return false;
+    if (!keepsAccess(objectType, ox, oy, facing)) return false;
     const { w, h } = furnitureFootprint(objectType, facing);
     for (let ty = oy; ty < oy + h; ty++) {
       for (let tx = ox; tx < ox + w; tx++) occupied.add(`${tx},${ty}`);
@@ -10840,6 +10977,10 @@ function placeOffice(
         if (freeFootprint) occupied.add(key);
         return false;
       }
+      if (!keepsAccess(objectType, x, y, facing)) {
+        if (freeFootprint) occupied.add(key);
+        return false;
+      }
       occupied.add(key);
       occupied.add(behindKey);
       furnitures.push({
@@ -10878,11 +11019,13 @@ function placeOffice(
       { back: 0, side: 4, facing: backFace },
       { back: 0, side: 5, facing: backFace },
     ]);
-    // Bookshelf aisle, one tile short of the door row, so the tiles behind
-    // the guest chairs stay clear.
+    // Off the side-0 aisle. That aisle is the only walk to the bookshelf,
+    // and a cooler on it seals the shelf. Prefer the far corner, then the
+    // back wall past the cabinets.
     commitAt("watercooler", [
-      { back: 4, side: 0, facing: backFace },
+      { back: 4, side: 5, facing: backFace },
       { back: 0, side: 5, facing: backFace },
+      { back: 4, side: 4, facing: backFace },
     ]);
     // These seats face the boss. Armchair1 has no NE/NW art.
     const guestA = tileAt(4, 1);
@@ -10902,7 +11045,10 @@ function placeOffice(
     // In the gap between the desk and the guests. Side 0 is the aisle to
     // the bookshelf, and a safe there seals that shelf off from the door.
     const safeAt = tileAt(3, 1);
-    if (canPlace(SAFE_OBJECT_TYPE, safeAt.x, safeAt.y, lowFace)) {
+    if (
+      canPlace(SAFE_OBJECT_TYPE, safeAt.x, safeAt.y, lowFace) &&
+      keepsAccess(SAFE_OBJECT_TYPE, safeAt.x, safeAt.y, lowFace)
+    ) {
       placeFixedSafe(
         furnitures,
         occupied,
@@ -10993,6 +11139,17 @@ function placeOffice(
   const roomsOnWest = room.facing === "SE";
   const openX = roomsOnWest ? room.entranceX + 1 : 2;
   const openY = roomsOnWest ? 2 : room.entranceY + 1;
+  // The search tries the same tile from many anchors. Nothing is placed until
+  // a block is chosen, so a tile's fit does not change between probes.
+  const deskFit = new Map<string, boolean>();
+  const deskCanPlace = (x: number, y: number): boolean => {
+    const key = `${x},${y}`;
+    const hit = deskFit.get(key);
+    if (hit !== undefined) return hit;
+    const ok = canPlace("desk3", x, y, facing);
+    deskFit.set(key, ok);
+    return ok;
+  };
   type DeskBlock = {
     xs: number[];
     ys: number[];
@@ -11018,7 +11175,7 @@ function placeOffice(
   if (roomsOnWest) {
     const rowFits = (xs: number[], y: number) => {
       for (const x of xs) {
-        if (!canPlace("desk3", x, y, facing)) return false;
+        if (!deskCanPlace(x, y)) return false;
       }
       return true;
     };
@@ -11057,7 +11214,7 @@ function placeOffice(
   } else {
     const colFits = (x: number, ys: number[]) => {
       for (const y of ys) {
-        if (!canPlace("desk3", x, y, facing)) return false;
+        if (!deskCanPlace(x, y)) return false;
       }
       return true;
     };
@@ -11136,6 +11293,10 @@ function placeOffice(
           occupied.add(key);
           continue;
         }
+        if (!keepsAccess("officechair", spot.x, spot.y, chairFacing)) {
+          occupied.add(key);
+          continue;
+        }
         occupied.add(key);
         occupied.add(backKey);
         furnitures.push({
@@ -11176,6 +11337,8 @@ function placeOffice(
     furnitureIndex,
     rng,
     blocksExit,
+    (x, y, facing, already) =>
+      keepsAccess("trashcan", x, y, facing, already),
   );
   furnitures.push(...deskCans);
 
@@ -11194,18 +11357,7 @@ function placeOffice(
     );
   }
 
-  const walls: InteriorWallTile[] = [];
-  const seenWall = new Set<string>();
-  const addWall = (w: InteriorWallTile) => {
-    const key = `${w.x},${w.y}`;
-    if (seenWall.has(key)) return;
-    seenWall.add(key);
-    walls.push(w);
-  };
-  for (const w of room.wallTiles) addWall(w);
-  if (manager) {
-    for (const w of manager.wallTiles) addWall(w);
-  }
+  const walls = officePartitionWalls(room, manager);
   const doors = [{ x: room.entranceX, y: room.entranceY }];
   if (manager) doors.push({ x: manager.entranceX, y: manager.entranceY });
   return { furnitures, walls, doors };
@@ -13436,6 +13588,55 @@ function placeCellarFurniture(
   return furnitures;
 }
 
+/**
+ * Faction sites and cellars never roll walkers. Birchport hospital, Red Order
+ * markets, the Ashen trader warehouse, tents, and mess halls stay clear.
+ */
+export function interiorSuppressesZombies(bx: number, by: number): boolean {
+  if (getCellarAt(bx, by)) return true;
+  return (
+    (isHospitalInterior(bx, by) && isBirchportHospital(bx, by)) ||
+    (isSupermarketInterior(bx, by) && isRedOrderOwnedSupermarket(bx, by)) ||
+    (isWarehouseInterior(bx, by) && isAshenTraderWarehouse(bx, by)) ||
+    isTentInterior(bx, by) ||
+    isMessHallInterior(bx, by)
+  );
+}
+
+/**
+ * Same walker roll as a freshly generated interior.
+ * 25% of buildings are empty. The rest get a low-weighted count based on a
+ * small-room density, and houses never exceed {@link RESIDENTIAL_ZOMBIE_MAX}.
+ * `freeTiles` must already be shuffled; spawns use the front of the list.
+ */
+export function rollInteriorZombieSpawns(
+  bx: number,
+  by: number,
+  freeTiles: readonly { x: number; y: number }[],
+): { x: number; y: number }[] {
+  if (interiorSuppressesZombies(bx, by) || freeTiles.length === 0) return [];
+  // 25% chance of a completely empty building.
+  if (Math.random() < 0.25) return [];
+  const maxZombies = freeTiles.length;
+  // Quadratic weighting (rng² heavily favours low counts). Density is based
+  // on a reference room size, not total free tiles in oversized lots.
+  const densityTiles = Math.min(maxZombies, INTERIOR_ZOMBIE_DENSITY_REF_TILES);
+  let numZombies = Math.max(
+    1,
+    Math.ceil(densityTiles * Math.random() * Math.random()),
+  );
+  if (isResidentialInterior(bx, by)) {
+    numZombies = Math.min(numZombies, RESIDENTIAL_ZOMBIE_MAX);
+  }
+  const count = Math.min(numZombies, maxZombies);
+  const zombieSpawns: { x: number; y: number }[] = [];
+  for (let i = 0; i < count; i++) {
+    const tile = freeTiles[i]!;
+    zombieSpawns.push({ x: tile.x + 0.5, y: tile.y + 0.5 });
+  }
+  return zombieSpawns;
+}
+
 export function generateInteriorContent(bx: number, by: number): {
   furnitures: SearchableObject[];
   zombieSpawns: { x: number; y: number }[];
@@ -13789,8 +13990,6 @@ export function generateInteriorContent(bx: number, by: number): {
   }
 
   // Zombie spawns — never on the entrance or within one tile of it.
-  const zombieSpawns: { x: number; y: number }[] = [];
-
   const freeTiles: { x: number; y: number }[] = [];
   for (let ty = 0; ty < iH; ty++) {
     for (let tx = 0; tx < iW; tx++) {
@@ -13809,32 +14008,7 @@ export function generateInteriorContent(bx: number, by: number): {
     freeTiles[j] = tmp;
   }
 
-  const maxZombies = freeTiles.length;
-
-  // Faction buildings stay clear: hospital, Red Order markets, the Ashen trader warehouse.
-  const suppressZombies =
-    (hospital && isBirchportHospital(bx, by)) ||
-    (supermarket && isRedOrderOwnedSupermarket(bx, by)) ||
-    (warehouse && isAshenTraderWarehouse(bx, by)) ||
-    tent ||
-    messHall;
-
-  // 25% chance of a completely empty building
-  if (!suppressZombies && Math.random() >= 0.25 && maxZombies > 0) {
-    // Quadratic weighting (rng² heavily favours low counts) — density is
-    // based on a reference room size, not total free tiles in oversized lots.
-    const densityTiles = Math.min(maxZombies, INTERIOR_ZOMBIE_DENSITY_REF_TILES);
-    let numZombies = Math.max(
-      1,
-      Math.ceil(densityTiles * Math.random() * Math.random()),
-    );
-    if (residential) numZombies = Math.min(numZombies, RESIDENTIAL_ZOMBIE_MAX);
-    const count = Math.min(numZombies, maxZombies);
-    for (let i = 0; i < count; i++) {
-      const tile = freeTiles[i]!;
-      zombieSpawns.push({ x: tile.x + 0.5, y: tile.y + 0.5 });
-    }
-  }
+  const zombieSpawns = rollInteriorZombieSpawns(bx, by, freeTiles);
 
   return { furnitures, zombieSpawns, walls, doors };
 }
@@ -13916,6 +14090,43 @@ export function canMoveInInterior(
 }
 
 /**
+ * Ground-floor partitions, cached. Depth sorting asks for these once per
+ * interior entity per frame, and rebuilding an office (desk search plus a
+ * flood per candidate) from that path drops the frame rate.
+ * Office walls are only the meeting room and the manager's office, so they
+ * do not need the furniture pass. Other types still come from generation,
+ * once.
+ */
+const INTERIOR_WALL_CACHE_MAX = 64;
+const interiorWallCache = new Map<string, InteriorWallTile[]>();
+
+function cachedProceduralWalls(bx: number, by: number): InteriorWallTile[] {
+  const key = `${bx},${by}`;
+  const hit = interiorWallCache.get(key);
+  if (hit) {
+    interiorWallCache.delete(key);
+    interiorWallCache.set(key, hit);
+    return hit;
+  }
+  let walls: InteriorWallTile[];
+  if (isOfficeInterior(bx, by)) {
+    const room = layoutOfficeMeetingRoom(bx, by);
+    walls = room
+      ? officePartitionWalls(room, layoutOfficeManagerRoom(bx, by))
+      : [];
+  } else {
+    // Copy the array. Callers keep the generated list and may push onto it.
+    walls = generateInteriorContent(bx, by).walls.slice();
+  }
+  if (interiorWallCache.size >= INTERIOR_WALL_CACHE_MAX) {
+    const oldest = interiorWallCache.keys().next().value;
+    if (oldest !== undefined) interiorWallCache.delete(oldest);
+  }
+  interiorWallCache.set(key, walls);
+  return walls;
+}
+
+/**
  * Deterministic interior wall tiles for a building (same seed as generation).
  * Safe for clients to call for rendering / local pathfinding.
  */
@@ -13929,7 +14140,7 @@ export function interiorWallsForBuilding(
     const upper = apartmentLevelForBuilding(bx, by, level);
     return upper ? upper.walls.map((w) => ({ ...w })) : [];
   }
-  return generateInteriorContent(bx, by).walls;
+  return cachedProceduralWalls(bx, by).slice();
 }
 
 /**

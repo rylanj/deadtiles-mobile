@@ -57,6 +57,7 @@ import {
   inventorySlotAccess,
   itemFitsInSlot,
   loadedBackpackStowBlocked,
+  backpackHoldsItems,
   type Inventory,
 } from "@zombie/shared";
 import { AudioManager } from "../audio/AudioManager";
@@ -66,6 +67,7 @@ import { carrySlotGroups, formatCarrySlots, usedSlotCount } from "./carrySlots";
 import {
   createSheet,
   createStepper,
+  count,
   drawerHead,
   itemIconImg,
   kvCard,
@@ -775,7 +777,7 @@ export class InventoryUI {
       if (slot.quantity > 1 || packedCount > 0) {
         const qty = document.createElement("span");
         qty.className = "inventory-cell-qty";
-        qty.textContent = String(slot.quantity > 1 ? slot.quantity : packedCount);
+        qty.textContent = count(slot.quantity > 1 ? slot.quantity : packedCount);
         if (packedCount > 0 && slot.quantity <= 1) {
           qty.title = packedCount === 1 ? "1 item inside" : `${packedCount} items inside`;
         }
@@ -825,7 +827,7 @@ export class InventoryUI {
       if (effect) cell.title = `${itemName} · ${effect}`;
       cell.setAttribute(
         "aria-label",
-        `${itemName}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${freqLabel}${dur}${wetLabel}${effectLabel}`,
+        `${itemName}${slot.quantity > 1 ? ` ×${count(slot.quantity)}` : ""}${freqLabel}${dur}${wetLabel}${effectLabel}`,
       );
 
       const toggleEquip = () => {
@@ -1049,7 +1051,7 @@ export class InventoryUI {
     }
 
     this.detailEl.textContent =
-      (slot.quantity > 1 ? `${name} ×${slot.quantity}` : name) + zoneHint;
+      (slot.quantity > 1 ? `${name} ×${count(slot.quantity)}` : name) + zoneHint;
 
     // Only show actions that apply — never leave disabled stubs visible.
     this.equipBtn.hidden = !isWeapon || equipped;
@@ -1399,7 +1401,7 @@ export class InventoryUI {
       if (slot.quantity > 1 || packed > 0) {
         const q = document.createElement("span");
         q.className = "ms-bag-cell-q";
-        q.textContent = String(slot.quantity > 1 ? slot.quantity : packed);
+        q.textContent = count(slot.quantity > 1 ? slot.quantity : packed);
         cell.append(q);
       }
       const freq = getEntryRadioFreq(slot);
@@ -1417,7 +1419,7 @@ export class InventoryUI {
       if (index === this.selectedSlot && !move) cell.classList.add("ms-bag-cell--sel");
       cell.setAttribute(
         "aria-label",
-        `${itemName(slot.id)}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}`,
+        `${itemName(slot.id)}${slot.quantity > 1 ? ` ×${count(slot.quantity)}` : ""}`,
       );
     } else {
       cell.classList.add("ms-bag-cell--empty");
@@ -1459,6 +1461,19 @@ export class InventoryUI {
     const item = this.currentInventory[from];
     if (!item) return "";
     const name = itemName(item.id);
+    const dest = this.currentInventory[to];
+    if (
+      dest &&
+      isBackpackItem(item.id) &&
+      isBackpackItem(dest.id) &&
+      (isBackpackSlot(from) || isBackpackSlot(to)) &&
+      !isBackpackStorageIndex(from) &&
+      !isBackpackStorageIndex(to) &&
+      (backpackHoldsItems(this.currentInventory, from) ||
+        backpackHoldsItems(this.currentInventory, to))
+    ) {
+      return "Those items don't fit in that backpack.";
+    }
     if (loadedBackpackStowBlocked(item, to)) {
       return `Empty the ${name} before packing it away.`;
     }
@@ -1664,7 +1679,7 @@ export class InventoryUI {
     const name = def?.name ?? slot.id;
     const head = drawerHead({
       iconItemId: slot.id,
-      title: slot.quantity > 1 ? `${name} ×${slot.quantity}` : name,
+      title: slot.quantity > 1 ? `${name} ×${count(slot.quantity)}` : name,
       sub: `${itemCategoryLabel(slot.id)} · ${this.msWhere(index)}`,
     });
     drawer.content.replaceChildren(head);

@@ -52,10 +52,10 @@ export const FOOTSTEP_FILE: Record<
   FootstepSurface,
   Record<FootstepGait, string>
 > = {
-  grass: { walk: "Ground/WalkGrass.wav", run: "Ground/RunGrass.wav" },
-  concrete: { walk: "Ground/WalkConcrete.wav", run: "Ground/RunConcrete.wav" },
-  carpet: { walk: "Ground/WalkCarpet.wav", run: "Ground/RunCarpet.wav" },
-  wood: { walk: "Ground/WalkWood.wav", run: "Ground/RunWood.wav" },
+  grass: { walk: "Ground/WalkGrass.m4a", run: "Ground/RunGrass.m4a" },
+  concrete: { walk: "Ground/WalkConcrete.m4a", run: "Ground/RunConcrete.m4a" },
+  carpet: { walk: "Ground/WalkCarpet.m4a", run: "Ground/RunCarpet.m4a" },
+  wood: { walk: "Ground/WalkWood.m4a", run: "Ground/RunWood.m4a" },
 };
 
 /**

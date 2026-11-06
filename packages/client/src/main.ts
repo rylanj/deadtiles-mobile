@@ -1,5 +1,7 @@
 import { armSharedAudioContext } from "./audio/audioContext";
+import { startMenuPreload } from "./audio/menuPreload";
 import { applyMobileBodyClass } from "./device";
+import { isNativeApp } from "./native";
 import { beginWorldJoin, endWorldJoin, isBootReady } from "./gameLoadState";
 import type { AuthSession } from "./network/ColyseusClient";
 import { captureReferralFromUrl } from "./network/referral";
@@ -24,6 +26,8 @@ try {
 try {
   // Audio must not be able to stop the menu from appearing.
   armSharedAudioContext();
+  // Music request goes out before the game bundle and the world assets.
+  startMenuPreload();
 } catch (err) {
   console.error(err);
 }
@@ -71,10 +75,24 @@ try {
 
 // Let the menu paint before the game bundle is parsed. On a phone that parse
 // was freezing the first screen on Starting 0%.
-window.setTimeout(() => {
-  void loadGameModule()
-    .then((mod) => mod.beginBackgroundGameLoad())
-    .catch((err) => {
-      console.error(err);
-    });
-}, 50);
+void import("./audio/AudioManager")
+  .then(({ AudioManager }) => {
+    if (document.body.classList.contains("main-menu-open")) {
+      AudioManager.get().playMenu();
+    }
+  })
+  .catch((err) => {
+    console.error(err);
+  });
+
+// The APK stays on this DOM menu until Enter world. Starting WebGL here was
+// crashing the Seeker (Mali) once a saved wallet session resized the menu.
+if (!isNativeApp()) {
+  window.setTimeout(() => {
+    void loadGameModule()
+      .then((mod) => mod.beginBackgroundGameLoad())
+      .catch((err) => {
+        console.error(err);
+      });
+  }, 50);
+}

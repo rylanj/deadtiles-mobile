@@ -21,6 +21,7 @@ import {
 import { isNativeApp } from "../native";
 import { signInWithMobileWallet } from "./mobileWalletAdapter";
 import { ApiHttpError, apiRequest } from "./api";
+import { clientDeviceId } from "./deviceId";
 import type { WalletOption } from "./walletOptions";
 
 const SESSION_KEY = "deatiles_session";
@@ -237,7 +238,7 @@ export async function completeSignedLogin(
   const data = await apiRequest<AuthSession>(`${serverUrl()}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    json: { wallet, nonce, signature },
+    json: { wallet, nonce, signature, deviceId: await clientDeviceId() },
   });
   const session: AuthSession = { ...data, isAdmin: data.isAdmin === true };
   storeAuthSession(session);
@@ -260,7 +261,11 @@ export async function registerSurvivorName(
       "Content-Type": "application/json",
       Authorization: `Bearer ${sessionToken}`,
     },
-    json: ref ? { name, ref } : { name },
+    json: {
+      name,
+      deviceId: await clientDeviceId(),
+      ...(ref ? { ref } : {}),
+    },
   });
   const session: AuthSession = {
     sessionToken,
@@ -280,12 +285,36 @@ export type ReferralSignup = {
   tutorialDone: boolean;
 };
 
-export type ReferralPayout = {
+export type RelatedReferrer = {
+  wallet: string;
+  name: string;
+};
+
+export type ReferralFlags = {
+  ip: string;
+  userAgent: string;
+  deviceId: string;
+  sameIp: number;
+  sameNetwork: number;
+  samePerson: boolean;
+  samePersonReason: string;
+  tutorialOnly: boolean;
+  tutorialMinutes: number | null;
+  relatedReferrers: RelatedReferrer[];
+  accountCreatedAt: number;
+  lastSeen: number;
+};
+
+export type ReferralPayout = ReferralFlags & {
   referredUserId: string;
   referrerName: string;
   referredName: string;
   amount: number;
   createdAt: number;
+  referrerPending: number;
+  referrerPaid: number;
+  referrerRejected: number;
+  referrerHeld: number;
 };
 
 export type ReferralBoard = {
@@ -305,9 +334,20 @@ export type AdminBan = {
   reason: string;
 };
 
+export type BountyClaim = {
+  id: number;
+  url: string;
+  email: string;
+  note: string;
+  ip: string;
+  status: string;
+  createdAt: number;
+};
+
 export type AdminBoard = {
   players: AdminOnlinePlayer[];
   payouts: ReferralPayout[];
+  claims: BountyClaim[];
   bans: AdminBan[];
 };
 
@@ -330,13 +370,15 @@ export async function fetchAdminBoard(
   const data = await apiRequest<{
     players?: AdminOnlinePlayer[];
     payouts?: ReferralPayout[];
+    claims?: BountyClaim[];
     bans?: AdminBan[];
   }>(`${serverUrl()}/auth/admin`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   return {
     players: Array.isArray(data.players) ? data.players : [],
-    payouts: Array.isArray(data.payouts) ? data.payouts : [],
+    payouts: readReferralPayouts(data.payouts),
+    claims: Array.isArray(data.claims) ? data.claims : [],
     bans: Array.isArray(data.bans) ? data.bans : [],
   };
 }
@@ -384,11 +426,168 @@ export async function unbanAdminPlayer(
   });
 }
 
+export type ReferralSignupPlayer = ReferralFlags & {
+  wallet: string;
+  name: string;
+  createdAt: number;
+  tutorialDone: boolean;
+};
+
+export type ReferralSignupCount = {
+  userId: string;
+  name: string;
+  signups: number;
+  players: ReferralSignupPlayer[];
+};
+
+function readCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+function readMinutes(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.round(value));
+}
+
+function readRelatedReferrers(value: unknown): RelatedReferrer[] {
+  if (!Array.isArray(value)) return [];
+  const related: RelatedReferrer[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue;
+    const item = row as Partial<RelatedReferrer>;
+    if (typeof item.wallet !== "string" || item.wallet.length === 0) continue;
+    related.push({
+      wallet: item.wallet,
+      name: typeof item.name === "string" ? item.name : "",
+    });
+  }
+  return related;
+}
+
+function readReferralFlags(value: Partial<ReferralFlags> | null | undefined): ReferralFlags {
+  return {
+    ip: typeof value?.ip === "string" ? value.ip : "",
+    userAgent: typeof value?.userAgent === "string" ? value.userAgent : "",
+    deviceId: typeof value?.deviceId === "string" ? value.deviceId : "",
+    sameIp: readCount(value?.sameIp),
+    sameNetwork: readCount(value?.sameNetwork),
+    samePerson: value?.samePerson === true,
+    samePersonReason:
+      typeof value?.samePersonReason === "string" ? value.samePersonReason : "",
+    tutorialOnly: value?.tutorialOnly === true,
+    tutorialMinutes: readMinutes(value?.tutorialMinutes),
+    relatedReferrers: readRelatedReferrers(value?.relatedReferrers),
+    accountCreatedAt: readCount(value?.accountCreatedAt),
+    lastSeen: readCount(value?.lastSeen),
+  };
+}
+
+function readReferralPayouts(value: unknown): ReferralPayout[] {
+  if (!Array.isArray(value)) return [];
+  const payouts: ReferralPayout[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue;
+    const payout = row as Partial<ReferralPayout>;
+    if (typeof payout.referredUserId !== "string" || payout.referredUserId.length === 0) {
+      continue;
+    }
+    payouts.push({
+      ...readReferralFlags(payout),
+      referredUserId: payout.referredUserId,
+      referrerName: typeof payout.referrerName === "string" ? payout.referrerName : "",
+      referredName: typeof payout.referredName === "string" ? payout.referredName : "",
+      amount: readCount(payout.amount),
+      createdAt: readCount(payout.createdAt),
+      referrerPending: readCount(payout.referrerPending),
+      referrerPaid: readCount(payout.referrerPaid),
+      referrerRejected: readCount(payout.referrerRejected),
+      referrerHeld: readCount(payout.referrerHeld),
+    });
+  }
+  return payouts;
+}
+
+function readReferralPlayers(value: unknown): ReferralSignupPlayer[] {
+  if (!Array.isArray(value)) return [];
+  const players: ReferralSignupPlayer[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue;
+    const player = row as Partial<ReferralSignupPlayer>;
+    if (typeof player.wallet !== "string" || player.wallet.length === 0) continue;
+    const flags = readReferralFlags(player);
+    players.push({
+      ...flags,
+      wallet: player.wallet,
+      name: typeof player.name === "string" ? player.name : "",
+      createdAt: readCount(player.createdAt) || flags.accountCreatedAt,
+      tutorialDone: player.tutorialDone === true,
+    });
+  }
+  return players;
+}
+
+export async function lookupReferralSignups(
+  sessionToken: string,
+  userId: string,
+): Promise<ReferralSignupCount> {
+  const data = await apiRequest<{
+    userId?: string;
+    name?: string;
+    signups?: number;
+    players?: unknown;
+  }>(`${serverUrl()}/auth/admin/referrals?userId=${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  const players = readReferralPlayers(data.players);
+  const signups =
+    typeof data.signups === "number" && Number.isFinite(data.signups)
+      ? data.signups
+      : players.length;
+  return {
+    userId: typeof data.userId === "string" ? data.userId : userId.trim(),
+    name: typeof data.name === "string" ? data.name : "",
+    signups,
+    players,
+  };
+}
+
+export async function reviewBountyClaim(
+  sessionToken: string,
+  id: number,
+  status: "approved" | "rejected",
+  details?: { payoutUrl?: string; reason?: string; description?: string },
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/admin/bounty`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: { id, status, ...details },
+  });
+}
+
 export async function approveReferralPayout(
   sessionToken: string,
   referredUserId: string,
 ): Promise<void> {
   await apiRequest(`${serverUrl()}/auth/referrals/approve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    json: { referredUserId },
+  });
+}
+
+export async function rejectReferralPayout(
+  sessionToken: string,
+  referredUserId: string,
+): Promise<void> {
+  await apiRequest(`${serverUrl()}/auth/referrals/reject`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -406,8 +605,8 @@ export async function fetchPlayerPreview(
   });
 }
 
-function joinOptions(sessionToken: string) {
-  return { sessionToken };
+async function joinOptions(sessionToken: string) {
+  return { sessionToken, deviceId: await clientDeviceId() };
 }
 
 function isWorldStartingOrFull(err: unknown): boolean {
@@ -422,7 +621,7 @@ export async function connectToWorld(sessionToken: string) {
     try {
       room = await client.joinOrCreate<WorldRoomState>(
         WORLD_ROOM_NAME,
-        joinOptions(sessionToken),
+        await joinOptions(sessionToken),
       );
     } catch (err) {
       // A second join while the world is still being created gets the full
@@ -430,7 +629,7 @@ export async function connectToWorld(sessionToken: string) {
       if (!isWorldStartingOrFull(err)) throw err;
       room = await client.joinOrCreate<WorldRoomState>(
         WORLD_ROOM_NAME,
-        joinOptions(sessionToken),
+        await joinOptions(sessionToken),
       );
     }
   } catch (err) {
@@ -582,6 +781,8 @@ export type ZombieSchema = {
   inInterior: boolean;
   buildingX: number;
   buildingY: number;
+  /** Interior storey. 0 is the ground floor. */
+  interiorLevel?: number;
   investigating: boolean;
   investigateX: number;
   investigateY: number;
@@ -871,6 +1072,8 @@ export type DialogOpenEvent = {
     taskCompletionsJson?: string;
     /** Kevin only. True after the safe deposit fee is paid. */
     safeDepositRented?: boolean;
+    /** Kevin only. Referral notes are waiting and the box has not been paid for. */
+    safeDepositHold?: boolean;
     /** Kevin only. Notes waiting on the desk after a Deadmark buy. */
     buybackReadyNotes?: number;
   };
@@ -954,7 +1157,7 @@ export type CraftOpenEvent = {
   payload: {
     workbenchId: string;
     inventoryJson: string;
-    station?: "workbench" | "furnace";
+    station?: "workbench" | "furnace" | "gunbench";
   };
 };
 
@@ -1048,6 +1251,7 @@ export type ZombieSpotGroanEvent = {
     inInterior: boolean;
     buildingX: number;
     buildingY: number;
+    interiorLevel?: number;
   };
 };
 

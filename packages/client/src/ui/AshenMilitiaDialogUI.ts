@@ -64,6 +64,7 @@ import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import { count, money } from "./mobileSheet";
 import { PhoneTalkNav, TalkSheet, syncTalkSheet, talkJobReward, type TalkPush } from "./talkSheet";
 
 export type AshenMilitiaDialogUIHandlers = {
@@ -851,8 +852,8 @@ export class AshenMilitiaDialogUI {
         rewardRow.appendChild(
           makeDisplayCell({
             itemId: "banknote",
-            qtyLabel: `×${banknotes}`,
-            ariaLabel: `${banknotes} banknotes`,
+            qtyLabel: `×${count(banknotes)}`,
+            ariaLabel: `${count(banknotes)} banknotes`,
           }),
         );
       }
@@ -923,8 +924,8 @@ export class AshenMilitiaDialogUI {
     costRow.appendChild(
       makeDisplayCell({
         itemId: "banknote",
-        qtyLabel: `×${this.doctorHealCost}`,
-        ariaLabel: `${this.doctorHealCost} banknotes`,
+        qtyLabel: `×${count(this.doctorHealCost)}`,
+        ariaLabel: `${count(this.doctorHealCost)} banknotes`,
       }),
     );
     details.appendChild(costRow);
@@ -934,7 +935,7 @@ export class AshenMilitiaDialogUI {
       const healBtn = document.createElement("button");
       healBtn.type = "button";
       healBtn.className = "red-dialog-complete-btn";
-      healBtn.textContent = `Pay $${this.doctorHealCost}`;
+      healBtn.textContent = `Pay ${money(this.doctorHealCost)}`;
       healBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         this.handlers.onHeal?.();
@@ -945,7 +946,7 @@ export class AshenMilitiaDialogUI {
       hint.className = "craft-recipe-hint";
       hint.textContent = !needsTreatment
         ? "You're already at full health"
-        : `Need $${this.doctorHealCost} (you have $${banknotes})`;
+        : `Need ${money(this.doctorHealCost)} (you have ${money(banknotes)})`;
       details.appendChild(hint);
     }
 
@@ -1199,8 +1200,8 @@ export class AshenMilitiaDialogUI {
     rewardRow.append(
       makeDisplayCell({
         itemId: "banknote",
-        qtyLabel: `×${task.rewardBanknotes}`,
-        ariaLabel: `${task.rewardBanknotes} banknotes`,
+        qtyLabel: `×${count(task.rewardBanknotes)}`,
+        ariaLabel: `${count(task.rewardBanknotes)} banknotes`,
       }),
       makeDisplayCell({
         itemId: "rep",

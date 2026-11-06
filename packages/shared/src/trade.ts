@@ -10,7 +10,15 @@ import {
   getItemDefinition,
   isQuestBoundEntry,
   isQuestKeepsakeItem,
+  MAX_BANKNOTE_STACK,
+  MAX_ITEM_STACK,
+  cloneInventoryEntry,
+  createEmptyStorageBoxInventory,
+  makeInventoryEntry,
   maxStackForItem,
+  parseStorageBoxInventory,
+  serializeStorageBoxInventory,
+  stowItemsInStorageBox,
   rollWatchVariant,
   WATCH_ITEM_ID,
   WATCH_LOOT,
@@ -56,9 +64,158 @@ export const SAFE_DEPOSIT_COST = 1000;
 /** Banknote fee to add four more safe deposit slots. */
 export const SAFE_DEPOSIT_UPGRADE_COST = 4000;
 
-/** True once the player has paid for a safe deposit box. Empty means unpaid. */
+/**
+ * Safe deposit JSON is either a rented slot array, when there is no referral
+ * hold, or `{ box, holds }`. `box` is absent until the player pays. `holds`
+ * are withdraw-only referral stacks and are not part of the rented size.
+ */
+export type ParsedSafeDeposit = {
+  /** Paid box. A referral hold by itself is not a rented box. */
+  rented: boolean;
+  /** Rented slot count. 0 when the box has not been paid for. */
+  slotCount: number;
+  slots: Inventory;
+  /** Withdraw-only referral stacks. They sit after the rented slots. */
+  holds: InventoryEntry[];
+};
+
+const EMPTY_SAFE_DEPOSIT: ParsedSafeDeposit = {
+  rented: false,
+  slotCount: 0,
+  slots: [],
+  holds: [],
+};
+
+function banknoteHoldQuantities(quantity: number): number[] {
+  const qty = Math.floor(quantity);
+  if (!Number.isFinite(qty) || qty <= 0) return [];
+  const out: number[] = [];
+  let left = qty;
+  while (left > 0 && out.length < 100) {
+    const add = Math.min(MAX_BANKNOTE_STACK, left);
+    out.push(add);
+    left -= add;
+  }
+  return out;
+}
+
+function readReferralHolds(value: unknown): InventoryEntry[] {
+  if (!Array.isArray(value)) return [];
+  const holds: InventoryEntry[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as InventoryEntry;
+    if (entry.id !== "banknote" || typeof entry.quantity !== "number") continue;
+    for (const quantity of banknoteHoldQuantities(entry.quantity)) {
+      holds.push(makeInventoryEntry("banknote", quantity));
+    }
+  }
+  return holds;
+}
+
+/** Load a rented box, a referral hold, or both. */
+export function parseSafeDeposit(json: string | null | undefined): ParsedSafeDeposit {
+  if (typeof json !== "string") return { ...EMPTY_SAFE_DEPOSIT, slots: [], holds: [] };
+  const text = json.trim();
+  if (!text || text === "[]") return { ...EMPTY_SAFE_DEPOSIT, slots: [], holds: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ...EMPTY_SAFE_DEPOSIT, slots: [], holds: [] };
+  }
+  if (Array.isArray(parsed)) {
+    const slotCount = snapSafeDepositSlots(parsed.length);
+    return {
+      rented: true,
+      slotCount,
+      slots: parseStorageBoxInventory(text, slotCount),
+      holds: [],
+    };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { ...EMPTY_SAFE_DEPOSIT, slots: [], holds: [] };
+  }
+  const record = parsed as { box?: unknown; holds?: unknown };
+  const holds = readReferralHolds(record.holds);
+  if (!Array.isArray(record.box)) {
+    return { rented: false, slotCount: 0, slots: [], holds };
+  }
+  const slotCount = snapSafeDepositSlots(record.box.length);
+  return {
+    rented: true,
+    slotCount,
+    slots: parseStorageBoxInventory(JSON.stringify(record.box), slotCount),
+    holds,
+  };
+}
+
+function referralHoldRecords(
+  holds: readonly InventoryEntry[],
+): { id: "banknote"; quantity: number }[] {
+  const records: { id: "banknote"; quantity: number }[] = [];
+  for (const hold of holds) {
+    if (hold.id !== "banknote") continue;
+    for (const quantity of banknoteHoldQuantities(hold.quantity)) {
+      records.push({ id: "banknote", quantity });
+    }
+  }
+  return records;
+}
+
+/** Persist a box. A rented box with no holds stays a plain slot array. */
+export function serializeSafeDeposit(state: ParsedSafeDeposit): string {
+  const holds = referralHoldRecords(state.holds);
+  if (state.rented) {
+    const slotCount = snapSafeDepositSlots(state.slotCount);
+    const box = JSON.parse(
+      serializeStorageBoxInventory(state.slots, slotCount),
+    ) as unknown[];
+    if (holds.length === 0) return JSON.stringify(box);
+    return JSON.stringify({ box, holds });
+  }
+  if (holds.length === 0) return "";
+  return JSON.stringify({ holds });
+}
+
+/** Rented slots followed by withdraw-only referral stacks. */
+export function safeDepositSlotsAndHolds(state: ParsedSafeDeposit): Inventory {
+  if (!state.rented) {
+    return state.holds.map((hold) => cloneInventoryEntry(hold));
+  }
+  const view = createEmptyStorageBoxInventory(state.slotCount);
+  for (let i = 0; i < view.length; i++) {
+    const slot = state.slots[i];
+    view[i] = slot ? cloneInventoryEntry(slot) : null;
+  }
+  for (const hold of state.holds) view.push(cloneInventoryEntry(hold));
+  return view;
+}
+
+export function safeDepositViewInventory(json: string | null | undefined): Inventory {
+  return safeDepositSlotsAndHolds(parseSafeDeposit(json));
+}
+
+/** True once the player has paid for a safe deposit box. A referral hold is not enough. */
 export function safeDepositIsRented(json: string | null | undefined): boolean {
-  return typeof json === "string" && json.length > 0 && json !== "[]";
+  return parseSafeDeposit(json).rented;
+}
+
+/** True when referral notes are waiting in a withdraw-only slot. */
+export function safeDepositHasHolds(json: string | null | undefined): boolean {
+  return parseSafeDeposit(json).holds.length > 0;
+}
+
+/** First withdraw-only index. 0 when the player has not paid for a box. */
+export function safeDepositHoldStart(json: string | null | undefined): number {
+  const state = parseSafeDeposit(json);
+  return state.rented ? state.slotCount : 0;
+}
+
+/** Paid slots only. 0 when the box has not been paid for. */
+export function safeDepositRentedSlotCount(json: string | null | undefined): number {
+  const state = parseSafeDeposit(json);
+  return state.rented ? state.slotCount : 0;
 }
 
 /** Snap a stored array length to 8, 12, 16, or 20. Never below the default. */
@@ -75,18 +232,16 @@ export function snapSafeDepositSlots(length: number): number {
   return SAFE_DEPOSIT_SLOTS;
 }
 
-/** Slot count for a rented box. Unpaid JSON still reports the default size. */
+/**
+ * Rented slot count. Unpaid JSON, including a lone referral hold, still
+ * reports the default size. Use safeDepositRentedSlotCount for the paid size.
+ */
 export function safeDepositSlotCountFromJson(
   json: string | null | undefined,
 ): number {
-  if (!safeDepositIsRented(json)) return SAFE_DEPOSIT_SLOTS;
-  try {
-    const parsed = JSON.parse(json as string);
-    if (!Array.isArray(parsed)) return SAFE_DEPOSIT_SLOTS;
-    return snapSafeDepositSlots(parsed.length);
-  } catch {
-    return SAFE_DEPOSIT_SLOTS;
-  }
+  const state = parseSafeDeposit(json);
+  if (!state.rented) return SAFE_DEPOSIT_SLOTS;
+  return state.slotCount;
 }
 
 /** Next size after one upgrade, or null at the cap. */
@@ -94,6 +249,87 @@ export function nextSafeDepositSlotCount(slots: number): number | null {
   const current = snapSafeDepositSlots(slots);
   if (current >= SAFE_DEPOSIT_MAX_SLOTS) return null;
   return current + SAFE_DEPOSIT_UPGRADE_SLOTS;
+}
+
+function appendReferralHolds(holds: InventoryEntry[], amount: number) {
+  for (const quantity of banknoteHoldQuantities(amount)) {
+    holds.push(makeInventoryEntry("banknote", quantity));
+  }
+}
+
+/**
+ * Put banknotes in a rented box when the whole amount fits.
+ * Otherwise add a withdraw-only slot. Nothing can be added to that slot later,
+ * and serializing the box drops it once it is empty.
+ */
+export function grantSafeDepositBanknotes(
+  json: string | null | undefined,
+  amount: number,
+): string {
+  const notes = Math.floor(amount);
+  if (!Number.isFinite(notes) || notes <= 0) {
+    return typeof json === "string" ? json : "";
+  }
+  const state = parseSafeDeposit(json);
+  if (state.rented && state.slotCount > 0) {
+    const stowed = stowItemsInStorageBox(
+      state.slots,
+      [{ id: "banknote", quantity: notes }],
+      state.slotCount,
+    );
+    if (stowed) {
+      state.slots = stowed;
+      return serializeSafeDeposit(state);
+    }
+  }
+  appendReferralHolds(state.holds, notes);
+  return serializeSafeDeposit(state);
+}
+
+/**
+ * Keep a box edit only when each referral slot was left alone or reduced.
+ * Placing anything into one of those slots is rejected. An emptied slot is removed.
+ */
+export function safeDepositAfterMove(
+  before: ParsedSafeDeposit,
+  view: Inventory,
+): ParsedSafeDeposit | null {
+  const start = before.rented ? before.slotCount : 0;
+  if (before.rented && view.length < before.slotCount) return null;
+  if (view.length < start + before.holds.length) return null;
+  const holds: InventoryEntry[] = [];
+  for (let i = 0; i < before.holds.length; i++) {
+    const prev = before.holds[i];
+    const next = view[start + i] ?? null;
+    if (!prev) continue;
+    if (!next) continue;
+    if (next.id !== "banknote") return null;
+    const qty = Math.floor(next.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (qty > prev.quantity) return null;
+    holds.push(makeInventoryEntry("banknote", qty));
+  }
+  for (let i = start + before.holds.length; i < view.length; i++) {
+    if (view[i]) return null;
+  }
+  const slots = before.rented
+    ? createEmptyStorageBoxInventory(before.slotCount)
+    : [];
+  if (before.rented) {
+    for (let i = 0; i < slots.length; i++) {
+      const slot = view[i];
+      slots[i] =
+        slot && slot.quantity > 0 && getItemDefinition(slot.id)
+          ? cloneInventoryEntry(slot)
+          : null;
+    }
+  }
+  return {
+    rented: before.rented,
+    slotCount: before.rented ? before.slotCount : 0,
+    slots,
+    holds,
+  };
 }
 
 /**
@@ -259,6 +495,10 @@ export type AshenDialogLine = {
   npcMarketAllied?: readonly string[];
   /** Speech shown once the safe deposit fee is already paid. */
   playerRented?: string;
+  /** Speech shown when referral notes are waiting and the box is not paid for. */
+  playerHold?: string;
+  /** Kevin's reply while those referral notes are waiting. */
+  npcMarketHold?: readonly string[];
   /** Speech shown when bought notes are waiting at Kevin's desk. */
   playerCollect?: string;
   /** Kevin's reply while those notes are waiting to be collected. */
@@ -317,12 +557,17 @@ export const ASHEN_TRADER_DIALOG_LINES: readonly AshenDialogLine[] = [
     id: "deposit",
     player: "I want a safe deposit box",
     playerRented: "Open my safe deposit box",
+    playerHold: "Collect my referral notes",
     npcMan: [
       "Safe deposit boxes are with Kevin at the Birchport market.",
     ],
     npcMarket: [
       "Eight slots in the back. One thousand banknotes, once. What you leave there stays safe at the market until you collect it.",
       "I can hold eight stacks for you. One thousand, and it stays safe here until you come back for it.",
+    ],
+    npcMarketHold: [
+      "Your referral notes are in the back. That slot only lets you take them. Once they're gone, it closes.",
+      "The notes from your referral are waiting. Take them out and that slot closes. It won't take anything else.",
     ],
     npcGuard: [
       "That's Kevin's. Talk to the man with the ledger.",
@@ -600,23 +845,102 @@ export function itemBaseTradeValue(itemId: string): number {
   return Math.max(1, ITEM_TRADE_VALUES[itemId] ?? 5);
 }
 
+/** Empty shelf: 10% over the standing rate. */
+const TRADER_STOCK_EMPTY_FACTOR = 1.1;
+/** Full stack: 40% under the standing rate. Further units stay here. */
+const TRADER_STOCK_FULL_FACTOR = 0.6;
+
+function clampBarterT(barterT: number): number {
+  return Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
+}
+
+/** Fraction of base the player pays, after standing and barter. */
+function traderChargeRate(reputation: number, barterT: number): number {
+  const { buyRate } = ashenTraderRates(reputation);
+  return Math.max(0.65, buyRate * (1 - 0.1 * clampBarterT(barterT)));
+}
+
+/** Fraction of base the trader pays, after standing and barter. */
+function traderPayRate(reputation: number, barterT: number): number {
+  const { sellRate } = ashenTraderRates(reputation);
+  return Math.min(0.5, sellRate * (1 + 0.1 * clampBarterT(barterT)));
+}
+
+function isUnpricedTradeItem(itemId: string): boolean {
+  return (
+    itemId === "banknote" ||
+    itemId === GIFT_BOX_ITEM_ID ||
+    isQuestKeepsakeItem(itemId)
+  );
+}
+
+function standingNotes(itemId: string, rate: number): number {
+  if (isUnpricedTradeItem(itemId)) return 0;
+  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
+}
+
+/** Standing rate times the stock factor, rounded to the nearest note. */
+function stockNotes(itemId: string, rate: number, factor: number): number {
+  if (isUnpricedTradeItem(itemId)) return 0;
+  const raw = itemBaseTradeValue(itemId) * rate * factor;
+  if (!(raw > 0)) return 0;
+  return Math.max(1, Math.round(raw));
+}
+
+/**
+ * How many copies count as a full shelf for the price slide.
+ * Stacks use their stack cap. Guns, clothes, and other single pieces do not
+ * stack in a pack, but ten of them is still a full shelf. One left is scarce,
+ * not 40% off.
+ */
+function traderStockFullCount(itemId: string): number {
+  const def = getItemDefinition(itemId);
+  if (!def) return MAX_ITEM_STACK;
+  const max = maxStackForItem(itemId);
+  if (!def.stackable || max <= 1) return MAX_ITEM_STACK;
+  return max;
+}
+
+/**
+ * Multiplier on the standing rate for one unit, from how many of this item
+ * the trader already holds.
+ * Empty is 1.10. A full shelf is 0.60, then it stays there. More on the shelf
+ * means he pays less and charges less. The last copy costs more than when he
+ * had several.
+ */
+export function traderStockFactor(itemId: string, held: number): number {
+  if (isUnpricedTradeItem(itemId)) return 1;
+  if (!getItemDefinition(itemId)) return 1;
+  const qty = Number.isFinite(held) ? Math.max(0, Math.floor(held)) : 0;
+  const full = traderStockFullCount(itemId);
+  if (full <= 0) return 1;
+  const fill = Math.min(1, qty / full);
+  return (
+    TRADER_STOCK_EMPTY_FACTOR -
+    (TRADER_STOCK_EMPTY_FACTOR - TRADER_STOCK_FULL_FACTOR) * fill
+  );
+}
+
+/** How many of `itemId` sit on the shelf, across every stock line. */
+export function traderStockHeld(
+  stock: readonly { id: string; quantity: number }[],
+  itemId: string,
+): number {
+  let held = 0;
+  for (const entry of stock) {
+    if (!entry || entry.id !== itemId || !(entry.quantity > 0)) continue;
+    held += entry.quantity;
+  }
+  return held;
+}
+
 /** What the trader charges the player (player buys from trader). */
 export function traderSellPrice(
   itemId: string,
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (
-    itemId === "banknote" ||
-    itemId === GIFT_BOX_ITEM_ID ||
-    isQuestKeepsakeItem(itemId)
-  ) {
-    return 0;
-  }
-  const { buyRate } = ashenTraderRates(reputation);
-  const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
-  const rate = Math.max(0.65, buyRate * (1 - 0.1 * t));
-  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
+  return standingNotes(itemId, traderChargeRate(reputation, barterT));
 }
 
 /**
@@ -635,17 +959,35 @@ export function traderBuyPrice(
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): number {
-  if (
-    itemId === "banknote" ||
-    itemId === GIFT_BOX_ITEM_ID ||
-    isQuestKeepsakeItem(itemId)
-  ) {
-    return 0;
-  }
-  const { sellRate } = ashenTraderRates(reputation);
-  const t = Number.isFinite(barterT) ? Math.max(0, Math.min(1, barterT)) : 0;
-  const rate = Math.min(0.5, sellRate * (1 + 0.1 * t));
-  return Math.max(1, Math.floor(itemBaseTradeValue(itemId) * rate));
+  return standingNotes(itemId, traderPayRate(reputation, barterT));
+}
+
+/** One unit the trader charges, priced from how many he already holds. */
+export function traderSellUnitPrice(
+  itemId: string,
+  held: number,
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): number {
+  return stockNotes(
+    itemId,
+    traderChargeRate(reputation, barterT),
+    traderStockFactor(itemId, held),
+  );
+}
+
+/** One unit the trader pays for, priced from how many he already holds. */
+export function traderBuyUnitPrice(
+  itemId: string,
+  held: number,
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): number {
+  return stockNotes(
+    itemId,
+    traderPayRate(reputation, barterT),
+    traderStockFactor(itemId, held),
+  );
 }
 
 export type TraderShopState = {
@@ -1203,24 +1545,187 @@ export type TradeOfferCashSettlement = {
   playerCanAfford: boolean;
 };
 
+export type TradeOfferLineQuote = {
+  /** Notes for the first unit on this line. */
+  first: number;
+  /** Notes for the last unit on this line. */
+  last: number;
+  /** Sum of every unit on this line. */
+  total: number;
+};
+
+function wholeTradeQty(quantity: number): number {
+  if (!Number.isFinite(quantity)) return 0;
+  return Math.max(0, Math.floor(quantity));
+}
+
+/**
+ * Price `quantity` units one at a time.
+ * Player buys take stock down, so later units cost more.
+ * Player sells fill stock up, so later units pay less.
+ */
+function quoteTraderUnits(
+  itemId: string,
+  quantity: number,
+  held: number,
+  side: "playerBuys" | "playerSells",
+  reputation: number,
+  barterT: number,
+): { quote: TradeOfferLineQuote; held: number } {
+  const qty = wholeTradeQty(quantity);
+  let onHand = wholeTradeQty(held);
+  if (qty <= 0) return { quote: { first: 0, last: 0, total: 0 }, held: onHand };
+  let total = 0;
+  let first = 0;
+  let last = 0;
+  for (let i = 0; i < qty; i++) {
+    const notes =
+      side === "playerBuys"
+        ? traderSellUnitPrice(itemId, onHand, reputation, barterT)
+        : traderBuyUnitPrice(itemId, onHand, reputation, barterT);
+    if (i === 0) first = notes;
+    last = notes;
+    total += notes;
+    onHand = side === "playerBuys" ? Math.max(0, onHand - 1) : onHand + 1;
+  }
+  return { quote: { first, last, total }, held: onHand };
+}
+
+function heldByItem(
+  stock: readonly { id: string; quantity: number }[],
+): Map<string, number> {
+  const held = new Map<string, number>();
+  for (const entry of stock) {
+    if (!entry || !(entry.quantity > 0)) continue;
+    held.set(entry.id, (held.get(entry.id) ?? 0) + entry.quantity);
+  }
+  return held;
+}
+
+/**
+ * Price every line from the shelf as it changes.
+ * Buys run first, then sells, matching {@link applyTradeOffer}.
+ * Two lines of the same item share one running count.
+ */
+export function tradeOfferQuotes(
+  stock: readonly InventoryEntry[],
+  sells: readonly TradeOfferSellLine[],
+  buys: readonly TradeOfferBuyLine[],
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): TradeOfferTotals & {
+  sellQuotes: TradeOfferLineQuote[];
+  buyQuotes: TradeOfferLineQuote[];
+} {
+  const held = heldByItem(stock);
+  const buyQuotes: TradeOfferLineQuote[] = [];
+  let buyTotal = 0;
+  for (const line of buys) {
+    const step = quoteTraderUnits(
+      line.itemId,
+      line.quantity,
+      held.get(line.itemId) ?? 0,
+      "playerBuys",
+      reputation,
+      barterT,
+    );
+    buyQuotes.push(step.quote);
+    buyTotal += step.quote.total;
+    held.set(line.itemId, step.held);
+  }
+  const sellQuotes: TradeOfferLineQuote[] = [];
+  let sellTotal = 0;
+  for (const line of sells) {
+    const step = quoteTraderUnits(
+      line.itemId,
+      line.quantity,
+      held.get(line.itemId) ?? 0,
+      "playerSells",
+      reputation,
+      barterT,
+    );
+    sellQuotes.push(step.quote);
+    sellTotal += step.quote.total;
+    held.set(line.itemId, step.held);
+  }
+  return {
+    sellTotal,
+    buyTotal,
+    net: sellTotal - buyTotal,
+    sellQuotes,
+    buyQuotes,
+  };
+}
+
+/**
+ * Price one draft line inside an offer.
+ * The draft replaces a line with the same slot or stock index, or is appended.
+ * Other lines of the same item still move the running count.
+ */
+export function quoteTradeDraft(
+  stock: readonly InventoryEntry[],
+  sells: readonly TradeOfferSellLine[],
+  buys: readonly TradeOfferBuyLine[],
+  draft:
+    | { side: "sell"; slotIndex: number; itemId: string; quantity: number }
+    | { side: "buy"; stockIndex: number; itemId: string; quantity: number },
+  reputation = ASHEN_REP_START,
+  barterT = 0,
+): TradeOfferLineQuote {
+  const quantity = wholeTradeQty(draft.quantity);
+  if (quantity <= 0) return { first: 0, last: 0, total: 0 };
+  if (draft.side === "sell") {
+    const nextSells = sells.map((line) => ({ ...line }));
+    const idx = nextSells.findIndex((line) => line.slotIndex === draft.slotIndex);
+    const line: TradeOfferSellLine = {
+      slotIndex: draft.slotIndex,
+      itemId: draft.itemId,
+      quantity,
+    };
+    if (idx >= 0) nextSells[idx] = line;
+    else nextSells.push(line);
+    const priced = tradeOfferQuotes(stock, nextSells, buys, reputation, barterT);
+    return (
+      priced.sellQuotes[idx >= 0 ? idx : nextSells.length - 1] ?? {
+        first: 0,
+        last: 0,
+        total: 0,
+      }
+    );
+  }
+  const nextBuys = buys.map((line) => ({ ...line }));
+  const idx = nextBuys.findIndex((line) => line.stockIndex === draft.stockIndex);
+  const line: TradeOfferBuyLine = {
+    stockIndex: draft.stockIndex,
+    itemId: draft.itemId,
+    quantity,
+  };
+  if (idx >= 0) nextBuys[idx] = line;
+  else nextBuys.push(line);
+  const priced = tradeOfferQuotes(stock, sells, nextBuys, reputation, barterT);
+  return (
+    priced.buyQuotes[idx >= 0 ? idx : nextBuys.length - 1] ?? {
+      first: 0,
+      last: 0,
+      total: 0,
+    }
+  );
+}
+
 /** Price the pending offer without mutating inventories. */
 export function tradeOfferTotals(
+  stock: readonly InventoryEntry[],
   sells: readonly TradeOfferSellLine[],
   buys: readonly TradeOfferBuyLine[],
   reputation = ASHEN_REP_START,
   barterT = 0,
 ): TradeOfferTotals {
-  let sellTotal = 0;
-  for (const line of sells) {
-    if (line.quantity <= 0) continue;
-    sellTotal += traderBuyPrice(line.itemId, reputation, barterT) * line.quantity;
-  }
-  let buyTotal = 0;
-  for (const line of buys) {
-    if (line.quantity <= 0) continue;
-    buyTotal += traderSellPrice(line.itemId, reputation, barterT) * line.quantity;
-  }
-  return { sellTotal, buyTotal, net: sellTotal - buyTotal };
+  const priced = tradeOfferQuotes(stock, sells, buys, reputation, barterT);
+  return {
+    sellTotal: priced.sellTotal,
+    buyTotal: priced.buyTotal,
+    net: priced.net,
+  };
 }
 
 /**
@@ -1348,6 +1853,7 @@ export function applyTradeOffer(
   }
 
   const { sellTotal, buyTotal, net } = tradeOfferTotals(
+    shop.stock,
     sellLines,
     buyLines,
     reputation,

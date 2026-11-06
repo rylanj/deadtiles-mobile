@@ -1634,6 +1634,7 @@ export class InteriorView {
   }
 
   private clearInternalDoorSprites() {
+    this.clearDoorHoverTint();
     for (const sprite of this.internalDoorSprites.values()) sprite.destroy();
     this.internalDoorSprites.clear();
     for (const texKey of this.internalDoorTextureKeys.values()) {
@@ -2353,16 +2354,21 @@ export class InteriorView {
     applyLootHoverTint(sprite);
   }
 
-  /** Yellow-tints a house door leaf. Pass null to clear. */
-  setHoveredDoor(tx: number | null, ty: number | null) {
+  /**
+   * Yellow-tints a house door leaf. Pass null to clear.
+   * Returns whether a door sprite is actually tinted. A graphics-only
+   * leaf has nothing to tint.
+   */
+  setHoveredDoor(tx: number | null, ty: number | null): boolean {
     const key = tx != null && ty != null ? `${tx},${ty}` : null;
     if (key === this.hoverDoorKey) {
       this.applyDoorHoverTint();
-      return;
+      return !!key && this.internalDoorSprites.has(key);
     }
     this.clearDoorHoverTint();
     this.hoverDoorKey = key;
     this.applyDoorHoverTint();
+    return !!key && this.internalDoorSprites.has(key);
   }
 
   private clearDoorHoverTint() {

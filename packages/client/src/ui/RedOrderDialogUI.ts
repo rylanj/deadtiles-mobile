@@ -34,6 +34,7 @@ import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
+import { count } from "./mobileSheet";
 import { PhoneTalkNav, TalkSheet, syncTalkSheet, talkJobReward, type TalkPush } from "./talkSheet";
 
 export type RedOrderDialogUIHandlers = {
@@ -693,8 +694,8 @@ export class RedOrderDialogUI {
     rewardRow.append(
       makeDisplayCell({
         itemId: "banknote",
-        qtyLabel: `×${task.rewardBanknotes}`,
-        ariaLabel: `${task.rewardBanknotes} banknotes`,
+        qtyLabel: `×${count(task.rewardBanknotes)}`,
+        ariaLabel: `${count(task.rewardBanknotes)} banknotes`,
       }),
       makeDisplayCell({
         itemId: "rep",

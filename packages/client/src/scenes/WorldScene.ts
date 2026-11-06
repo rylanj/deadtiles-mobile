@@ -177,6 +177,7 @@ import {
   militiaGuardDieAnimMs,
   playerAdjacentToSearchable,
   furnitureIsSearchable,
+  isFallenTreeType,
   INSPECT_BLOOD_ID_PREFIX,
   STORY_INSPECT_MS,
   QUEST_ID_TWO_BEHIND,
@@ -527,6 +528,7 @@ type ZombieServerSnapshot = {
   inInterior?: boolean;
   buildingX?: number;
   buildingY?: number;
+  interiorLevel?: number;
   investigating?: boolean;
   investigateX?: number;
   investigateY?: number;
@@ -898,6 +900,10 @@ export class WorldScene extends Phaser.Scene {
   private barracksBargateAnimEvents: Phaser.Time.TimerEvent[] = [];
   /** Barracks bargate currently using the loot hover tint. */
   private bargateHovering = false;
+  /** Which tree hover currently owns the sprite tint. */
+  private treeHoverMode: "chop" | "loot" | null = null;
+  /** Overworld door image currently using the loot hover tint. */
+  private overworldDoorHoverKey: string | null = null;
   /** Fireplace tile the player clicked while out of reach — walk up, then open UI. */
   private fireplaceTargetTile: { x: number; y: number } | null = null;
   private fireplaceSprint = false;
@@ -959,7 +965,11 @@ export class WorldScene extends Phaser.Scene {
   private lastSentCombatAim = false;
   /** Mobile has no right-click. The HUD aim button latches the same state. */
   private mobileAimLatched = false;
-  /** WASD / stick cancelled this right-click hold. Aim again only after RMB is released. */
+  /**
+   * WASD, arrows, or the stick dropped this aim.
+   * If right-click stays down, aim resumes once that movement lets go.
+   * Releasing right-click forgets the hold, so later movement does not aim.
+   */
   private aimBrokeByMove = false;
   /** 8-way facing from mouse while aiming. Null when not aiming. */
   private localAimFacing: number | null = null;
@@ -1222,7 +1232,7 @@ export class WorldScene extends Phaser.Scene {
   private moveTargetFadeUntil = 0;
   /** ID of the searchable the cursor is currently hovering over */
   private hoveredSearchableId: string | null = null;
-  /** Overworld bag / corpse currently yellow-tinted for loot hover. */
+  /** Dead body sprite currently lit with the loot hover. */
   private lootHoverTinted:
     | Phaser.GameObjects.Image
     | Phaser.GameObjects.Sprite
@@ -1519,12 +1529,13 @@ export class WorldScene extends Phaser.Scene {
     inInterior: boolean;
     buildingX: number;
     buildingY: number;
+    interiorLevel?: number;
   }) {
     const me = this.room?.state?.players?.get(this.sessionId);
     if (!me) return;
     if (!!me.inInterior !== source.inInterior) return;
     if (source.inInterior) {
-      if ((me.interiorLevel ?? 0) !== 0) return;
+      if ((me.interiorLevel ?? 0) !== (source.interiorLevel ?? 0)) return;
       if (me.buildingX !== source.buildingX || me.buildingY !== source.buildingY) return;
     }
     this.syncGunshotListener();
@@ -1649,7 +1660,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.isZombieDead(z)) return;
       if (me.inInterior) {
         if (!z.inInterior) return;
-        if ((me.interiorLevel ?? 0) !== 0) return;
+        if ((me.interiorLevel ?? 0) !== (z.interiorLevel ?? 0)) return;
         if (z.buildingX !== me.buildingX || z.buildingY !== me.buildingY) return;
       } else if (z.inInterior) {
         return;
@@ -1880,10 +1891,39 @@ export class WorldScene extends Phaser.Scene {
     return !!pointer && !pointer.wasTouch && pointer.rightButtonDown();
   }
 
+  /**
+   * True while WASD, arrows, or the thumb stick are still steering.
+   * Opposite keys count: A+D is not "stopped", so aim must not snap back on.
+   */
+  private aimResumeBlockedByMove(): boolean {
+    if (this.moveStickPointerId !== null) return true;
+    if (!this.keys || !this.cursors) return false;
+    return (
+      this.keys.W.isDown ||
+      this.keys.A.isDown ||
+      this.keys.S.isDown ||
+      this.keys.D.isDown ||
+      this.cursors.left.isDown ||
+      this.cursors.right.isDown ||
+      this.cursors.up.isDown ||
+      this.cursors.down.isDown
+    );
+  }
+
   /** Right mouse held (or the mobile aim button latched) with a weapon → aim stance. */
   private handleAimInput() {
     const rmb = this.rightMouseAimDown();
-    if (!rmb) this.aimBrokeByMove = false;
+    if (!rmb) {
+      // Let go of right-click: this hold is over. Walking will not re-aim.
+      this.aimBrokeByMove = false;
+    } else if (
+      this.aimBrokeByMove &&
+      !this.aimResumeBlockedByMove() &&
+      this.canHoldAimStance()
+    ) {
+      // Right-click never came up. Movement has stopped, so aim again.
+      this.aimBrokeByMove = false;
+    }
     if (this.mobileAimLatched && !this.canHoldAimStance()) {
       this.mobileAimLatched = false;
     }
@@ -1924,6 +1964,9 @@ export class WorldScene extends Phaser.Scene {
     if (this.aimHeld === aiming) return;
     this.aimHeld = aiming;
     if (aiming) {
+      // Right-click is aim while a weapon is out. A drag started on that
+      // press must not pan the camera or swallow the shot.
+      this.cameraDrag = false;
       this.clearCombatTarget();
       this.clearInteractTarget();
       this.clearLootTarget();
@@ -2186,6 +2229,11 @@ export class WorldScene extends Phaser.Scene {
       onMovePlayerSlot: (fromSlot, toSlot, splitHalf) =>
         this.moveInventorySlot(fromSlot, toSlot, splitHalf),
       onUse: (slotIndex) => this.sendConsumeStart(slotIndex),
+      onDrop: (slotIndex, quantity) => this.dropItem(slotIndex, quantity),
+      onLooted: (items) => {
+        if (items.length === 0) return;
+        this.lootPopup?.show(items, { header: "You found:" });
+      },
       onClose: (containerId) => {
         if (this.suppressSafeDepositClose) return;
         if (containerId === SAFE_DEPOSIT_CONTAINER_ID) {
@@ -2415,7 +2463,10 @@ export class WorldScene extends Phaser.Scene {
         return;
       }
 
-      if (pointer.rightButtonDown() && !pointer.wasTouch) {
+      // button is the press that fired this event. rightButtonDown() stays
+      // true for the whole aim hold, so a left click would be eaten as a drag.
+      if (pointer.button === 2 && !pointer.wasTouch) {
+        if (this.canHoldAimStance()) return;
         this.cameraDrag = true;
         this.dragStart = { x: pointer.x, y: pointer.y };
         this.cameraStart = {
@@ -2424,6 +2475,8 @@ export class WorldScene extends Phaser.Scene {
         };
         return;
       }
+
+      if (this.cameraDrag) return;
 
       if (!pointer.leftButtonDown() && !pointer.wasTouch) return;
 
@@ -2503,7 +2556,7 @@ export class WorldScene extends Phaser.Scene {
         }
       }
 
-      if (this.cameraDrag) {
+      if (this.cameraDrag && !this.aimHeld) {
         const dx = pointer.x - this.dragStart.x;
         const dy = pointer.y - this.dragStart.y;
         this.cameras.main.scrollX = this.cameraStart.x - dx;
@@ -2952,6 +3005,7 @@ export class WorldScene extends Phaser.Scene {
         this.chatLog.push(msg);
         if (this.chatLog.length > 40) this.chatLog.splice(0, this.chatLog.length - 40);
         if (this.chatOpen && this.chatLogEl) this.renderPhoneChat();
+        this.notifyNearbyChatTip(msg);
         if (msg.channel === "radio") {
           const sprite = this.getEntitySprite(msg.senderId);
           if (!sprite?.visible) {
@@ -7829,6 +7883,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private clearOverworldStructureSprites() {
+    this.clearOverworldDoorHover();
     for (const g of this.overworldStructureSprites.values()) {
       destroyPartitionDisplay(this, g);
     }
@@ -8744,23 +8799,69 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Highlight and pointer-cursor a door under the cursor, including the
-   * graphic above its floor tile. A click walks the player up when they
-   * are out of reach.
+   * Pointer-cursor a door under the cursor, including the graphic above its
+   * floor tile. The door sprite lights up. The ground diamond is the click
+   * marker, drawn when the player actually uses the door. A graphics leaf
+   * with no sprite still uses the diamond, since there is nothing to tint.
+   * A click walks the player up when they are out of reach.
    */
   private updateDoorHover(pointer: { x: number; y: number } = this.input.activePointer) {
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (!me || this.isOverlayOpen() || this.chatOpen) return;
+    if (!me || this.isOverlayOpen() || this.chatOpen) {
+      this.interiorView?.setHoveredDoor(null, null);
+      this.clearOverworldDoorHover();
+      return;
+    }
 
     const hit = this.doorAtScreen(me, pointer.x, pointer.y);
-    if (!hit) return;
+    if (!hit) {
+      this.interiorView?.setHoveredDoor(null, null);
+      this.clearOverworldDoorHover();
+      return;
+    }
 
     this.game.canvas.style.cursor = "pointer";
     if (me.inInterior) {
+      this.clearOverworldDoorHover();
+      const tinted = this.interiorView?.setHoveredDoor(hit.tx, hit.ty) ?? false;
+      if (tinted) {
+        // Loot hover may have drawn a diamond on this tile earlier in the frame.
+        this.interiorView?.highlightTile(null, null);
+        return;
+      }
       this.interiorView?.highlightTile(hit.tx, hit.ty);
-    } else {
-      this.tileManager?.highlightInteractionTile(hit.tx, hit.ty);
+      return;
     }
+
+    this.interiorView?.setHoveredDoor(null, null);
+    if (this.setOverworldDoorHover(hit.tx, hit.ty)) {
+      this.tileManager?.highlightInteractionTile(null, null);
+      return;
+    }
+    this.tileManager?.highlightInteractionTile(hit.tx, hit.ty);
+  }
+
+  /** Yellow-tints an overworld door image. Graphics leaves return false. */
+  private setOverworldDoorHover(tx: number, ty: number): boolean {
+    const key = `${tx},${ty}`;
+    const display = this.overworldStructureSprites.get(key);
+    if (!(display instanceof Phaser.GameObjects.Image)) {
+      this.clearOverworldDoorHover();
+      return false;
+    }
+    if (this.overworldDoorHoverKey !== key) {
+      this.clearOverworldDoorHover();
+      this.overworldDoorHoverKey = key;
+    }
+    applyLootHoverTint(display);
+    return true;
+  }
+
+  private clearOverworldDoorHover() {
+    if (!this.overworldDoorHoverKey) return;
+    const display = this.overworldStructureSprites.get(this.overworldDoorHoverKey);
+    if (display instanceof Phaser.GameObjects.Image) clearLootHoverTint(display);
+    this.overworldDoorHoverKey = null;
   }
 
   private localMilitiaAllowsBarracksGate(): boolean {
@@ -8780,19 +8881,60 @@ export class WorldScene extends Phaser.Scene {
     return this.localMilitiaAllowsBarracksGate();
   }
 
+  /**
+   * Pointer-cursor the barracks bargate, including the graphic above its
+   * floor tiles. The gate sprite lights up. The ground diamond is not drawn.
+   */
   private updateBargateHover(pointer: { x: number; y: number } = this.input.activePointer) {
     const me = this.room?.state?.players?.get(this.sessionId);
-    if (!me || this.isOverlayOpen() || this.chatOpen) return;
-    if (!this.barracksBargateClickable()) return;
-
-    const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-    if (!birchportBarracksBargateOccupiesTile(tx, ty)) return;
-
+    if (!me || this.isOverlayOpen() || this.chatOpen || !this.barracksBargateClickable()) {
+      this.setBargateHover(false);
+      return;
+    }
+    if (!this.bargateHitAtScreen(pointer.x, pointer.y)) {
+      this.setBargateHover(false);
+      return;
+    }
     this.game.canvas.style.cursor = "pointer";
-    this.tileManager?.highlightInteractionTile(tx, ty);
+    this.setBargateHover(true);
+    this.tileManager?.highlightInteractionTile(null, null);
+  }
+
+  /**
+   * True when the pointer is on the bargate sprite or any floor tile it
+   * occupies. A sprite drawn in front of the mesh wins, same as a door leaf.
+   */
+  private bargateHitAtScreen(screenX: number, screenY: number): boolean {
+    const world = this.cameras.main.getWorldPoint(screenX, screenY);
+    const cart = isoToCartesian(world.x, world.y);
+    const floorTx = Math.floor(cart.x);
+    const floorTy = Math.floor(cart.y);
+    const onTile = birchportBarracksBargateOccupiesTile(floorTx, floorTy);
+    const sprite = this.barracksBargateSprite();
+    if (
+      sprite?.visible &&
+      sprite.active &&
+      sprite.getBounds().contains(world.x, world.y) &&
+      (IS_MOBILE || spriteOpaqueAtWorldPoint(sprite, world.x, world.y))
+    ) {
+      const covered =
+        !onTile &&
+        this.nearerSpriteCoversDoor(world.x, world.y, sprite.depth, false);
+      if (!covered) return true;
+    }
+    return onTile;
+  }
+
+  private setBargateHover(on: boolean) {
+    const image = this.barracksBargateSprite();
+    if (on) {
+      this.bargateHovering = true;
+      applyLootHoverTint(image);
+      return;
+    }
+    if (!this.bargateHovering) return;
+    this.bargateHovering = false;
+    clearLootHoverTint(image);
   }
 
   private bargateApproachGoal(me: { x: number; y: number }): {
@@ -8812,11 +8954,10 @@ export class WorldScene extends Phaser.Scene {
     if (!me?.alive || me.inInterior) return false;
     if (!this.barracksBargateClickable()) return false;
 
-    const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-    if (!birchportBarracksBargateOccupiesTile(tx, ty)) return false;
+    if (!this.bargateHitAtScreen(screenX, screenY)) return false;
+    const gate = BIRCHPORT_BARRACKS_BARGATE;
+    const tx = gate.x;
+    const ty = gate.y;
 
     const now = Date.now();
     const clickKey = `${tx},${ty}`;
@@ -8949,6 +9090,10 @@ export class WorldScene extends Phaser.Scene {
     applyTextureKey(image, texKey);
     const gate = BIRCHPORT_BARRACKS_BARGATE;
     layoutChainLinkFenceImage(image, gate.x, gate.y, gate.facing, 1, "bargate");
+    if (this.bargateHovering) {
+      clearLootHoverTint(image);
+      applyLootHoverTint(image);
+    }
   }
 
   private playBarracksBargateOpen(facing: "SE" | "SW") {
@@ -9121,11 +9266,10 @@ export class WorldScene extends Phaser.Scene {
     const me = this.room.state?.players?.get(this.sessionId);
     if (!me?.alive || me.inInterior || !this.hatchetEquipped()) return false;
 
-    const worldPt = this.cameras.main.getWorldPoint(screenX, screenY);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-    if (!getStandingTreeAt(tx, ty)) return false;
+    const tree = this.choppableTreeAtScreen(screenX, screenY);
+    if (!tree) return false;
+    const tx = tree.x;
+    const ty = tree.y;
 
     const now = Date.now();
     const clickKey = `${tx},${ty}`;
@@ -9264,6 +9408,79 @@ export class WorldScene extends Phaser.Scene {
     this.lastPursuitMoveSentAt = now;
   }
 
+  /**
+   * Tree art under the pointer. A sprite drawn in front of the canopy wins,
+   * same as a door leaf. The trunk tile is handled by the caller.
+   */
+  private treeSpriteUnderPointer(
+    worldX: number,
+    worldY: number,
+  ): { x: number; y: number } | null {
+    const hit = this.tileManager?.pickTreeSpriteAtWorld(worldX, worldY);
+    if (!hit) return null;
+    const cart = isoToCartesian(worldX, worldY);
+    const onTile = hit.x === Math.floor(cart.x) && hit.y === Math.floor(cart.y);
+    if (
+      !onTile &&
+      this.nearerSpriteCoversDoor(worldX, worldY, hit.depth, false)
+    ) {
+      return null;
+    }
+    return { x: hit.x, y: hit.y };
+  }
+
+  /** Standing tree the hatchet can cut: canopy pixels or the trunk tile. */
+  private choppableTreeAtScreen(
+    screenX: number,
+    screenY: number,
+  ): { x: number; y: number } | null {
+    if (!this.hatchetEquipped()) return null;
+    const world = this.cameras.main.getWorldPoint(screenX, screenY);
+    const cart = isoToCartesian(world.x, world.y);
+    const floorTx = Math.floor(cart.x);
+    const floorTy = Math.floor(cart.y);
+    const sprite = this.treeSpriteUnderPointer(world.x, world.y);
+    if (sprite) {
+      if (getStandingTreeAt(sprite.x, sprite.y)) return sprite;
+      return null;
+    }
+    if (getStandingTreeAt(floorTx, floorTy)) return { x: floorTx, y: floorTy };
+    return null;
+  }
+
+  private lootableFallenTreeAt(tx: number, ty: number) {
+    return (
+      this.searchablesCache.find(
+        (item) =>
+          isFallenTreeType(item.objectType) &&
+          item.buildingX === OVERWORLD_BAG_BUILDING &&
+          item.x === tx &&
+          item.y === ty &&
+          this.searchableCanBeClicked(item),
+      ) ?? null
+    );
+  }
+
+  private setTreeHover(
+    tx: number | null,
+    ty: number | null,
+    mode: "chop" | "loot" | null,
+  ) {
+    if (mode === null) {
+      if (this.treeHoverMode === null) return;
+      this.treeHoverMode = null;
+      this.tileManager?.setHoveredTree(null, null);
+      return;
+    }
+    this.treeHoverMode = mode;
+    this.tileManager?.setHoveredTree(tx, ty);
+  }
+
+  /**
+   * Pointer-cursor a tree that can be chopped, or a fallen log that can be
+   * looted. The sprite lights up, including when the cursor is on the trunk
+   * tile. The ground diamond is not drawn.
+   */
   private updateTreeChopHover(
     pointer: { x: number; y: number } = this.input.activePointer,
   ) {
@@ -9271,22 +9488,31 @@ export class WorldScene extends Phaser.Scene {
     if (
       !me ||
       me.inInterior ||
-      !this.hatchetEquipped() ||
       this.isOverlayOpen() ||
       this.chatOpen ||
       this.structureBuildMode
     ) {
+      this.setTreeHover(null, null, null);
       return;
     }
 
-    const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const cart = isoToCartesian(worldPt.x, worldPt.y);
-    const tx = Math.floor(cart.x);
-    const ty = Math.floor(cart.y);
-    if (!getStandingTreeAt(tx, ty)) return;
+    const chop = this.choppableTreeAtScreen(pointer.x, pointer.y);
+    if (chop) {
+      this.game.canvas.style.cursor = "pointer";
+      this.setTreeHover(chop.x, chop.y, "chop");
+      this.tileManager?.highlightInteractionTile(null, null);
+      return;
+    }
+    if (this.treeHoverMode === "chop") this.setTreeHover(null, null, null);
 
-    this.game.canvas.style.cursor = "pointer";
-    this.tileManager?.highlightInteractionTile(tx, ty);
+    const fallen = this.nearestSearchable();
+    if (fallen && isFallenTreeType(fallen.objectType)) {
+      this.game.canvas.style.cursor = "pointer";
+      this.setTreeHover(fallen.x, fallen.y, "loot");
+      this.tileManager?.highlightInteractionTile(null, null);
+      return;
+    }
+    if (this.treeHoverMode === "loot") this.setTreeHover(null, null, null);
   }
 
   private graveUnderPointer(
@@ -11571,10 +11797,7 @@ export class WorldScene extends Phaser.Scene {
       if (
         !entityData?.isDead ||
         entityData.looted ||
-        me.inInterior !== !!entityData.inInterior ||
-        (me.inInterior &&
-          (entityData.buildingX !== me.buildingX ||
-            entityData.buildingY !== me.buildingY))
+        !this.lootBodyFloorMatches(me, "zombie", this.lootTargetId, entityData)
       ) {
         this.clearLootTarget();
         return false;
@@ -11695,10 +11918,7 @@ export class WorldScene extends Phaser.Scene {
       if (
         !entityData ||
         entityData.looted ||
-        me.inInterior !== !!entityData.inInterior ||
-        (me.inInterior &&
-          (entityData.buildingX !== me.buildingX ||
-            entityData.buildingY !== me.buildingY))
+        !this.lootBodyFloorMatches(me, "player", this.lootTargetId, entityData)
       ) {
         this.clearLootTarget();
         return false;
@@ -11722,6 +11942,10 @@ export class WorldScene extends Phaser.Scene {
       | { x: number; y: number; isDead?: boolean; looted?: boolean }
       | undefined;
     if (!entityData?.isDead || entityData.looted) {
+      this.clearLootTarget();
+      return false;
+    }
+    if (me.inInterior && (me.interiorLevel ?? 0) !== 0) {
       this.clearLootTarget();
       return false;
     }
@@ -11771,9 +11995,15 @@ export class WorldScene extends Phaser.Scene {
     if (targetKind === "searchable") {
       const target = this.searchablesCache.find((item) => {
         if (item.id !== targetId) return false;
-        // Furnaces are stations, not loot piles, so a depleted flag must not
-        // cancel the walk-up that opens the fuel dialog.
-        if (furnitureIsFurnace(item.objectType) || furnitureIsStairs(item.objectType)) return true;
+        // Stations are not loot piles, so a depleted flag must not cancel
+        // the walk-up. The gun bench is never searchable.
+        if (
+          furnitureIsCraftStation(item.objectType) ||
+          furnitureIsFurnace(item.objectType) ||
+          furnitureIsStairs(item.objectType)
+        ) {
+          return true;
+        }
         return this.searchableCanBeClicked(item);
       });
       if (!target) return null;
@@ -12099,6 +12329,34 @@ export class WorldScene extends Phaser.Scene {
 
   private notifyTip(tipId: TutorialTipId) {
     this.onboardingUI?.notifyTip(tipId);
+  }
+
+  /**
+   * First time another player's speech is on screen, explain how to chat.
+   * Chat is delivered to the whole server, so this only counts a sender the
+   * camera can actually see.
+   */
+  private notifyNearbyChatTip(msg: ChatBroadcast) {
+    if (msg.tone === "action") return;
+    if (msg.channel === "radio" || msg.channel === "global") return;
+    const senderId = msg.senderId;
+    if (!this.sessionId || !senderId || senderId === this.sessionId) return;
+    const sender = this.room?.state.players.get(senderId);
+    if (!sender?.alive) return;
+    if (!this.entityVisible("player", sender, senderId)) return;
+    const iso = cartesianToIso(sender.x, sender.y);
+    const bubbleY = iso.y - ENTITY_RENDER_HEIGHT - 8;
+    const view = this.cameras.main.worldView;
+    const margin = 24;
+    if (
+      iso.x < view.x - margin ||
+      iso.x > view.x + view.width + margin ||
+      bubbleY < view.y - margin ||
+      bubbleY > view.y + view.height + margin
+    ) {
+      return;
+    }
+    this.notifyTip("nearby_chat");
   }
 
   /** First time a melee weapon is in hand: click-to-hit, or ready and swing. */
@@ -13078,7 +13336,7 @@ export class WorldScene extends Phaser.Scene {
     this.sendSteer(world.x, world.y, sprint);
   }
 
-  /** Leave aim, then let this frame's WASD / stick steer. */
+  /** Leave aim for this move. A held right-click resumes once movement stops. */
   private cancelAimFromMove() {
     this.aimBrokeByMove = true;
     this.mobileAimLatched = false;
@@ -13232,21 +13490,35 @@ export class WorldScene extends Phaser.Scene {
         return searchableOccupiesTile(item, cursorTX, cursorTY);
       }) ?? null;
 
-    // Furnace art stands against the wall and rises well above its floor tile.
-    // A click on the sprite often lands on the wall behind it, so also accept
-    // an opaque hit on the furnace itself when nothing is drawn in front.
+    // Furniture art stands on its floor tile and paints upward, so a tap on the
+    // picture often lands on the wall or floor behind it. The drawn sprite wins
+    // over that tile. Desktop uses opaque pixels; phones use the sprite box.
     if (me.inInterior) {
       const spriteId = this.interiorView?.pickFurnitureIdAtWorld(world.x, world.y);
       if (spriteId) {
         const spriteItem = this.searchablesCache.find((item) => item.id === spriteId);
+        const station =
+          !!spriteItem &&
+          (furnitureIsCraftStation(spriteItem.objectType) ||
+            furnitureIsFurnace(spriteItem.objectType) ||
+            furnitureIsStairs(spriteItem.objectType));
         if (
           spriteItem &&
-          furnitureIsFurnace(spriteItem.objectType) &&
           spriteItem.buildingX === me.buildingX &&
-          spriteItem.buildingY === me.buildingY
+          spriteItem.buildingY === me.buildingY &&
+          (spriteItem.level ?? 0) === (me.interiorLevel ?? 0) &&
+          (station || this.searchableCanBeClicked(spriteItem))
         ) {
           hovered = spriteItem;
         }
+      }
+    } else {
+      // A felled log paints past its trunk tile. Opaque pixels win over the
+      // floor tile behind the sprite, same as furniture.
+      const spriteTree = this.treeSpriteUnderPointer(world.x, world.y);
+      if (spriteTree) {
+        const fallen = this.lootableFallenTreeAt(spriteTree.x, spriteTree.y);
+        if (fallen) hovered = fallen;
       }
     }
 
@@ -13255,7 +13527,7 @@ export class WorldScene extends Phaser.Scene {
       this.hoveredSearchableId = newId;
       if (me.inInterior) {
         this.interiorView?.setHoveredItem(newId);
-      } else if (hovered) {
+      } else if (hovered && !isFallenTreeType(hovered.objectType)) {
         this.tileManager?.highlightInteractionTile(hovered.x, hovered.y);
       } else {
         this.tileManager?.highlightInteractionTile(null, null);
@@ -13263,23 +13535,94 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * A dead body only exists on its own storey. Shared interior coordinates
+   * must not make an upstairs corpse a downstairs loot target.
+   */
+  private deadLootOnPlayerFloor(
+    me: {
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+      interiorLevel?: number;
+    },
+    data: {
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+    },
+    level: number,
+  ): boolean {
+    if (!!me.inInterior !== !!data.inInterior) return false;
+    if (!me.inInterior) return true;
+    if (data.buildingX !== me.buildingX || data.buildingY !== me.buildingY) return false;
+    return (me.interiorLevel ?? 0) === level;
+  }
+
+  /** Pursuit target is still on the floor the player is standing on. */
+  private lootBodyFloorMatches(
+    me: {
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+      interiorLevel?: number;
+    },
+    kind: "zombie" | "guard" | "player",
+    id: string,
+    data: {
+      inInterior?: boolean;
+      buildingX?: number;
+      buildingY?: number;
+      interiorLevel?: number;
+    },
+  ): boolean {
+    let level = 0;
+    if (kind === "zombie") {
+      level = this.room?.state?.zombies?.get(id)?.interiorLevel ?? data.interiorLevel ?? 0;
+    } else if (kind === "player") {
+      level = this.room?.state?.corpses?.get(id)?.interiorLevel ?? data.interiorLevel ?? 0;
+    }
+    return this.deadLootOnPlayerFloor(me, data, level);
+  }
+
+  private lootHoverSprite(
+    kind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit",
+    id: string,
+  ): Phaser.GameObjects.Sprite | undefined {
+    if (kind === "player") return this.corpseSprites.get(id);
+    return this.spriteMapForKind(kind).get(id);
+  }
+
+  /** Light a dead sprite the same way furniture and doors light up. */
+  private applyWorldLootHoverTint(
+    sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite | null | undefined,
+  ) {
+    if (this.lootHoverTinted && this.lootHoverTinted !== sprite) {
+      if (this.lootHoverTinted.active) clearLootHoverTint(this.lootHoverTinted);
+    }
+    this.lootHoverTinted = sprite ?? null;
+    if (sprite?.active) applyLootHoverTint(sprite);
+  }
+
+  /**
+   * Hover a dead body by its drawn sprite. The pose often covers tiles other
+   * than its feet, so the silhouette wins and the ground tile is a fallback.
+   * The sprite lights up. A body on another floor is not a target.
+   */
   private updateLootableHover(pointer: { x: number; y: number } = this.input.activePointer) {
     const me = this.room?.state?.players?.get(this.sessionId);
 
-    const clearLootHighlight = () => {
-      if (me?.inInterior) {
-        if (!this.hoveredSearchableId) {
-          this.interiorView?.highlightTile(null, null);
-        }
-      } else {
-        this.tileManager?.highlightInteractionTile(null, null);
-      }
+    const clearLootTile = () => {
+      if (this.hoveredSearchableId) return;
+      this.interiorView?.highlightTile(null, null);
+      this.tileManager?.highlightInteractionTile(null, null);
     };
 
     if (this.isOverlayOpen() || this.chatOpen || !me?.alive) {
       this.hoveredLootableId = null;
       this.hoveredLootableKind = null;
-      clearLootHighlight();
+      this.applyWorldLootHoverTint(null);
+      clearLootTile();
       this.game.canvas.style.cursor = "";
       return;
     }
@@ -13292,12 +13635,61 @@ export class WorldScene extends Phaser.Scene {
     const cursorTX = Math.floor(cart.x);
     const cursorTY = Math.floor(cart.y);
 
+    type LootHoverKind = "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit";
     let bestId: string | null = null;
-    let bestKind: "zombie" | "guard" | "player" | "coywolf" | "bear" | "crow" | "rabbit" | null = null;
-    let bestTX = 0;
-    let bestTY = 0;
+    let bestKind: LootHoverKind | null = null;
     let bestEntityX = 0;
     let bestEntityY = 0;
+    let bestDepth = -Infinity;
+    let tileId: string | null = null;
+    let tileKind: LootHoverKind | null = null;
+    let tileEntityX = 0;
+    let tileEntityY = 0;
+    let tileDepth = -Infinity;
+
+    const consider = (
+      id: string,
+      sprite: Phaser.GameObjects.Sprite | undefined,
+      kind: LootHoverKind,
+      data:
+        | {
+            x: number;
+            y: number;
+            looted?: boolean;
+            inInterior?: boolean;
+            buildingX?: number;
+            buildingY?: number;
+          }
+        | undefined,
+      level: number,
+      dead: boolean,
+    ) => {
+      if (!sprite?.visible || !sprite.active || !data || !dead || data.looted) return;
+      if (!this.deadLootOnPlayerFloor(me, data, level)) return;
+      const reach = HOVER_TILE_REACH[kind === "player" ? "player" : kind];
+      const fx = Math.floor(data.x);
+      const fy = Math.floor(data.y);
+      if (Math.abs(fx - cursorTX) > reach || Math.abs(fy - cursorTY) > reach) return;
+      const onTile = cursorTX === fx && cursorTY === fy;
+      const onSprite =
+        sprite.getBounds().contains(worldPt.x, worldPt.y) &&
+        (IS_MOBILE || spriteOpaqueAtWorldPoint(sprite, worldPt.x, worldPt.y));
+      if (onSprite && sprite.depth >= bestDepth) {
+        bestDepth = sprite.depth;
+        bestId = id;
+        bestKind = kind;
+        bestEntityX = data.x;
+        bestEntityY = data.y;
+        return;
+      }
+      if (!onSprite && onTile && sprite.depth >= tileDepth) {
+        tileDepth = sprite.depth;
+        tileId = id;
+        tileKind = kind;
+        tileEntityX = data.x;
+        tileEntityY = data.y;
+      }
+    };
 
     for (const [id, sprite] of this.zombieSprites) {
       const data = sprite?.getData("server") as
@@ -13309,189 +13701,103 @@ export class WorldScene extends Phaser.Scene {
             inInterior?: boolean;
             buildingX?: number;
             buildingY?: number;
+            interiorLevel?: number;
           }
         | undefined;
-      if (!data?.isDead || data.looted) continue;
-      if (me.inInterior !== !!data.inInterior) continue;
-      if (
-        me.inInterior &&
-        (data.buildingX !== me.buildingX || data.buildingY !== me.buildingY)
-      ) {
-        continue;
-      }
-
-      const zTX = Math.floor(data.x);
-      const zTY = Math.floor(data.y);
-      if (cursorTX !== zTX || cursorTY !== zTY) continue;
-
-      bestId = id;
-      bestKind = "zombie";
-      bestTX = zTX;
-      bestTY = zTY;
-      bestEntityX = data.x;
-      bestEntityY = data.y;
-      break;
+      consider(
+        id,
+        sprite,
+        "zombie",
+        data,
+        this.room?.state?.zombies?.get(id)?.interiorLevel ?? data?.interiorLevel ?? 0,
+        !!data?.isDead,
+      );
     }
 
-    if (!bestId && !me.inInterior) {
+    if (!me.inInterior) {
       for (const [id, sprite] of this.coywolfSprites) {
         const data = sprite?.getData("server") as
           | { x: number; y: number; isDead?: boolean; looted?: boolean }
           | undefined;
-        if (!data?.isDead || data.looted) continue;
-        const wTX = Math.floor(data.x);
-        const wTY = Math.floor(data.y);
-        if (cursorTX !== wTX || cursorTY !== wTY) continue;
-        bestId = id;
-        bestKind = "coywolf";
-        bestTX = wTX;
-        bestTY = wTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
+        consider(id, sprite, "coywolf", data, 0, !!data?.isDead);
       }
-    }
 
-    if (!bestId && !me.inInterior) {
       for (const [id, sprite] of this.bearSprites) {
         const data = sprite?.getData("server") as
           | { x: number; y: number; isDead?: boolean; looted?: boolean }
           | undefined;
-        if (!data?.isDead || data.looted) continue;
-        const bTX = Math.floor(data.x);
-        const bTY = Math.floor(data.y);
-        if (cursorTX !== bTX || cursorTY !== bTY) continue;
-        bestId = id;
-        bestKind = "bear";
-        bestTX = bTX;
-        bestTY = bTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
+        consider(id, sprite, "bear", data, 0, !!data?.isDead);
       }
-    }
 
-    if (!bestId && !me.inInterior) {
       for (const [id, sprite] of this.crowSprites) {
         const data = sprite?.getData("server") as
           | { x: number; y: number; isDead?: boolean; looted?: boolean }
           | undefined;
-        if (!data?.isDead || data.looted) continue;
-        const cTX = Math.floor(data.x);
-        const cTY = Math.floor(data.y);
-        if (cursorTX !== cTX || cursorTY !== cTY) continue;
-        bestId = id;
-        bestKind = "crow";
-        bestTX = cTX;
-        bestTY = cTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
+        consider(id, sprite, "crow", data, 0, !!data?.isDead);
       }
-    }
 
-    if (!bestId && !me.inInterior) {
       for (const [id, sprite] of this.rabbitSprites) {
         const data = sprite?.getData("server") as
           | { x: number; y: number; isDead?: boolean; looted?: boolean }
           | undefined;
-        if (!data?.isDead || data.looted) continue;
-        const rTX = Math.floor(data.x);
-        const rTY = Math.floor(data.y);
-        if (cursorTX !== rTX || cursorTY !== rTY) continue;
-        bestId = id;
-        bestKind = "rabbit";
-        bestTX = rTX;
-        bestTY = rTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
+        consider(id, sprite, "rabbit", data, 0, !!data?.isDead);
       }
     }
 
-    if (!bestId) {
-      for (const [id, sprite] of this.guardSprites) {
-        const data = sprite?.getData("server") as
-          | {
-              x: number;
-              y: number;
-              isDead?: boolean;
-              looted?: boolean;
-              inInterior?: boolean;
-              buildingX?: number;
-              buildingY?: number;
-            }
-          | undefined;
-        if (!data?.isDead || data.looted) continue;
-        if (me.inInterior !== !!data.inInterior) continue;
-        if (
-          me.inInterior &&
-          (data.buildingX !== me.buildingX || data.buildingY !== me.buildingY)
-        ) {
-          continue;
-        }
-
-        const gTX = Math.floor(data.x);
-        const gTY = Math.floor(data.y);
-        if (cursorTX !== gTX || cursorTY !== gTY) continue;
-
-        bestId = id;
-        bestKind = "guard";
-        bestTX = gTX;
-        bestTY = gTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
-      }
+    for (const [id, sprite] of this.guardSprites) {
+      const data = sprite?.getData("server") as
+        | {
+            x: number;
+            y: number;
+            isDead?: boolean;
+            looted?: boolean;
+            inInterior?: boolean;
+            buildingX?: number;
+            buildingY?: number;
+          }
+        | undefined;
+      consider(id, sprite, "guard", data, 0, !!data?.isDead);
     }
 
-    if (!bestId) {
-      for (const [id, sprite] of this.corpseSprites) {
-        const data = sprite?.getData("server") as
-          | {
-              x: number;
-              y: number;
-              looted?: boolean;
-              inInterior?: boolean;
-              buildingX?: number;
-              buildingY?: number;
-            }
-          | undefined;
-        if (!data || data.looted) continue;
-        if (me.inInterior !== !!data.inInterior) continue;
-        if (
-          me.inInterior &&
-          (data.buildingX !== me.buildingX || data.buildingY !== me.buildingY)
-        ) {
-          continue;
-        }
+    for (const [id, sprite] of this.corpseSprites) {
+      const data = sprite?.getData("server") as
+        | {
+            x: number;
+            y: number;
+            looted?: boolean;
+            inInterior?: boolean;
+            buildingX?: number;
+            buildingY?: number;
+            interiorLevel?: number;
+          }
+        | undefined;
+      consider(
+        id,
+        sprite,
+        "player",
+        data,
+        this.room?.state?.corpses?.get(id)?.interiorLevel ?? data?.interiorLevel ?? 0,
+        !!data,
+      );
+    }
 
-        const cTX = Math.floor(data.x);
-        const cTY = Math.floor(data.y);
-        if (cursorTX !== cTX || cursorTY !== cTY) continue;
-
-        bestId = id;
-        bestKind = "player";
-        bestTX = cTX;
-        bestTY = cTY;
-        bestEntityX = data.x;
-        bestEntityY = data.y;
-        break;
-      }
+    if (!bestId && tileId && tileKind) {
+      bestId = tileId;
+      bestKind = tileKind;
+      bestEntityX = tileEntityX;
+      bestEntityY = tileEntityY;
     }
 
     this.hoveredLootableId = bestId;
     this.hoveredLootableKind = bestKind;
 
-    if (me.inInterior) {
-      if (!this.hoveredSearchableId) {
-        if (bestId) this.interiorView?.highlightTile(bestTX, bestTY);
-        else clearLootHighlight();
-      }
-    } else if (bestId) {
-      this.tileManager?.highlightInteractionTile(bestTX, bestTY);
-    } else if (!this.hoveredSearchableId) {
-      this.tileManager?.highlightInteractionTile(null, null);
+    if (this.hoveredSearchableId) {
+      this.applyWorldLootHoverTint(null);
+    } else {
+      const cover =
+        bestId && bestKind ? this.lootHoverSprite(bestKind, bestId) : undefined;
+      this.applyWorldLootHoverTint(cover);
+      clearLootTile();
     }
 
     const canLoot =
@@ -13682,19 +13988,22 @@ export class WorldScene extends Phaser.Scene {
       return "held";
     }
 
-    if (!ctx.inInterior && this.hatchetEquipped() && getStandingTreeAt(tx, ty)) {
-      if (playerReadyToChopTree(me.x, me.y, tx, ty)) {
-        this.releaseHeldSteer();
-        this.treeChopTargetTile = { x: tx, y: ty };
-        this.treeChopApproachTile = {
-          x: Math.floor(me.x),
-          y: Math.floor(me.y),
-        };
-        this.treeChopSprint = false;
-        this.tryStartTreeChop(me, tx, ty);
-        return "acted";
+    if (!ctx.inInterior && this.hatchetEquipped()) {
+      const tree = this.choppableTreeAtScreen(pointer.x, pointer.y);
+      if (tree) {
+        if (playerReadyToChopTree(me.x, me.y, tree.x, tree.y)) {
+          this.releaseHeldSteer();
+          this.treeChopTargetTile = { x: tree.x, y: tree.y };
+          this.treeChopApproachTile = {
+            x: Math.floor(me.x),
+            y: Math.floor(me.y),
+          };
+          this.treeChopSprint = false;
+          this.tryStartTreeChop(me, tree.x, tree.y);
+          return "acted";
+        }
+        return "held";
       }
-      return "held";
     }
 
     if (!ctx.inInterior) {
@@ -14812,7 +15121,14 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private zombieWithinTiles(
-    me: { x: number; y: number; inInterior?: boolean; buildingX: number; buildingY: number },
+    me: {
+      x: number;
+      y: number;
+      inInterior?: boolean;
+      buildingX: number;
+      buildingY: number;
+      interiorLevel?: number;
+    },
     tiles: number,
   ): boolean {
     const zombies = this.room?.state?.zombies;
@@ -14826,12 +15142,14 @@ export class WorldScene extends Phaser.Scene {
       inInterior?: boolean;
       buildingX?: number;
       buildingY?: number;
+      interiorLevel?: number;
     }) => {
       if (found || (z.health ?? 1) <= 0) return;
       if (!!z.inInterior !== !!me.inInterior) return;
       if (me.inInterior && (z.buildingX !== me.buildingX || z.buildingY !== me.buildingY)) {
         return;
       }
+      if (me.inInterior && (z.interiorLevel ?? 0) !== (me.interiorLevel ?? 0)) return;
       const dx = z.x - me.x;
       const dy = z.y - me.y;
       if (dx * dx + dy * dy <= r2) found = true;
@@ -15346,7 +15664,7 @@ export class WorldScene extends Phaser.Scene {
         zombie.inInterior,
         zombie.buildingX,
         zombie.buildingY,
-        0,
+        zombie.interiorLevel ?? 0,
       );
     }
     const guard = state.guards.get(targetId);
@@ -16387,6 +16705,7 @@ export class WorldScene extends Phaser.Scene {
       inInterior?: boolean;
       buildingX?: number;
       buildingY?: number;
+      interiorLevel?: number;
     },
     entityId: string,
   ) {
@@ -16415,8 +16734,15 @@ export class WorldScene extends Phaser.Scene {
     }
 
     if (kind === "player" && entityId === this.sessionId) return true;
-    if (kind === "zombie" || kind === "guard") {
+    if (kind === "guard") {
       if ((me.interiorLevel ?? 0) !== 0) return false;
+    }
+    if (kind === "zombie") {
+      const zLevel =
+        this.room?.state?.zombies?.get(entityId)?.interiorLevel ??
+        data.interiorLevel ??
+        0;
+      if ((me.interiorLevel ?? 0) !== zLevel) return false;
     }
     if (kind === "player") {
       const other = this.room?.state?.players?.get(entityId);
@@ -16458,6 +16784,7 @@ export class WorldScene extends Phaser.Scene {
       inInterior: data.inInterior,
       buildingX: data.buildingX,
       buildingY: data.buildingY,
+      interiorLevel: data.interiorLevel ?? 0,
       investigating: extended.investigating,
       investigateX: extended.investigateX,
       investigateY: extended.investigateY,
@@ -17404,9 +17731,23 @@ export class WorldScene extends Phaser.Scene {
       inInterior: data.inInterior,
       buildingX: data.buildingX,
       buildingY: data.buildingY,
+      interiorLevel: data.interiorLevel ?? 0,
       alive: false,
       looted: !!data.looted,
     });
+    if (
+      !this.entityVisible("corpse", {
+        x: data.x,
+        y: data.y,
+        inInterior: data.inInterior,
+        buildingX: data.buildingX,
+        buildingY: data.buildingY,
+        interiorLevel: data.interiorLevel ?? 0,
+      }, id)
+    ) {
+      this.softHideEntitySprite(sprite);
+      return;
+    }
     this.updateEntityFromState(sprite, "corpse", id);
   }
 
@@ -17683,10 +18024,22 @@ export class WorldScene extends Phaser.Scene {
 
     for (const sprite of this.corpseSprites.values()) {
       const data = sprite.getData("server") as
-        | { x?: number; y?: number; inInterior?: boolean }
+        | {
+            x?: number;
+            y?: number;
+            inInterior?: boolean;
+            buildingX?: number;
+            buildingY?: number;
+            interiorLevel?: number;
+          }
         | undefined;
       if (!data) continue;
-      // Corpses are static — hide when culled so zoom/pan can restore them.
+      // Hide off this floor and outside the draw view. Soft-hide keeps the
+      // sprite so zoom and pan can show it again.
+      if (!this.entityVisible("corpse", data, sprite.entityId)) {
+        this.softHideEntitySprite(sprite);
+        continue;
+      }
       this.updateEntityFromState(sprite, "corpse", sprite.entityId);
     }
     perf?.lap("visuals:playersCorpses");
@@ -18728,7 +19081,7 @@ export class WorldScene extends Phaser.Scene {
   private openCraftUI(payload: {
     workbenchId: string;
     inventoryJson: string;
-    station?: "workbench" | "furnace";
+    station?: "workbench" | "furnace" | "gunbench";
   }) {
     if (this.craftUI?.isOpen()) {
       const again = this.craftUI.takeRecraft(payload.workbenchId);
@@ -19845,6 +20198,7 @@ export class WorldScene extends Phaser.Scene {
     inInterior?: boolean;
     taskCompletionsJson?: string;
     safeDepositRented?: boolean;
+    safeDepositHold?: boolean;
   }) {
     if (payload.faction === "ashenMilitia") {
       this.openAshenMilitiaDialog(payload);
@@ -19944,6 +20298,7 @@ export class WorldScene extends Phaser.Scene {
     playerName: string;
     ashenReputation?: number;
     safeDepositRented?: boolean;
+    safeDepositHold?: boolean;
   }) {
     if (this.inventoryUI?.isOpen()) this.inventoryUI.close();
     if (this.journalUI?.isOpen()) this.journalUI.close();
@@ -19968,6 +20323,7 @@ export class WorldScene extends Phaser.Scene {
       questsJson: this.localQuestsJson(),
       extraPockets: this.localExtraPockets(),
       safeDepositRented: payload.safeDepositRented,
+      safeDepositHold: payload.safeDepositHold,
     });
   }
 
@@ -20310,14 +20666,14 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private takeFromContainer(containerId: string, fromSlot: number, toSlot: number) {
-    if (!this.room || !this.containerLootUI?.isOpen()) return;
-    if (!containerId) return;
+  private takeFromContainer(containerId: string, fromSlot: number, toSlot: number): boolean {
+    if (!this.room || !this.containerLootUI?.isOpen()) return false;
+    if (!containerId) return false;
 
     // Drag clothing into the clothing slot → Wear channel; close loot so the bar shows.
     if (toSlot === CLOTHING_SLOT_INDEX) {
       const me = this.room.state.players.get(this.sessionId);
-      if (!me?.alive || this.isBusyWithTimedAction(me)) return;
+      if (!me?.alive || this.isBusyWithTimedAction(me)) return false;
       this.stopPlayerMovement();
       this.closeDialogsForClothingAction();
       this.beginOptimisticClothingChange(CLOTHING_CHANGE_ACTION_LABELS.wear);
@@ -20330,6 +20686,7 @@ export class WorldScene extends Phaser.Scene {
     this.room.send("action", message);
     this.lastInventoryRenderKey = "";
     this.lastHotbarRenderKey = "";
+    return true;
   }
 
   private storeInContainer(containerId: string, fromSlot: number, toSlot: number) {
@@ -20381,6 +20738,7 @@ export class WorldScene extends Phaser.Scene {
       inInterior: boolean;
       buildingX: number;
       buildingY: number;
+      interiorLevel?: number;
     },
     containerId: string,
   ): boolean {
@@ -20415,7 +20773,9 @@ export class WorldScene extends Phaser.Scene {
         !zombie.looted &&
         me.inInterior === zombie.inInterior &&
         (!me.inInterior ||
-          (me.buildingX === zombie.buildingX && me.buildingY === zombie.buildingY)) &&
+          (me.buildingX === zombie.buildingX &&
+            me.buildingY === zombie.buildingY &&
+            (me.interiorLevel ?? 0) === (zombie.interiorLevel ?? 0))) &&
         playerNearEntity(me.x, me.y, zombie.x, zombie.y)
       );
     }
@@ -20427,7 +20787,9 @@ export class WorldScene extends Phaser.Scene {
         !guard.looted &&
         me.inInterior === !!guard.inInterior &&
         (!me.inInterior ||
-          (me.buildingX === guard.buildingX && me.buildingY === guard.buildingY)) &&
+          ((me.interiorLevel ?? 0) === 0 &&
+            me.buildingX === guard.buildingX &&
+            me.buildingY === guard.buildingY)) &&
         playerNearEntity(me.x, me.y, guard.x, guard.y)
       );
     }
@@ -20443,15 +20805,18 @@ export class WorldScene extends Phaser.Scene {
             inInterior?: boolean;
             buildingX?: number;
             buildingY?: number;
+            interiorLevel?: number;
           }
         | undefined);
     if (corpseData) {
+      const corpseLevel = corpse?.interiorLevel ?? corpseData.interiorLevel ?? 0;
       return (
         !corpseData.looted &&
         me.inInterior === !!corpseData.inInterior &&
         (!me.inInterior ||
           (me.buildingX === corpseData.buildingX &&
-            me.buildingY === corpseData.buildingY)) &&
+            me.buildingY === corpseData.buildingY &&
+            (me.interiorLevel ?? 0) === corpseLevel)) &&
         playerNearEntity(me.x, me.y, corpseData.x, corpseData.y)
       );
     }

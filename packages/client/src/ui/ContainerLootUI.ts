@@ -24,6 +24,8 @@ import {
   isJewelrySlot,
   isNeckSlot,
   moveInventorySlot,
+  takeFromContainerSlot,
+  putIntoStorageBoxSlot,
   shownExtraPockets,
   CONTAINER_INVENTORY_SLOTS,
   parseStorageBoxInventory,
@@ -36,7 +38,10 @@ import {
   nextSafeDepositSlotCount,
   SAFE_DEPOSIT_SLOTS,
   SAFE_DEPOSIT_UPGRADE_COST,
-  safeDepositSlotCountFromJson,
+  safeDepositHoldStart,
+  safeDepositIsRented,
+  safeDepositRentedSlotCount,
+  safeDepositViewInventory,
   storageBoxSlotsForObjectType,
   RADIO_ITEM_ID,
   RADIO_SLOT_INDEX,
@@ -53,6 +58,7 @@ import {
   getItemDefinition,
   getMaxDurability,
   isHotbarOnlyItem,
+  isQuestBoundEntry,
   weaponIndexFromItemId,
   isRadioSlot,
   isWatchSlot,
@@ -73,7 +79,9 @@ import { carrySlotGroups, formatCarrySlots, usedSlotCount } from "./carrySlots";
 import "./mobile/loot.css";
 import {
   chip,
+  count,
   createSheet,
+  money,
   markSheetOpen,
   renderTabs,
   sectionLabel,
@@ -217,7 +225,8 @@ export type LootPlayerStats = {
 };
 
 export type ContainerLootUIHandlers = {
-  onTakeFromContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
+  /** Return false when the take was not sent. */
+  onTakeFromContainer: (containerId: string, fromSlot: number, toSlot: number) => boolean;
   onMoveInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onStoreInContainer: (containerId: string, fromSlot: number, toSlot: number) => void;
   onUpgradeSafeDeposit: () => void;
@@ -227,8 +236,13 @@ export type ContainerLootUIHandlers = {
     splitHalf?: boolean,
   ) => void;
   onUse: (slotIndex: number) => void;
+  onDrop: (slotIndex: number, quantity?: number) => void;
+  /** Items that just moved from a container into the player's bag. */
+  onLooted?: (items: { id: string; name: string; quantity: number }[]) => void;
   onClose: (containerId: string) => void;
 };
+
+const PLAYER_SLOT_HINT = "Select an item to use or drop it";
 
 const CATEGORY_COLORS: Record<string, string> = {
   weapons: "#8b4558",
@@ -294,6 +308,8 @@ export class ContainerLootUI {
   private objectType = "";
   private piles: LootPileView[] = [];
   private containerInventory: Inventory = [];
+  /** Stored safe deposit JSON, including withdraw-only referral slots. */
+  private depositJson = "";
   private playerInventory: Inventory = [];
   private extraPockets = 0;
   private selectedPlayerSlot = -1;
@@ -309,6 +325,9 @@ export class ContainerLootUI {
   private dragFromSource: DragSource | null = null;
   /** Last tap on a container cell — used for mobile double-tap take. */
   private lastTap: SlotTapState = null;
+  /** Takes from this frame, collapsed into one bottom popup. */
+  private pendingLoot: { id: string; name: string; quantity: number }[] = [];
+  private lootNoticeQueued = false;
 
   private overlay: HTMLElement;
   private layoutEl!: HTMLElement;
@@ -348,6 +367,8 @@ export class ContainerLootUI {
   private playerUseBar!: HTMLElement;
   private playerUseDetailEl!: HTMLElement;
   private playerUseBtn!: HTMLButtonElement;
+  private playerDropBtn!: HTMLButtonElement;
+  private playerDropAllBtn!: HTMLButtonElement;
 
   constructor(private handlers: ContainerLootUIHandlers) {
     this.overlay = document.createElement("div");
@@ -502,7 +523,7 @@ export class ContainerLootUI {
     this.playerUseBar.className = "container-loot-player-use inventory-footer";
     this.playerUseDetailEl = document.createElement("div");
     this.playerUseDetailEl.className = "inventory-detail";
-    this.playerUseDetailEl.textContent = "Select a food, drink, or medical item to use it";
+    this.playerUseDetailEl.textContent = PLAYER_SLOT_HINT;
     const useActions = document.createElement("div");
     useActions.className = "inventory-actions";
     this.playerUseBtn = document.createElement("button");
@@ -514,7 +535,25 @@ export class ContainerLootUI {
       if (this.selectedPlayerSlot < 0) return;
       this.usePlayerSlot(this.selectedPlayerSlot);
     });
-    useActions.append(this.playerUseBtn);
+    this.playerDropBtn = document.createElement("button");
+    this.playerDropBtn.type = "button";
+    this.playerDropBtn.className = "inventory-action-btn inventory-drop-btn";
+    this.playerDropBtn.textContent = "Drop 1";
+    this.playerDropBtn.hidden = true;
+    this.playerDropBtn.addEventListener("click", () => {
+      this.dropPlayerSlot(this.selectedPlayerSlot, 1);
+    });
+    this.playerDropAllBtn = document.createElement("button");
+    this.playerDropAllBtn.type = "button";
+    this.playerDropAllBtn.className = "inventory-action-btn inventory-drop-btn";
+    this.playerDropAllBtn.textContent = "Drop All";
+    this.playerDropAllBtn.hidden = true;
+    this.playerDropAllBtn.addEventListener("click", () => {
+      const slot = this.playerInventory[this.selectedPlayerSlot];
+      if (!slot) return;
+      this.dropPlayerSlot(this.selectedPlayerSlot, slot.quantity);
+    });
+    useActions.append(this.playerUseBtn, this.playerDropBtn, this.playerDropAllBtn);
     this.playerUseBar.append(this.playerUseDetailEl, useActions);
 
     this.playerSlotsEl.append(wornEl, carryScroll, this.playerUseBar);
@@ -551,6 +590,12 @@ export class ContainerLootUI {
       piles && piles.length > 0
         ? piles
         : [{ containerId, objectType, containerJson }];
+    this.depositJson = "";
+    for (const pile of source) {
+      if (pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE) {
+        this.depositJson = pile.containerJson;
+      }
+    }
     this.piles = source.map((pile) => ({
       containerId: pile.containerId,
       objectType: pile.objectType,
@@ -618,6 +663,13 @@ export class ContainerLootUI {
     const pile = this.piles.find((entry) => entry.containerId === containerId);
     if (!pile) return;
     const inventory = this.parsePileInventory(pile.objectType, containerJson);
+    if (pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE) {
+      this.depositJson = containerJson;
+      if (!safeDepositIsRented(containerJson) && containerInventoryIsEmpty(inventory)) {
+        this.close();
+        return;
+      }
+    }
     const keepWhenEmpty = this.isStorageBoxPile(pile.objectType);
     if (containerInventoryIsEmpty(inventory) && !keepWhenEmpty) {
       this.piles = this.piles.filter((entry) => entry.containerId !== containerId);
@@ -653,6 +705,7 @@ export class ContainerLootUI {
 
   render(containerJson: string, playerInventoryJson: string) {
     this.titleEl.textContent = furnitureDisplayName(this.objectType);
+    if (this.objectType === SAFE_DEPOSIT_OBJECT_TYPE) this.depositJson = containerJson;
     this.containerInventory = this.parsePileInventory(this.objectType, containerJson);
     this.playerInventory = parseInventory(playerInventoryJson);
     this.rebuildGrids();
@@ -677,6 +730,7 @@ export class ContainerLootUI {
       grid.className = "inventory-grid inventory-grid--container";
       const slotCount = this.containerSlotCount(pile.objectType, pile.inventory);
       for (let i = 0; i < slotCount; i++) {
+        if (this.isDepositHoldIndex(i) && !pile.inventory[i]) continue;
         grid.appendChild(
           this.createCell(
             "container",
@@ -808,25 +862,48 @@ export class ContainerLootUI {
     return this.piles[0]?.inventory.length ?? SAFE_DEPOSIT_SLOTS;
   }
 
+  private depositRentedCount(): number {
+    if (!this.isDeposit()) return 0;
+    return safeDepositRentedSlotCount(this.depositJson);
+  }
+
+  private isDepositHoldIndex(index: number): boolean {
+    if (!this.isDeposit()) return false;
+    return index >= safeDepositHoldStart(this.depositJson);
+  }
+
   private depositHint(): string {
-    return `${this.depositSlotCount()} slots · stays safe at the market until you collect it`;
+    const rented = this.depositRentedCount();
+    const extra = Math.max(0, this.depositSlotCount() - rented);
+    if (rented <= 0) {
+      return extra > 1
+        ? "Referral notes. Take them out and each slot closes."
+        : "Referral notes. Take them out and this slot closes.";
+    }
+    if (extra === 1) {
+      return `${rented} slots · one extra slot holds referral notes. Take them out and it closes.`;
+    }
+    if (extra > 1) {
+      return `${rented} slots · ${extra} extra slots hold referral notes. Each one closes when the notes are gone.`;
+    }
+    return `${rented} slots · stays safe at the market until you collect it`;
   }
 
   private syncDepositUpgrade(): void {
     const deposit = this.isDeposit();
-    const slots = this.depositSlotCount();
-    const next = deposit ? nextSafeDepositSlotCount(slots) : null;
+    const slots = this.depositRentedCount();
+    const next = deposit && slots > 0 ? nextSafeDepositSlotCount(slots) : null;
     const notes = countItemInInventory(this.playerInventory, "banknote");
     const canPay = notes >= SAFE_DEPOSIT_UPGRADE_COST;
     const show = !!(deposit && next);
     const label = next
-      ? `Upgrade to ${next} slots · $${SAFE_DEPOSIT_UPGRADE_COST}`
+      ? `Upgrade to ${next} slots · ${money(SAFE_DEPOSIT_UPGRADE_COST)}`
       : "";
     const title = !show
       ? ""
       : canPay
-        ? `Add 4 slots for $${SAFE_DEPOSIT_UPGRADE_COST}. This cannot be undone.`
-        : `Need $${SAFE_DEPOSIT_UPGRADE_COST} (you have $${notes})`;
+        ? `Add 4 slots for ${money(SAFE_DEPOSIT_UPGRADE_COST)}. This cannot be undone.`
+        : `Need ${money(SAFE_DEPOSIT_UPGRADE_COST)} (you have ${money(notes)})`;
     this.desktopUpgradeBtn.hidden = !show;
     this.desktopUpgradeBtn.disabled = !show || !canPay;
     this.desktopUpgradeBtn.textContent = label;
@@ -1048,7 +1125,8 @@ export class ContainerLootUI {
     meta.className = "loot-sheet-qty";
     const packed = sealedBackpackStackCount(slot);
     const bits: string[] = [];
-    if (slot.quantity > 1) bits.push(`×${slot.quantity}`);
+    if (this.isDepositHoldIndex(index)) bits.push("Take only");
+    if (slot.quantity > 1) bits.push(`×${count(slot.quantity)}`);
     else if (packed > 0) bits.push(packed === 1 ? "1 inside" : `${packed} inside`);
     const effect = wornGearEffectHint(slot.id);
     if (effect) bits.push(effect);
@@ -1068,15 +1146,60 @@ export class ContainerLootUI {
     return row;
   }
 
+  /**
+   * How many of this stack the player actually gains.
+   * A full swap of the same item is a wash. A stack dropped on an empty
+   * neck or hand slot only seats one piece.
+   */
+  private takeGainQuantity(
+    entry: { id: string; quantity: number },
+    toSlot: number,
+  ): number {
+    const dest = this.playerInventory[toSlot];
+    if (!dest) {
+      if (isJewelrySlot(toSlot) && entry.quantity > 1) return 1;
+      return entry.quantity;
+    }
+    if (isJewelrySlot(toSlot) && (entry.quantity > 1 || entry.id === dest.id)) return 0;
+    if (entry.id === dest.id && slotStackLimit(entry.id, toSlot) > 1) {
+      const room = slotStackLimit(entry.id, toSlot) - dest.quantity;
+      if (room > 0) return Math.min(room, entry.quantity);
+      const net = entry.quantity - dest.quantity;
+      return net > 0 ? net : 0;
+    }
+    return entry.quantity;
+  }
+
+  private queueLoot(id: string, quantity: number): void {
+    if (!id || quantity <= 0) return;
+    const name = getItemDefinition(id)?.name ?? id;
+    const prev = this.pendingLoot.find((item) => item.id === id);
+    if (prev) prev.quantity += quantity;
+    else this.pendingLoot.push({ id, name, quantity });
+    if (this.lootNoticeQueued) return;
+    this.lootNoticeQueued = true;
+    queueMicrotask(() => {
+      this.lootNoticeQueued = false;
+      const items = this.pendingLoot.splice(0);
+      if (items.length > 0) this.handlers.onLooted?.(items);
+    });
+  }
+
+  private noteTake(entry: { id: string; quantity: number }, toSlot: number): void {
+    this.queueLoot(entry.id, this.takeGainQuantity(entry, toSlot));
+  }
+
   /** How many were moved. 0 when nothing fit. */
   private takeSlot(pile: LootPileView, index: number): number {
     const slot = pile.inventory[index];
     if (!slot) return 0;
     const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
     if (toSlot < 0) return 0;
+    const gained = this.takeGainQuantity(slot, toSlot);
     const moved = this.applyTakeLocal(pile, index, toSlot, slot);
     if (moved <= 0) return 0;
-    this.handlers.onTakeFromContainer(pile.containerId, index, toSlot);
+    if (!this.handlers.onTakeFromContainer(pile.containerId, index, toSlot)) return moved;
+    if (gained > 0) this.queueLoot(slot.id, gained);
     return moved;
   }
 
@@ -1193,20 +1316,21 @@ export class ContainerLootUI {
       sheet.bar.append(take);
     }
     if (this.isDeposit() && this.phoneTab === "loot") {
-      const next = nextSafeDepositSlotCount(this.depositSlotCount());
+      const rented = this.depositRentedCount();
+      const next = rented > 0 ? nextSafeDepositSlotCount(rented) : null;
       if (next) {
         const notes = countItemInInventory(this.playerInventory, "banknote");
         const upgrade = sheetButton(
           `Upgrade to ${next} slots`,
           "gold",
           () => this.handlers.onUpgradeSafeDeposit(),
-          { sub: `$${SAFE_DEPOSIT_UPGRADE_COST}` },
+          { sub: money(SAFE_DEPOSIT_UPGRADE_COST) },
         );
         upgrade.disabled = notes < SAFE_DEPOSIT_UPGRADE_COST;
         if (upgrade.disabled) {
-          upgrade.title = `Need $${SAFE_DEPOSIT_UPGRADE_COST} (you have $${notes})`;
+          upgrade.title = `Need ${money(SAFE_DEPOSIT_UPGRADE_COST)} (you have ${money(notes)})`;
         } else {
-          upgrade.title = `Add 4 slots for $${SAFE_DEPOSIT_UPGRADE_COST}. This cannot be undone.`;
+          upgrade.title = `Add 4 slots for ${money(SAFE_DEPOSIT_UPGRADE_COST)}. This cannot be undone.`;
         }
         sheet.bar.append(upgrade);
       }
@@ -1236,7 +1360,7 @@ export class ContainerLootUI {
     if (getEntryWetness(slot) > 0.005) chips.push(chip("Wet", "b"));
     const bits: string[] = [];
     const packed = sealedBackpackStackCount(slot);
-    if (slot.quantity > 1) bits.push(`×${slot.quantity}`);
+    if (slot.quantity > 1) bits.push(`×${count(slot.quantity)}`);
     else if (packed > 0) bits.push(packed === 1 ? "1 inside" : `${packed} inside`);
     const effect = wornGearEffectHint(slot.id);
     bits.push(effect || itemCategoryLabel(slot.id));
@@ -1256,12 +1380,15 @@ export class ContainerLootUI {
       for (let i = 0; i < slotCount; i++) {
         const slot = pile.inventory[i];
         if (!slot) {
-          if (deposit) open.push(this.msOpenSlotRow());
+          if (deposit && !this.isDepositHoldIndex(i)) open.push(this.msOpenSlotRow());
           continue;
         }
         const name = getItemDefinition(slot.id)?.name ?? slot.id;
         const fits = this.findFirstFittingPlayerSlot(slot.id, slot) >= 0;
         let meta = this.msMeta(slot);
+        if (deposit && this.isDepositHoldIndex(i)) {
+          meta = ["Take only. This slot closes when empty.", ...meta];
+        }
         let metaTone: "warn" | undefined;
         let end: HTMLButtonElement | undefined;
         if (fits) {
@@ -1272,10 +1399,6 @@ export class ContainerLootUI {
               const moved = this.takeSlot(pile, i);
               if (moved <= 0 || !sheet) return;
               this.rebuildGrids();
-              showSheetMessage(
-                sheet.snackSlot,
-                `Took ${name}${moved > 1 ? ` ×${moved}` : ""}. Bag ${formatCarrySlots(this.playerInventory, this.extraPockets)}.`,
-              );
             },
             { small: true },
           );
@@ -1283,17 +1406,31 @@ export class ContainerLootUI {
           isBackpackItem(slot.id) &&
           this.canDrop("container", slot, "player", BACKPACK_SLOT_INDEX)
         ) {
-          meta = ["No room. Wear it to swap packs."];
+          const carrying = backpackHoldsItems(this.playerInventory, BACKPACK_SLOT_INDEX);
+          meta = [
+            carrying
+              ? "Your items fit. Wear it to switch packs."
+              : "No room. Wear it to swap packs.",
+          ];
           metaTone = "warn";
           end = sheetButton(
             "Wear",
             "sec",
             () => {
-              this.handlers.onTakeFromContainer(pile.containerId, i, BACKPACK_SLOT_INDEX);
-              if (sheet) showSheetMessage(sheet.snackSlot, `Wearing ${name}.`);
+              if (!this.handlers.onTakeFromContainer(pile.containerId, i, BACKPACK_SLOT_INDEX)) return;
+              this.noteTake(slot, BACKPACK_SLOT_INDEX);
             },
             { small: true },
           );
+        } else if (
+          isBackpackItem(slot.id) &&
+          backpackHoldsItems(this.playerInventory, BACKPACK_SLOT_INDEX)
+        ) {
+          meta = ["Your items don't fit in this backpack."];
+          metaTone = "warn";
+          const blocked = sheetButton("Take", "sec", () => {}, { small: true });
+          blocked.disabled = true;
+          end = blocked;
         } else {
           meta = [
             isHotbarOnlyItem(slot.id)
@@ -1350,6 +1487,7 @@ export class ContainerLootUI {
         });
         actions.append(useBtn);
       }
+      this.appendMsDropButtons(actions, index, slot);
       if (twoWay) {
         const stacked = this.containerInventory.reduce(
           (sum, entry) => (entry && entry.id === slot.id ? sum + entry.quantity : sum),
@@ -1411,6 +1549,10 @@ export class ContainerLootUI {
         const slot = this.playerInventory[index];
         if (!slot) continue;
         const name = getItemDefinition(slot.id)?.name ?? slot.id;
+        const actions = document.createElement("div");
+        actions.className = "ms-loot-row-actions";
+        this.appendMsDropButtons(actions, index, slot);
+        const hasDrop = actions.childElementCount > 0;
         rows.push(
           sheetRow({
             iconItemId: slot.id,
@@ -1418,7 +1560,8 @@ export class ContainerLootUI {
             qty: slot.quantity,
             name,
             meta: twoWay ? ["Take it off in your bag to store it"] : this.msMeta(slot),
-            state: twoWay ? "dim" : undefined,
+            state: twoWay && !hasDrop ? "dim" : undefined,
+            end: hasDrop ? actions : undefined,
           }),
         );
       }
@@ -1492,11 +1635,15 @@ export class ContainerLootUI {
     if (!this.visible || !this.ms) return;
     const moved = before - this.lootItemCount();
     const left = this.lootItemCount();
-    showSheetMessage(
-      this.ms.snackSlot,
-      `Took ${moved === 1 ? "1 item" : `${moved} items`}.${left > 0 ? ` ${left} left, no room.` : ""}`,
-      left > 0 ? "warn" : "good",
-    );
+    if (moved <= 0) {
+      showSheetMessage(this.ms.snackSlot, "No room in your bag.", "warn");
+    } else if (left > 0) {
+      showSheetMessage(
+        this.ms.snackSlot,
+        `${left === 1 ? "1 item left" : `${left} left`}, no room.`,
+        "warn",
+      );
+    }
   }
 
   private msStoreAll(): void {
@@ -1535,9 +1682,11 @@ export class ContainerLootUI {
   private takeAll(): void {
     for (const pile of this.piles) {
       const slotCount = this.containerSlotCount(pile.objectType, pile.inventory);
-      for (let i = 0; i < slotCount; i++) {
-        this.takeSlot(pile, i);
-      }
+      const order: number[] = [];
+      for (let i = 0; i < slotCount; i++) order.push(i);
+      // An emptied referral slot is removed, which shifts later slots down.
+      if (pile.objectType === SAFE_DEPOSIT_OBJECT_TYPE) order.reverse();
+      for (const i of order) this.takeSlot(pile, i);
     }
     this.rebuildGrids();
   }
@@ -1602,6 +1751,12 @@ export class ContainerLootUI {
     cell.setAttribute("role", "button");
     cell.tabIndex = 0;
 
+    const referralSlot = source === "container" && this.isDepositHoldIndex(index);
+    if (referralSlot) {
+      cell.classList.add("inventory-cell--deposit-hold");
+      cell.title = "Referral notes. Take them out and this slot closes.";
+    }
+
     if (source === "player" && index === CLOTHING_SLOT_INDEX) {
       cell.classList.add("inventory-cell--clothing");
     }
@@ -1664,7 +1819,7 @@ export class ContainerLootUI {
       if (slot.quantity > 1 || packedCount > 0) {
         const qty = document.createElement("span");
         qty.className = "inventory-cell-qty";
-        qty.textContent = String(slot.quantity > 1 ? slot.quantity : packedCount);
+        qty.textContent = count(slot.quantity > 1 ? slot.quantity : packedCount);
         if (packedCount > 0 && slot.quantity <= 1) {
           qty.title = packedCount === 1 ? "1 item inside" : `${packedCount} items inside`;
         }
@@ -1683,9 +1838,19 @@ export class ContainerLootUI {
       const effect = wornGearEffectHint(slot.id);
       const itemName = def?.name ?? slot.id;
       if (effect) cell.title = `${itemName} · ${effect}`;
+      if (referralSlot) {
+        const mark = document.createElement("span");
+        mark.className = "inventory-cell-key";
+        mark.textContent = "Take";
+        cell.appendChild(mark);
+        cell.title = "Referral notes. Take them out and this slot closes.";
+      }
+
       cell.setAttribute(
         "aria-label",
-        `${itemName}${slot.quantity > 1 ? ` ×${slot.quantity}` : ""}${
+        `${itemName}${slot.quantity > 1 ? ` ×${count(slot.quantity)}` : ""}${
+          referralSlot ? " · take only" : ""
+        }${
           packedCount > 0 ? ` · ${packedCount} inside` : ""
         }${
           getEntryRadioFreq(slot) > 0 ? ` · freq ${getEntryRadioFreq(slot)}` : ""
@@ -1698,9 +1863,17 @@ export class ContainerLootUI {
 
       const takeToInventory = () => {
         if (source !== "container") return;
-        const toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
+        let toSlot = this.findFirstFittingPlayerSlot(slot.id, slot);
+        if (
+          toSlot < 0 &&
+          isBackpackItem(slot.id) &&
+          this.canDrop("container", slot, "player", BACKPACK_SLOT_INDEX)
+        ) {
+          toSlot = BACKPACK_SLOT_INDEX;
+        }
         if (toSlot < 0) return;
-        this.handlers.onTakeFromContainer(containerId, index, toSlot);
+        if (!this.handlers.onTakeFromContainer(containerId, index, toSlot)) return;
+        this.noteTake(slot, toSlot);
       };
 
       const storeToBox = () => {
@@ -1813,7 +1986,8 @@ export class ContainerLootUI {
           if (!this.canDrop(source, slot, toSource, toSlot)) return;
 
           if (source === "container" && toSource === "player") {
-            this.handlers.onTakeFromContainer(containerId, index, toSlot);
+            if (!this.handlers.onTakeFromContainer(containerId, index, toSlot)) return;
+            this.noteTake(slot, toSlot);
           } else if (source === "container" && toSource === "container") {
             this.handlers.onMoveInContainer(containerId, index, toSlot);
           } else if (source === "player" && toSource === "player") {
@@ -1929,47 +2103,122 @@ export class ContainerLootUI {
     }
   }
 
+  private dropPlayerSlot(index: number, quantity: number) {
+    const slot = this.playerInventory[index];
+    if (!slot || isQuestBoundEntry(slot) || quantity <= 0) return;
+    const qty = Math.min(quantity, slot.quantity);
+    this.handlers.onDrop(index, qty);
+    if (this.ms) {
+      const name = getItemDefinition(slot.id)?.name ?? slot.id;
+      showSheetMessage(
+        this.ms.snackSlot,
+        qty > 1 ? `Dropping ${name} ×${qty}…` : `Dropping ${name}…`,
+      );
+    }
+  }
+
+  /** Drop controls for one bag row. Quest items stay with you. */
+  private appendMsDropButtons(
+    actions: HTMLElement,
+    index: number,
+    slot: NonNullable<Inventory[number]>,
+  ) {
+    if (isQuestBoundEntry(slot)) return;
+    actions.append(
+      sheetButton(
+        slot.quantity > 1 ? "Drop 1" : "Drop",
+        "danger",
+        () => this.dropPlayerSlot(index, 1),
+        { small: true },
+      ),
+    );
+    if (slot.quantity > 1) {
+      actions.append(
+        sheetButton("Drop all", "danger", () => this.dropPlayerSlot(index, slot.quantity), {
+          small: true,
+        }),
+      );
+    }
+  }
+
   private syncPlayerUseBar() {
     const slot =
       this.selectedPlayerSlot >= 0
         ? this.playerInventory[this.selectedPlayerSlot]
         : null;
     if (!slot) {
-      this.playerUseDetailEl.textContent =
-        "Select a food, drink, or medical item to use it";
+      this.playerUseDetailEl.textContent = PLAYER_SLOT_HINT;
       this.playerUseBtn.hidden = true;
+      this.playerDropBtn.hidden = true;
+      this.playerDropAllBtn.hidden = true;
       return;
     }
     const def = getItemDefinition(slot.id);
     const name = def?.name ?? slot.id;
     this.playerUseDetailEl.textContent =
-      slot.quantity > 1 ? `${name} ×${slot.quantity}` : name;
+      slot.quantity > 1 ? `${name} ×${count(slot.quantity)}` : name;
     const action = this.playerUseAction(slot);
     this.playerUseBtn.hidden = !action;
     if (action) this.playerUseBtn.textContent = action.label;
+    const questBound = isQuestBoundEntry(slot);
+    this.playerDropBtn.hidden = questBound;
+    this.playerDropBtn.textContent = "Drop 1";
+    this.playerDropAllBtn.hidden = questBound || slot.quantity <= 1;
+    this.playerDropAllBtn.textContent = "Drop All";
   }
 
   private canDrop(
     fromSource: DragSource,
-    entry: { id: string; quantity: number; contents?: ({ id: string; quantity: number } | null)[] },
+    entry: NonNullable<Inventory[number]>,
     toSource: DragSource,
     toSlot: number,
   ): boolean {
     const itemId = entry.id;
     const access = inventorySlotAccess(this.playerInventory, this.extraPockets);
     if (fromSource === "container" && toSource === "player") {
+      if (this.isDepositHoldIndex(this.dragFromSlot)) {
+        const dest = this.playerInventory[toSlot];
+        if (dest && dest.id !== itemId) return false;
+        if (
+          dest &&
+          dest.id === itemId &&
+          dest.quantity >= slotStackLimit(itemId, toSlot)
+        ) {
+          return false;
+        }
+      }
       if (loadedBackpackStowBlocked(entry, toSlot)) return false;
       if (!itemFitsInSlot(itemId, toSlot, access)) return false;
       if (isJewelrySlot(toSlot)) {
         const dest = this.playerInventory[toSlot];
         if (dest && (entry.quantity > 1 || dest.id === itemId)) return false;
       }
-      if (toSlot === BACKPACK_SLOT_INDEX && isBackpackItem(itemId)) return true;
+      if (toSlot === BACKPACK_SLOT_INDEX && isBackpackItem(itemId)) {
+        const probe: Inventory = [entry];
+        return (
+          takeFromContainerSlot(
+            probe,
+            0,
+            this.playerInventory,
+            BACKPACK_SLOT_INDEX,
+          ) != null
+        );
+      }
       const next = this.playerInventory.map((slot) => (slot ? { ...slot } : null));
       next[toSlot] = { id: itemId, quantity: 1 };
       return !backpackOverflowWorsened(this.playerInventory, next);
     }
-    if (fromSource === "container" && toSource === "container") return true;
+    if (fromSource === "container" && toSource === "container") {
+      if (!this.isDeposit()) return true;
+      if (this.isDepositHoldIndex(toSlot)) return false;
+      const fromSlot = this.dragFromSlot;
+      if (fromSlot >= 0 && this.isDepositHoldIndex(fromSlot)) {
+        const dest = this.containerInventory[toSlot];
+        if (!dest) return true;
+        return dest.id === itemId && dest.quantity < maxStackForItem(itemId);
+      }
+      return true;
+    }
     if (fromSource === "player" && toSource === "player") {
       const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
       return (
@@ -1988,8 +2237,29 @@ export class ContainerLootUI {
       toSlot >= 0 &&
       toSlot < (this.storageBoxSlots() ?? 0)
     ) {
+      if (this.isDepositHoldIndex(toSlot)) return false;
       const fromSlot = this.dragFromSlot >= 0 ? this.dragFromSlot : toSlot;
-      if (backpackHoldsItems(this.playerInventory, fromSlot)) return false;
+      if (backpackHoldsItems(this.playerInventory, fromSlot)) {
+        const boxSlots = this.storageBoxSlots();
+        const destPack = this.containerInventory[toSlot];
+        if (
+          boxSlots == null ||
+          !destPack ||
+          !isBackpackItem(itemId) ||
+          !isBackpackItem(destPack.id)
+        ) {
+          return false;
+        }
+        return (
+          putIntoStorageBoxSlot(
+            this.playerInventory,
+            fromSlot,
+            this.containerInventory,
+            toSlot,
+            boxSlots,
+          ) != null
+        );
+      }
       const dest = this.containerInventory[toSlot];
       if (!dest) return true;
       if (dest.id === itemId && maxStackForItem(itemId) > 1) return true;
@@ -2016,10 +2286,7 @@ export class ContainerLootUI {
 
   private parsePileInventory(objectType: string, containerJson: string): Inventory {
     if (objectType === SAFE_DEPOSIT_OBJECT_TYPE) {
-      return parseStorageBoxInventory(
-        containerJson,
-        safeDepositSlotCountFromJson(containerJson),
-      );
+      return safeDepositViewInventory(containerJson);
     }
     const slots = storageBoxSlotsForObjectType(objectType);
     return slots != null
@@ -2028,7 +2295,9 @@ export class ContainerLootUI {
   }
 
   private findFirstStorageBoxSlot(itemId: string): number {
-    const limit = this.storageBoxSlots() ?? 0;
+    const limit = this.isDeposit()
+      ? this.depositRentedCount()
+      : (this.storageBoxSlots() ?? 0);
     const maxStack = maxStackForItem(itemId);
     if (maxStack > 1) {
       for (let i = 0; i < limit; i++) {

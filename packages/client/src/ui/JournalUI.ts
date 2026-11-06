@@ -53,8 +53,10 @@ import {
   chip,
   createSheet,
   filterChips,
+  count,
   markSheetOpen,
   meter,
+  money,
   renderTabs,
   sectionLabel,
   sheetButton,
@@ -690,8 +692,8 @@ export class JournalUI {
       rewardRow.appendChild(
         makeQuestCell({
           itemId: "banknote",
-          qtyLabel: `×${notes}`,
-          ariaLabel: `${notes} banknotes`,
+          qtyLabel: `×${count(notes)}`,
+          ariaLabel: `${count(notes)} banknotes`,
         }),
       );
     }
@@ -1107,7 +1109,7 @@ export class JournalUI {
   private questRewardText(def: QuestDefinition): string {
     const parts: string[] = [];
     const notes = questRewardBanknotes(def);
-    if (notes > 0) parts.push(`$${notes}`);
+    if (notes > 0) parts.push(money(notes));
     let rep = 0;
     for (const faction of REP_FACTIONS) rep += Math.max(0, questRewardReputation(def, faction));
     if (rep > 0) parts.push(`+${formatRepValue(rep)} rep`);
@@ -1263,7 +1265,7 @@ export class JournalUI {
     const rewards: HTMLElement[] = [];
     const notes = questRewardBanknotes(def);
     if (notes > 0) {
-      rewards.push(sheetRow({ iconItemId: "banknote", qty: notes, name: "Banknotes", meta: [`$${notes}`] }));
+      rewards.push(sheetRow({ iconItemId: "banknote", qty: notes, name: "Banknotes", meta: [money(notes)] }));
     }
     for (const faction of REP_FACTIONS) {
       const rep = questRewardReputation(def, faction);

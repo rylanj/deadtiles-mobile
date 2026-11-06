@@ -166,6 +166,12 @@ export {
 const TREE_DISPLAY_HEIGHT = 224;
 /** Extra screen-Y for tree footing (positive = lower). */
 const TREE_BOTTOM_PAD = Math.round(TREE_DISPLAY_HEIGHT * 0.10);
+/**
+ * Tiles from the cursor to a tree's trunk. The canopy is drawn up-screen of
+ * the stump, so a hover on the leaves is many tiles from the origin.
+ */
+const TREE_HOVER_REACH =
+  Math.ceil((TREE_DISPLAY_HEIGHT - TREE_BOTTOM_PAD) / (TILE_HEIGHT / 2)) + 1;
 /** On-screen height for Streetlight1 (source art is 256×256). */
 const STREETLIGHT_DISPLAY_HEIGHT = 208;
 /** Extra screen-Y so the base sits lower on the curb (positive = lower). */
@@ -202,6 +208,9 @@ export function clearLootHoverTint(sprite: LootHoverSprite | null | undefined) {
   sprite.clearTint();
   if (!sprite.getData(LOOT_HOVER_FX_KEY)) return;
   sprite.preFX?.clear();
+  // clear() drops the effect but leaves the sprite on the FX pipeline.
+  // The Android WebView then draws that empty target as a light rectangle.
+  sprite.resetPipeline();
   sprite.setData(LOOT_HOVER_FX_KEY, false);
 }
 
@@ -1536,6 +1545,10 @@ export class WorldTileManager {
   private edgeDecalObjects = new Map<string, Phaser.GameObjects.Image>();
   /** Tree sprites keyed by tileKey. */
   private treeObjects = new Map<string, Phaser.GameObjects.Image>();
+  /** Tree sprite currently yellow-tinted for chop or fallen-log hover. */
+  private hoveredTreeKey: string | null = null;
+  /** Texture identity the hover tint was applied to, so a fall frame can refresh it. */
+  private hoveredTreeTex = "";
   /** Streetlight sprites keyed by tileKey. */
   private streetlightObjects = new Map<string, Phaser.GameObjects.Image>();
   private graveObjects = new Map<string, Phaser.GameObjects.Image>();
@@ -1871,6 +1884,62 @@ export class WorldTileManager {
     if (bestDoor) return bestDoor;
     const cart = isoToCartesian(worldX, worldY);
     return getCellarAt(Math.floor(cart.x), Math.floor(cart.y));
+  }
+
+  /**
+   * Frontmost tree sprite whose opaque pixels cover this world point.
+   * The canopy stands on one tile and paints up-screen, so the hit is often
+   * not the trunk tile. The caller still treats that trunk tile as a hit.
+   */
+  pickTreeSpriteAtWorld(
+    worldX: number,
+    worldY: number,
+  ): { x: number; y: number; depth: number } | null {
+    const cart = isoToCartesian(worldX, worldY);
+    const cx = Math.floor(cart.x);
+    const cy = Math.floor(cart.y);
+    let best: { x: number; y: number; depth: number } | null = null;
+    for (const [key, img] of this.treeObjects) {
+      if (!img.visible || !img.active) continue;
+      const comma = key.indexOf(",");
+      const tx = Number(key.slice(0, comma));
+      const ty = Number(key.slice(comma + 1));
+      if (
+        Math.abs(tx - cx) > TREE_HOVER_REACH ||
+        Math.abs(ty - cy) > TREE_HOVER_REACH
+      ) {
+        continue;
+      }
+      if (!img.getBounds().contains(worldX, worldY)) continue;
+      if (!IS_MOBILE && !spriteOpaqueAtWorldPoint(img, worldX, worldY)) continue;
+      if (best && img.depth <= best.depth) continue;
+      best = { x: tx, y: ty, depth: img.depth };
+    }
+    return best;
+  }
+
+  /** Yellow-tints one tree sprite. Pass nulls to clear. */
+  setHoveredTree(tx: number | null, ty: number | null) {
+    const key = tx != null && ty != null ? tileKey(tx, ty) : null;
+    if (key !== this.hoveredTreeKey) {
+      this.clearHoveredTreeImage(this.hoveredTreeKey);
+      this.hoveredTreeKey = key;
+      this.hoveredTreeTex = "";
+    }
+    if (!key) return;
+    const img = this.treeObjects.get(key);
+    if (!img?.active) return;
+    const tex = `${img.texture?.key ?? ""}:${img.frame?.name ?? ""}`;
+    if (this.hoveredTreeTex === tex && img.getData(LOOT_HOVER_FX_KEY)) return;
+    if (img.getData(LOOT_HOVER_FX_KEY)) clearLootHoverTint(img);
+    applyLootHoverTint(img);
+    this.hoveredTreeTex = tex;
+  }
+
+  private clearHoveredTreeImage(key: string | null) {
+    if (!key) return;
+    const img = this.treeObjects.get(key);
+    if (img?.active) clearLootHoverTint(img);
   }
 
   /**
@@ -3517,6 +3586,10 @@ export class WorldTileManager {
       const ty = parseInt(key.slice(comma + 1), 10);
       if (!outside(tx, ty, tx, ty)) continue;
       treeKeysToRemove.push(key);
+      if (key === this.hoveredTreeKey) {
+        this.hoveredTreeKey = null;
+        this.hoveredTreeTex = "";
+      }
       img.destroy();
     }
     for (const key of treeKeysToRemove) {

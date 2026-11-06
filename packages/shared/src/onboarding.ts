@@ -192,6 +192,7 @@ export const TUTORIAL_TIP_IDS = [
   "firearm",
   "locked_door",
   "other_survivor",
+  "nearby_chat",
   "skill_magazine",
   "radio",
   "rain",
@@ -331,6 +332,12 @@ export const TUTORIAL_TIPS: Record<TutorialTipId, TutorialTipDef> = {
     id: "other_survivor",
     title: "Another survivor",
     body: "Another survivor is nearby. Outside Birchport, other players can kill you and take what you are carrying. Town is the safe ground.",
+  },
+  nearby_chat: {
+    id: "nearby_chat",
+    title: "Chat",
+    body: "Someone nearby is chatting. Press Enter to chat.",
+    mobileBody: "Someone nearby is chatting. Tap the speech bubble to chat.",
   },
   skill_magazine: {
     id: "skill_magazine",

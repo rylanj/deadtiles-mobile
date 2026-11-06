@@ -344,7 +344,7 @@ export function skillMagazineBonusSkills(itemId: string): readonly SubSkillId[] 
 
 /**
  * Weapon blueprints are not loot. Learning one unlocks that craft recipe.
- * recipeId matches the workbench recipe in crafting.ts.
+ * recipeId matches the gun bench recipe in crafting.ts.
  */
 export const WEAPON_BLUEPRINTS = [
   { itemId: "blueprint_pistol", name: "Pistol Blueprint", recipeId: "craft_pistol" },
@@ -1643,6 +1643,8 @@ export function backpackHoldsItems(inventory: Inventory, slotIndex: number): boo
 /**
  * A backpack that still holds items can be worn or dropped on the floor.
  * It cannot be placed in a pocket or inside another pack.
+ * Switching the worn pack is handled separately: the items move into the new
+ * pack when they fit, and this check then sees an empty pack.
  */
 export function loadedBackpackStowBlocked(
   entry: { contents?: readonly ({ quantity: number } | null)[] } | null | undefined,
@@ -1650,6 +1652,82 @@ export function loadedBackpackStowBlocked(
 ): boolean {
   if (!backpackContentsHaveItems(entry)) return false;
   return isPocketSlot(destSlot) || isBackpackStorageIndex(destSlot);
+}
+
+/** Occupied cells sealed on a backpack, with gaps kept and trailing holes dropped. */
+function sealedPackCells(entry: InventoryEntry | null | undefined): (InventoryEntry | null)[] {
+  if (!entry?.contents?.length) return [];
+  const cells: (InventoryEntry | null)[] = [];
+  const limit = Math.min(entry.contents.length, MAX_BACKPACK_STORAGE_SLOTS);
+  for (let i = 0; i < limit; i++) {
+    const cell = entry.contents[i];
+    cells[i] = cell && cell.quantity > 0 && getItemDefinition(cell.id) ? cell : null;
+  }
+  while (cells.length > 0 && !cells[cells.length - 1]) cells.pop();
+  return cells;
+}
+
+function densePackStacks(cells: readonly (InventoryEntry | null)[]): InventoryEntry[] {
+  const stacks: InventoryEntry[] = [];
+  for (const cell of cells) {
+    if (cell) stacks.push(cell);
+  }
+  return stacks;
+}
+
+/**
+ * Move items out of the backpack leaving the worn slot and into the backpack
+ * that will be worn, when every stack fits.
+ * Items already sealed in the incoming pack stay there and use slots.
+ * The leaving pack is emptied so it can sit in a pocket or a container.
+ * Slot positions are kept when the two packs do not share a slot and nothing
+ * sits past the new capacity. Otherwise the stacks pack to the front, with
+ * the worn pack's items first.
+ * Returns false when they do not fit. Neither pack changes in that case.
+ * An empty worn pack returns true and leaves the incoming pack alone.
+ */
+function moveWornPackContents(leaving: InventoryEntry, incoming: InventoryEntry): boolean {
+  if (!isBackpackItem(leaving.id) || !isBackpackItem(incoming.id)) return false;
+  const wornCells = sealedPackCells(leaving);
+  const wornStacks = densePackStacks(wornCells);
+  if (wornStacks.length === 0) return true;
+
+  const cap = backpackStorageCount(incoming.id);
+  const incomingCells = sealedPackCells(incoming);
+  const incomingStacks = densePackStacks(incomingCells);
+  if (wornStacks.length + incomingStacks.length > cap) return false;
+
+  const withinCap = (cells: readonly (InventoryEntry | null)[]) =>
+    cells.every((cell, index) => !cell || index < cap);
+  let overlap = false;
+  const span = Math.max(wornCells.length, incomingCells.length);
+  for (let i = 0; i < span; i++) {
+    if (wornCells[i] && incomingCells[i]) {
+      overlap = true;
+      break;
+    }
+  }
+
+  let nextContents: (InventoryEntry | null)[];
+  if (withinCap(wornCells) && withinCap(incomingCells) && !overlap) {
+    nextContents = [];
+    for (let i = 0; i < span; i++) {
+      const cell = wornCells[i] ?? incomingCells[i] ?? null;
+      nextContents[i] = cell ? cloneInventoryEntry(cell) : null;
+    }
+    while (nextContents.length > 0 && !nextContents[nextContents.length - 1]) {
+      nextContents.pop();
+    }
+  } else {
+    nextContents = [...wornStacks, ...incomingStacks].map((cell) =>
+      cloneInventoryEntry(cell),
+    );
+  }
+
+  delete leaving.contents;
+  if (nextContents.some((cell) => cell)) incoming.contents = nextContents;
+  else delete incoming.contents;
+  return true;
 }
 
 function replaceMagazines(target: WeaponMagazines, next: WeaponMagazines): void {
@@ -2450,10 +2528,23 @@ export function moveInventorySlot(
   if (wornLeaves) sealWornPack(next, magWork);
   const from = next[fromSlot];
   if (!from || !getItemDefinition(from.id)) return inventory;
-  if (loadedBackpackStowBlocked(from, toSlot)) return inventory;
-  if (!itemFitsInSlot(from.id, toSlot, access)) return inventory;
 
   const to = next[toSlot];
+  if (
+    to &&
+    isBackpackItem(from.id) &&
+    isBackpackItem(to.id) &&
+    (fromSlot === BACKPACK_SLOT_INDEX || toSlot === BACKPACK_SLOT_INDEX) &&
+    !isBackpackStorageIndex(fromSlot) &&
+    !isBackpackStorageIndex(toSlot)
+  ) {
+    const leaving = fromSlot === BACKPACK_SLOT_INDEX ? from : to;
+    const incoming = fromSlot === BACKPACK_SLOT_INDEX ? to : from;
+    if (!moveWornPackContents(leaving, incoming)) return inventory;
+  }
+
+  if (loadedBackpackStowBlocked(from, toSlot)) return inventory;
+  if (!itemFitsInSlot(from.id, toSlot, access)) return inventory;
   if (to && loadedBackpackStowBlocked(to, fromSlot)) return inventory;
   if (!to) {
     const piece = placeOneJewelryPiece(from, toSlot);
@@ -3480,9 +3571,18 @@ export function putIntoStorageBoxSlot(
   }
   const from = nextPlayer[fromSlot];
   if (!from || !getItemDefinition(from.id)) return null;
-  if (backpackContentsHaveItems(from)) return null;
 
   const to = nextContainer[toSlot];
+  if (
+    to &&
+    fromSlot === BACKPACK_SLOT_INDEX &&
+    isBackpackItem(from.id) &&
+    isBackpackItem(to.id)
+  ) {
+    if (!moveWornPackContents(from, to)) return null;
+  } else if (backpackContentsHaveItems(from)) {
+    return null;
+  }
   if (to && loadedBackpackStowBlocked(to, fromSlot)) return null;
   const packed = (playerInv: Inventory) => {
     const committed = commitPlayerPack(playerInventory, playerInv, magWork, magazines);
@@ -3881,7 +3981,16 @@ export function takeFromContainerSlot(
   if (!itemFitsInSlot(from.id, toSlot, access)) return null;
 
   const to = nextPlayer[toSlot];
-  if (to && backpackContentsHaveItems(to)) return null;
+  if (
+    to &&
+    toSlot === BACKPACK_SLOT_INDEX &&
+    isBackpackItem(from.id) &&
+    isBackpackItem(to.id)
+  ) {
+    if (!moveWornPackContents(to, from)) return null;
+  } else if (to && backpackContentsHaveItems(to)) {
+    return null;
+  }
   const packed = (playerInv: Inventory) => {
     const committed = commitPlayerPack(
       playerInventory,

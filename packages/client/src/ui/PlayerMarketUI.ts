@@ -24,6 +24,7 @@ import {
   drawerHead,
   filterChips,
   kvCard,
+  count,
   markSheetOpen,
   money,
   openDrawer,
@@ -40,12 +41,13 @@ import "./mobile/market.css";
 
 function eachPrice(price: number, quantity: number): string {
   const each = price / Math.max(1, quantity);
-  return Number.isInteger(each) ? `$${each}` : `$${each.toFixed(2)}`;
+  if (Number.isInteger(each)) return money(each);
+  return `$${each.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function traderRangeText(itemId: string): string {
   const range = traderSellPriceRange(itemId);
-  return range.low === range.high ? `$${range.low}` : `$${range.low} - $${range.high}`;
+  return range.low === range.high ? money(range.low) : `${money(range.low)} - ${money(range.high)}`;
 }
 
 export type PlayerMarketUIHandlers = {
@@ -550,8 +552,8 @@ export class PlayerMarketUI {
       };
     }
     const carried = countItemInInventory(parseInventory(this.inventoryJson), "banknote");
-    this.boardNotesEl.textContent = `$${carried}`;
-    this.boardNotesEl.setAttribute("aria-label", `${carried} banknotes`);
+    this.boardNotesEl.textContent = money(carried);
+    this.boardNotesEl.setAttribute("aria-label", `${count(carried)} banknotes`);
     this.boardPage = payload.boardPage ?? 0;
     this.boardPages = payload.boardPages ?? 0;
     this.boardSort = payload.boardSort === "cheap" ? "cheap" : "new";
@@ -705,7 +707,7 @@ export class PlayerMarketUI {
     if (hasNotes) {
       const notes = document.createElement("p");
       notes.className = "market-desk-notes";
-      notes.textContent = `${this.desk.banknotes} banknotes waiting`;
+      notes.textContent = `${count(this.desk.banknotes)} banknotes waiting`;
       this.deskEl.append(notes);
     }
     const collect = document.createElement("button");
@@ -925,7 +927,7 @@ export class PlayerMarketUI {
       const fee = document.createElement("div");
       fee.className = "market-fee";
       const cut = price - marketSalePayout(price, this.ashenReputation);
-      fee.textContent = `Fee on sale is $${Math.max(0, cut)} (${this.desk.feePercent}%)`;
+      fee.textContent = `Fee on sale is ${money(Math.max(0, cut))} (${this.desk.feePercent}%)`;
       this.hintEl.append(fee);
     }
   }
@@ -1071,7 +1073,7 @@ export class PlayerMarketUI {
     const stateLabel = listing.awaitingPayout ? ", sold" : expiredNow ? ", expired" : "";
     summary.setAttribute(
       "aria-label",
-      `${expanded ? "Collapse" : "Expand"} ${name}, ×${listing.quantity}${stateLabel}, $${listing.price}`,
+      `${expanded ? "Collapse" : "Expand"} ${name}, ×${listing.quantity}${stateLabel}, ${money(listing.price)}`,
     );
 
     const icon = document.createElement("div");
@@ -1088,7 +1090,7 @@ export class PlayerMarketUI {
 
     const price = document.createElement("span");
     price.className = "market-row-price";
-    price.textContent = `$${listing.price}`;
+    price.textContent = money(listing.price);
 
     const sold = document.createElement("span");
     sold.className = "market-row-sold";
@@ -1141,7 +1143,7 @@ export class PlayerMarketUI {
     } else if (listing.awaitingPayout) {
       const line = document.createElement("div");
       line.className = "market-fee";
-      line.textContent = `Collect $${listing.payout} (Fee $${listingFee(listing.price, listing.payout)})`;
+      line.textContent = `Collect ${money(listing.payout)} (Fee ${money(listingFee(listing.price, listing.payout))})`;
       const button = document.createElement("button");
       button.type = "button";
       button.className = "market-action";
@@ -1173,7 +1175,7 @@ export class PlayerMarketUI {
     } else {
       const fee = document.createElement("div");
       fee.className = "market-fee";
-      fee.textContent = `Fee on sale is $${listingFee(listing.price, listing.payout)} (${this.desk.feePercent}%)`;
+      fee.textContent = `Fee on sale is ${money(listingFee(listing.price, listing.payout))} (${this.desk.feePercent}%)`;
       const button = document.createElement("button");
       button.type = "button";
       button.className = "market-action";

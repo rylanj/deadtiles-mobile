@@ -336,7 +336,8 @@ export function sheetRow(opts: RowOptions): HTMLElement {
     if (img) ico.append(img);
     else ico.append(el("span", "ms-row-ico-txt", opts.iconText ?? opts.name.slice(0, 10)));
     if (opts.qty != null && opts.qty !== "" && opts.qty !== 1) {
-      ico.append(el("span", "ms-row-q", String(opts.qty)));
+      const label = typeof opts.qty === "number" ? count(opts.qty) : String(opts.qty);
+      ico.append(el("span", "ms-row-q", label));
     }
     row.append(ico);
   }

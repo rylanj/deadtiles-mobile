@@ -1191,6 +1191,8 @@ export type ServerMessage =
         inInterior?: boolean;
         /** Kevin only. True after the safe deposit fee is paid. */
         safeDepositRented?: boolean;
+        /** Kevin only. Referral notes are waiting and the box has not been paid for. */
+        safeDepositHold?: boolean;
         /** Kevin only. Notes waiting on the desk after a Deadmark buy. */
         buybackReadyNotes?: number;
         /**
@@ -1331,6 +1333,8 @@ export type ServerMessage =
         inInterior: boolean;
         buildingX: number;
         buildingY: number;
+        /** Storey the zombie is on. 0 is the ground floor. */
+        interiorLevel?: number;
       };
     }
   | {

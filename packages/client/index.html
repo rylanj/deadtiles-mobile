@@ -1208,6 +1208,7 @@
         color: #e8f8e8;
         font: 700 11px/1.1 system-ui, sans-serif;
         font-variant-numeric: tabular-nums;
+        white-space: nowrap;
         pointer-events: none;
         z-index: 1;
         text-shadow:
@@ -2976,6 +2977,13 @@
         border-color: #e6c15a;
         box-shadow: inset 0 0 0 1px #e6c15a;
       }
+      .inventory-cell--deposit-hold {
+        border-color: #e6c15a;
+        box-shadow: inset 0 0 0 1px rgba(230, 193, 90, 0.7);
+      }
+      .inventory-cell--deposit-hold .inventory-cell-key {
+        color: #e6c15a;
+      }
       /* Trader items are tap-only (no drag) — keep pan-y so lists can scroll on touch. */
       .trader-cell.inventory-cell--filled {
         touch-action: pan-y;
@@ -4031,6 +4039,14 @@
       body.market-open #loot-popup-container {
         z-index: 130;
       }
+      /* Sit above the container screen, in the same bottom spot as quest rewards. */
+      body.container-loot-open #loot-popup-container {
+        z-index: 140;
+      }
+      body.container-loot-open #loot-popup-container .loot-card {
+        pointer-events: auto;
+        cursor: pointer;
+      }
       .loot-card {
         background: rgba(15, 20, 15, 0.88);
         border: 1px solid rgba(100, 220, 100, 0.55);
@@ -4038,6 +4054,8 @@
         padding: 10px 16px 10px 14px;
         min-width: 180px;
         max-width: min(420px, 90vw);
+        max-height: min(46vh, 380px);
+        overflow-y: auto;
         color: #d4f0d4;
         font: 14px/1.5 system-ui, sans-serif;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
@@ -4291,6 +4309,21 @@
         .main-menu-panel {
           animation: none;
         }
+      }
+      /*
+        Mali GPUs (Solana Seeker) kill the process when a backdrop-filter
+        layer changes size. Logging in grows this panel, and the next launch
+        does it again from the saved session. The APK uses a solid panel.
+      */
+      body.is-native #main-menu::before,
+      body.is-native #main-menu::after {
+        filter: none;
+        animation: none;
+      }
+      body.is-native .main-menu-panel {
+        background: linear-gradient(165deg, #1c2418 0%, #101410 100%);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
       }
       .main-menu-header {
         padding: 32px 28px 20px;
@@ -4736,7 +4769,11 @@
         margin-bottom: 10px;
       }
       .referral-payout-row {
-        align-items: center;
+        align-items: flex-start;
+      }
+      .referral-payout-copy {
+        min-width: 0;
+        flex: 1;
       }
       .referral-approve {
         flex: 0 0 auto;
@@ -4851,9 +4888,169 @@
       }
       .admin-menu-list {
         max-height: 180px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+      }
+      .admin-bounty-row {
+        align-items: flex-start;
+      }
+      .admin-bounty-copy {
+        min-width: 0;
+        flex: 1;
+      }
+      .admin-bounty-copy .referral-menu-name,
+      .admin-bounty-url,
+      .admin-bounty-note {
+        overflow-wrap: anywhere;
+      }
+      .admin-bounty-url {
+        display: block;
+        margin-top: 2px;
+        font: 12px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: #b4f04a;
+        text-decoration: none;
+      }
+      .admin-bounty-url:hover {
+        text-decoration: underline;
+      }
+      .admin-bounty-note {
+        margin-top: 2px;
+        font: 12px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: rgba(220, 236, 210, 0.82);
+        white-space: pre-wrap;
+      }
+      .admin-bounty-meta {
+        margin-top: 2px;
+        font: 11px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.75);
+        overflow-wrap: anywhere;
+      }
+      .admin-payout-dialog {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        background: rgba(5, 8, 5, 0.55);
+        overflow-y: auto;
+      }
+      .admin-payout-label {
+        display: block;
+        margin: 14px 0 0;
+        font-family: Oswald, sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(220, 236, 210, 0.92);
+      }
+      .admin-payout-label + .admin-payout-field {
+        margin-top: 6px;
+      }
+      textarea.admin-payout-field {
+        min-height: 96px;
+        resize: vertical;
+        line-height: 1.45;
+      }
+      .admin-reason {
+        position: relative;
+        margin-top: 6px;
+      }
+      .admin-reason-trigger {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 0;
+        text-align: left;
+        cursor: pointer;
+      }
+      .admin-reason-trigger:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .admin-reason-value.is-placeholder {
+        color: rgba(158, 180, 158, 0.55);
+      }
+      .admin-reason-chevron {
+        flex: 0 0 auto;
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(159, 232, 48, 0.85);
+        border-bottom: 2px solid rgba(159, 232, 48, 0.85);
+        transform: translateY(-2px) rotate(45deg);
+      }
+      .admin-reason.is-open .admin-reason-chevron {
+        transform: translateY(2px) rotate(225deg);
+      }
+      .admin-reason-menu {
+        position: absolute;
+        z-index: 3;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        padding: 4px;
+        border: 1px solid rgba(159, 232, 48, 0.35);
+        border-radius: 8px;
+        background: #10140f;
+        box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
+      }
+      .admin-reason-menu[hidden] {
+        display: none;
+      }
+      .admin-reason-option {
+        display: block;
+        width: 100%;
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        text-align: left;
+        font: 13px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: #e8f4e8;
+        background: transparent;
+        cursor: pointer;
+      }
+      .admin-reason-option:hover,
+      .admin-reason-option.is-active,
+      .admin-reason-option:focus-visible {
+        background: rgba(159, 232, 48, 0.14);
+        outline: none;
+      }
+      .admin-reason-option[aria-selected="true"] {
+        color: #9fe830;
+      }
+      .admin-payout-hint {
+        margin: 12px 0 0;
+        font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+        color: rgba(220, 236, 210, 0.9);
+      }
+      .admin-payout-field {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 12px;
+        border: 1px solid rgba(159, 232, 48, 0.28);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: 13px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: #e8f4e8;
+        background: rgba(0, 0, 0, 0.35);
+        outline: none;
+      }
+      .admin-payout-field:focus {
+        border-color: rgba(159, 232, 48, 0.65);
+      }
+      .admin-payout-actions {
+        justify-content: flex-end;
+        margin-top: 14px;
       }
       .admin-menu-row {
         align-items: center;
+      }
+      .referral-payout-row.admin-menu-row {
+        align-items: flex-start;
       }
       .admin-menu-row .referral-menu-meta {
         text-align: left;
@@ -4915,6 +5112,90 @@
       }
       .admin-menu-manual-hint:empty {
         display: none;
+      }
+      .admin-menu-lookup-result {
+        margin: 6px 2px 0;
+        font: 13px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: #e8f4e8;
+      }
+      .admin-menu-lookup-result:empty {
+        display: none;
+      }
+      .admin-referral-signups {
+        max-height: 280px;
+        margin-top: 8px;
+      }
+      .admin-referral-signups:empty {
+        display: none;
+      }
+      .admin-referral-signup {
+        align-items: flex-start;
+      }
+      .admin-referral-copy {
+        min-width: 0;
+        flex: 1;
+      }
+      .admin-referral-wallet {
+        font: 12px/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
+        color: rgba(220, 236, 210, 0.9);
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-name {
+        margin-top: 2px;
+        font: 14px/1.3 "Segoe UI", system-ui, sans-serif;
+        font-weight: 600;
+        color: #e8f4e8;
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-ip {
+        margin-top: 2px;
+        font: 12px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.85);
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-ip-shared {
+        color: #f0c090;
+        font-weight: 700;
+      }
+      .admin-referral-agent {
+        margin-top: 2px;
+        font: 11px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.7);
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-flag {
+        margin-top: 2px;
+        font: 12px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: #f0c090;
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-flag:empty {
+        display: none;
+      }
+      .admin-referral-flag--same {
+        color: #f0a0a0;
+        font-weight: 700;
+      }
+      .referral-menu-row.admin-referral-signup--same {
+        border-color: rgba(240, 160, 160, 0.55);
+      }
+      .admin-referral-when {
+        margin-top: 2px;
+        font: 12px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: rgba(158, 180, 158, 0.85);
+        overflow-wrap: anywhere;
+      }
+      .admin-referral-mark {
+        flex: 0 0 auto;
+        width: 22px;
+        text-align: center;
+        font: 16px/1 "Segoe UI", system-ui, sans-serif;
+      }
+      .admin-referral-mark--done {
+        color: #b4f04a;
+      }
+      .admin-referral-mark--open {
+        color: #f0a0a0;
       }
       .main-menu-sign-out {
         border: none;

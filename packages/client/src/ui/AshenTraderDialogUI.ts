@@ -51,7 +51,7 @@ import {
 import { resetDialogScroll } from "./dialogScroll";
 import { playerAvatarSrc } from "./playerAvatar";
 import { claimPageOverlay } from "./pageOverlay";
-import { createStepper, kvCard, quickAmounts, sectionLabel } from "./mobileSheet";
+import { count, createStepper, kvCard, money, quickAmounts, sectionLabel } from "./mobileSheet";
 import { bindPhoneDialogResize, usePhoneDialogSheet } from "./phoneDialog";
 import { PhoneTalkNav, TalkSheet, syncTalkSheet, talkJobReward, type TalkPush } from "./talkSheet";
 
@@ -120,6 +120,7 @@ export class AshenTraderDialogUI {
   private inventoryJson = "[]";
   private extraPockets = 0;
   private safeDepositRented = false;
+  private safeDepositHold = false;
   private expandedQuestId: string | null = null;
   private denyQuestId = "";
   private denyReason = "";
@@ -287,6 +288,7 @@ export class AshenTraderDialogUI {
     questsJson?: string;
     extraPockets?: number;
     safeDepositRented?: boolean;
+    safeDepositHold?: boolean;
     buybackReadyNotes?: number;
   }) {
     this.npcId = opts.npcId;
@@ -306,6 +308,7 @@ export class AshenTraderDialogUI {
     this.questsJson = opts.questsJson ?? "";
     this.extraPockets = opts.extraPockets ?? 0;
     this.safeDepositRented = !!opts.safeDepositRented;
+    this.safeDepositHold = !!opts.safeDepositHold;
     this.buybackReadyHint = Math.max(0, Math.floor(opts.buybackReadyNotes ?? 0));
     this.expandedQuestId = null;
     this.denyQuestId = "";
@@ -585,14 +588,21 @@ export class AshenTraderDialogUI {
                   : undefined;
       const collectReady =
         line.action === "buyback" && this.isMarketTrader() && this.buybackCollectNotes() > 0;
+      const depositNotes =
+        line.action === "deposit" &&
+        this.isMarketTrader() &&
+        this.safeDepositHold &&
+        !this.safeDepositRented;
       const speech =
         collectReady && line.playerCollect
           ? line.playerCollect
-          : line.action === "deposit" && this.safeDepositRented && line.playerRented
-            ? line.playerRented
-            : line.player;
+          : depositNotes && line.playerHold
+            ? line.playerHold
+            : line.action === "deposit" && this.safeDepositRented && line.playerRented
+              ? line.playerRented
+              : line.player;
       fillSpeechButton(btn, speech, iconId);
-      if (collectReady) {
+      if (collectReady || depositNotes) {
         btn.classList.add("ashen-dialog-speech-btn--ready");
         markSpeechReady(btn);
       }
@@ -695,7 +705,12 @@ export class AshenTraderDialogUI {
       !this.isTraderMan() && active.npcGuard
         ? active.npcGuard
         : this.isMarketTrader() && active.npcMarket
-          ? active.id === "buyback" &&
+          ? active.id === "deposit" &&
+            this.safeDepositHold &&
+            !this.safeDepositRented &&
+            active.npcMarketHold
+            ? active.npcMarketHold
+            : active.id === "buyback" &&
             this.buybackCollectNotes() > 0 &&
             active.npcMarketCollect
             ? active.npcMarketCollect
@@ -1468,6 +1483,24 @@ export class AshenTraderDialogUI {
 
     const details = document.createElement("div");
     details.className = "craft-recipe-details";
+    if (this.safeDepositHold && this.npcId) {
+      const holdTitle = document.createElement("div");
+      holdTitle.className = "red-dialog-task-heading";
+      holdTitle.textContent = "Referral notes";
+      details.appendChild(holdTitle);
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "red-dialog-complete-btn";
+      openBtn.textContent = "Open the box";
+      const traderId = this.npcId;
+      openBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.handlers.onClose();
+        this.handlers.onRequestDeposit(traderId);
+      });
+      details.appendChild(openBtn);
+    }
+
     const costTitle = document.createElement("div");
     costTitle.className = "red-dialog-task-heading";
     costTitle.textContent = "Safe deposit box";
@@ -1478,8 +1511,8 @@ export class AshenTraderDialogUI {
     costRow.appendChild(
       makeQuestCell({
         itemId: "banknote",
-        qtyLabel: `×${SAFE_DEPOSIT_COST}`,
-        ariaLabel: `${SAFE_DEPOSIT_COST} banknotes`,
+        qtyLabel: `×${count(SAFE_DEPOSIT_COST)}`,
+        ariaLabel: `${count(SAFE_DEPOSIT_COST)} banknotes`,
       }),
     );
     details.appendChild(costRow);
@@ -1488,7 +1521,7 @@ export class AshenTraderDialogUI {
       const payBtn = document.createElement("button");
       payBtn.type = "button";
       payBtn.className = "red-dialog-complete-btn";
-      payBtn.textContent = `Pay $${SAFE_DEPOSIT_COST}`;
+      payBtn.textContent = `Pay ${money(SAFE_DEPOSIT_COST)}`;
       payBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (this.npcId) this.handlers.onPayDeposit(this.npcId);
@@ -1497,7 +1530,7 @@ export class AshenTraderDialogUI {
     } else {
       const hint = document.createElement("div");
       hint.className = "craft-recipe-hint";
-      hint.textContent = `Need $${SAFE_DEPOSIT_COST} (you have $${banknotes})`;
+      hint.textContent = `Need ${money(SAFE_DEPOSIT_COST)} (you have ${money(banknotes)})`;
       details.appendChild(hint);
     }
 
@@ -1703,8 +1736,8 @@ export class AshenTraderDialogUI {
     rewardRow.append(
       makeQuestCell({
         itemId: "banknote",
-        qtyLabel: `×${notes}`,
-        ariaLabel: `${notes} banknotes`,
+        qtyLabel: `×${count(notes)}`,
+        ariaLabel: `${count(notes)} banknotes`,
       }),
       makeQuestCell({
         itemId: "rep",

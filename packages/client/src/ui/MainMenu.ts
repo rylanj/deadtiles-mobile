@@ -23,6 +23,7 @@ import {
 import {
   clearStoredSession,
   approveReferralPayout,
+  rejectReferralPayout,
   banAdminPlayer,
   fetchAdminBoard,
   fetchPlayerPreview,
@@ -30,15 +31,20 @@ import {
   kickAdminPlayer,
   loadCachedAuthSession,
   loginWithSolanaWallet,
+  lookupReferralSignups,
   registerSurvivorName,
   restoreAuthSession,
+  reviewBountyClaim,
   storeAuthSession,
   unbanAdminPlayer,
   type AdminBoard,
+  type BountyClaim,
   type AuthSession,
   type PlayerPreview,
   type ReferralBoard,
+  type ReferralFlags,
   type ReferralPayout,
+  type ReferralSignupPlayer,
 } from "../network/ColyseusClient";
 import { ensureCountyRadio, forgetCountyRadio } from "../network/countyRadio";
 import { getWallets } from "@wallet-standard/app";
@@ -215,6 +221,217 @@ function formatSignupWhen(createdAt: number): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function formatAdminWhen(unixSeconds: number): string {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) return "";
+  const date = new Date(unixSeconds * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function bountyStatusLabel(status: string): string {
+  if (status === "approved") return "Approved";
+  if (status === "rejected") return "Rejected";
+  if (status === "pending") return "Pending";
+  return status;
+}
+
+function bountyClaimHref(url: string): string | null {
+  if (url.startsWith("https://") || url.startsWith("http://")) return url;
+  return null;
+}
+
+function referralSignupCountText(name: string, signups: number, finished: number): string {
+  const count =
+    signups === 1
+      ? "1 player signed up"
+      : `${signups.toLocaleString("en-US")} players signed up`;
+  const done =
+    finished === 1
+      ? "1 completed the tutorial"
+      : `${finished.toLocaleString("en-US")} completed the tutorial`;
+  const line = `${count}, ${done}`;
+  const who = name.trim();
+  return who ? `${who}: ${line}` : line;
+}
+
+function maskWallet(wallet: string): string {
+  const id = wallet.trim();
+  if (id.length <= 8) return id;
+  return `${id.slice(0, 4)}....${id.slice(-4)}`;
+}
+
+function formatDeviceId(id: string): string {
+  const clean = id.trim();
+  if (clean.length <= 18) return clean;
+  return `${clean.slice(0, 8)}...${clean.slice(-4)}`;
+}
+
+function tutorialOnlyText(minutes: number | null): string {
+  if (minutes == null) return "Tutorial only, no skills";
+  if (minutes < 1) return "Tutorial only, under a minute, no skills";
+  const label = minutes === 1 ? "1 min" : `${minutes.toLocaleString("en-US")} min`;
+  return `Tutorial only, ${label}, no skills`;
+}
+
+function relatedReferrerText(flags: ReferralFlags): string {
+  const shown = flags.relatedReferrers.slice(0, 3).map((referrer) => {
+    const name = referrer.name.trim();
+    return name || maskWallet(referrer.wallet);
+  });
+  const extra = flags.relatedReferrers.length - shown.length;
+  const tail = extra > 0 ? `, and ${extra.toLocaleString("en-US")} more` : "";
+  return `Linked referrers: ${shown.join(", ")}${tail}`;
+}
+
+function relatedReferrerTitle(flags: ReferralFlags): string {
+  return flags.relatedReferrers
+    .map((referrer) => {
+      const name = referrer.name.trim();
+      return name ? `${name} (${referrer.wallet})` : referrer.wallet;
+    })
+    .join("\n");
+}
+
+function appendReviewLine(
+  parent: HTMLElement,
+  className: string,
+  text: string,
+  title = "",
+): void {
+  const line = document.createElement("div");
+  line.className = className;
+  line.textContent = text;
+  if (title) line.title = title;
+  parent.append(line);
+}
+
+function appendIpLine(parent: HTMLElement, ip: string, sameIp: number): void {
+  const line = document.createElement("div");
+  line.className = "admin-referral-ip";
+  if (ip) {
+    line.append(document.createTextNode(ip));
+    if (sameIp > 0) {
+      const shared = document.createElement("span");
+      shared.className = "admin-referral-ip-shared";
+      shared.textContent =
+        sameIp === 1
+          ? " · 1 other player"
+          : ` · ${sameIp.toLocaleString("en-US")} other players`;
+      line.append(shared);
+    }
+  } else {
+    line.textContent = "No IP";
+  }
+  parent.append(line);
+}
+
+/** Device, same-person, network, tutorial-only, and linked referrers. */
+function appendReferralFlags(parent: HTMLElement, flags: ReferralFlags): void {
+  if (flags.userAgent) {
+    appendReviewLine(parent, "admin-referral-agent", flags.userAgent);
+  }
+  if (flags.deviceId) {
+    appendReviewLine(
+      parent,
+      "admin-referral-agent",
+      `Device ${formatDeviceId(flags.deviceId)}`,
+      flags.deviceId,
+    );
+  }
+  if (flags.samePerson) {
+    appendReviewLine(
+      parent,
+      "admin-referral-flag admin-referral-flag--same",
+      flags.samePersonReason || "Same person",
+    );
+  }
+  if (flags.sameNetwork > 0) {
+    appendReviewLine(
+      parent,
+      "admin-referral-flag",
+      flags.sameNetwork === 1
+        ? "1 other signup on this network"
+        : `${flags.sameNetwork.toLocaleString("en-US")} other signups on this network`,
+    );
+  }
+  if (flags.tutorialOnly) {
+    appendReviewLine(
+      parent,
+      "admin-referral-flag",
+      tutorialOnlyText(flags.tutorialMinutes),
+    );
+  }
+  if (flags.relatedReferrers.length > 0) {
+    appendReviewLine(
+      parent,
+      "admin-referral-flag",
+      relatedReferrerText(flags),
+      relatedReferrerTitle(flags),
+    );
+  }
+}
+
+function referrerPayoutText(payout: ReferralPayout): string {
+  const parts = [
+    `${payout.referrerPending.toLocaleString("en-US")} waiting`,
+    `${payout.referrerPaid.toLocaleString("en-US")} paid`,
+    `${payout.referrerRejected.toLocaleString("en-US")} rejected`,
+  ];
+  if (payout.referrerHeld > 0) {
+    parts.push(`${payout.referrerHeld.toLocaleString("en-US")} held`);
+  }
+  return `Referrer payouts: ${parts.join(", ")}`;
+}
+
+function paintReferralSignupList(
+  list: HTMLElement,
+  players: ReferralSignupPlayer[],
+): void {
+  list.replaceChildren();
+  for (const player of players) {
+    const row = document.createElement("div");
+    row.className = "referral-menu-row admin-menu-row admin-referral-signup";
+    const text = document.createElement("div");
+    text.className = "admin-referral-copy";
+    const wallet = document.createElement("div");
+    wallet.className = "admin-referral-wallet";
+    wallet.textContent = maskWallet(player.wallet);
+    wallet.title = player.wallet;
+    const name = document.createElement("div");
+    name.className = "admin-referral-name";
+    name.textContent = player.name || "No name";
+    if (player.samePerson) row.classList.add("admin-referral-signup--same");
+    const created = document.createElement("div");
+    created.className = "admin-referral-when";
+    const createdWhen = formatAdminWhen(player.createdAt);
+    created.textContent = createdWhen ? `Created ${createdWhen}` : "Created unknown";
+    const seen = document.createElement("div");
+    seen.className = "admin-referral-when";
+    const seenWhen = formatAdminWhen(player.lastSeen);
+    seen.textContent = seenWhen ? `Last seen ${seenWhen}` : "Last seen never";
+    text.append(wallet, name);
+    appendIpLine(text, player.ip, player.sameIp);
+    appendReferralFlags(text, player);
+    text.append(created, seen);
+    const mark = document.createElement("div");
+    const finished = player.tutorialDone;
+    mark.className = finished
+      ? "admin-referral-mark admin-referral-mark--done"
+      : "admin-referral-mark admin-referral-mark--open";
+    mark.textContent = finished ? "✓" : "✗";
+    mark.title = finished ? "Tutorial completed" : "Tutorial not completed";
+    mark.setAttribute("aria-label", mark.title);
+    row.append(text, mark);
+    list.append(row);
+  }
+}
+
 /** Copy pages, or a check once the link is on the clipboard. */
 function paintReferralIcon(svg: SVGSVGElement, copied: boolean): void {
   svg.replaceChildren();
@@ -250,7 +467,7 @@ function appendRewardCell(
   icon.append(graphic);
   const qtyEl = document.createElement("span");
   qtyEl.className = "invite-item-qty";
-  qtyEl.textContent = String(qty);
+  qtyEl.textContent = qty.toLocaleString("en-US");
   icon.append(qtyEl);
   const label = document.createElement("div");
   label.className = "invite-item-name";
@@ -307,7 +524,13 @@ export class MainMenu {
   private referralCopyTimer = 0;
   private adminMenu?: HTMLElement;
   private adminMenuKey?: (event: KeyboardEvent) => void;
+  private bountyPayoutDialog?: HTMLElement;
+  private bountyRejectDialog?: HTMLElement;
   private adminUserIdDraft = "";
+  private adminReferralDraft = "";
+  private adminReferralResult = "";
+  private adminReferralError = false;
+  private adminReferralPlayers: ReferralSignupPlayer[] = [];
   private statusEl: HTMLElement;
   private survivorNameEl: HTMLElement;
   private previewSection: HTMLElement;
@@ -650,7 +873,11 @@ export class MainMenu {
     this.nameInput.disabled = false;
     this.survivorNameEl.textContent = "";
     this.syncAuthButtons();
-    requestAnimationFrame(() => this.nameInput.focus());
+    // The Seeker WebView dies if the keyboard opens in the same beat as this
+    // panel appearing. Tap the field to type.
+    if (!isNativeApp()) {
+      requestAnimationFrame(() => this.nameInput.focus());
+    }
   }
 
   /** Logged out: Connect wallet only. Preview appears after a survivor exists. */
@@ -914,7 +1141,7 @@ export class MainMenu {
     appendInvitePackage(offer);
     const payoutNote = document.createElement("p");
     payoutNote.className = "referral-menu-payout-note";
-    payoutNote.textContent = `When the referred survivor finishes the tutorial you will receive ${REFERRER_PAYOUT_BANKNOTES.toLocaleString()} banknotes pending manual approval`;
+    payoutNote.textContent = `When the referred survivor finishes the tutorial you will receive ${REFERRER_PAYOUT_BANKNOTES.toLocaleString("en-US")} banknotes in your safe deposit box at the Birchport market, after manual approval. You can collect them even if you have not bought a box.`;
     offer.append(payoutNote);
 
     const copyBtn = document.createElement("button");
@@ -1018,7 +1245,339 @@ export class MainMenu {
     }
     this.adminMenu?.remove();
     this.adminMenu = undefined;
+    this.bountyPayoutDialog = undefined;
+    this.bountyRejectDialog = undefined;
     this.adminUserIdDraft = "";
+    this.adminReferralDraft = "";
+    this.adminReferralResult = "";
+    this.adminReferralError = false;
+    this.adminReferralPlayers = [];
+  }
+
+  private closeBountyPayoutDialog(): boolean {
+    if (!this.bountyPayoutDialog) return false;
+    this.bountyPayoutDialog.remove();
+    this.bountyPayoutDialog = undefined;
+    return true;
+  }
+
+  private openBountyPayoutDialog(claimId: number, onApproved: () => void): void {
+    if (!this.adminMenu) return;
+    this.closeBountyRejectDialog();
+    this.closeBountyPayoutDialog();
+
+    const dialog = document.createElement("div");
+    dialog.className = "admin-payout-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-label", "Approve bounty");
+    this.bountyPayoutDialog = dialog;
+
+    const panel = document.createElement("div");
+    panel.className = "referral-menu-panel admin-menu-panel";
+
+    const header = document.createElement("div");
+    header.className = "referral-menu-header";
+    const title = document.createElement("h2");
+    title.className = "referral-menu-title";
+    title.textContent = "Approve bounty";
+    header.append(title, createDialogCloseButton(() => this.closeBountyPayoutDialog()));
+
+    const hint = document.createElement("p");
+    hint.className = "admin-payout-hint";
+    hint.textContent = "Paste the payout transaction link. It is emailed to the submitter.";
+
+    const input = document.createElement("input");
+    input.id = "admin-bounty-payout";
+    input.className = "admin-payout-field";
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = "https://";
+    input.setAttribute("aria-label", "Payout transaction link");
+
+    const error = document.createElement("div");
+    error.className = "admin-menu-manual-hint";
+
+    const actions = document.createElement("div");
+    actions.className = "admin-menu-actions admin-payout-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "admin-action";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.closeBountyPayoutDialog());
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "referral-approve";
+    send.textContent = "Send";
+
+    const submit = () => {
+      const token = this.session?.sessionToken;
+      const payoutUrl = input.value.trim();
+      if (!token || send.disabled) return;
+      if (!payoutUrl.startsWith("https://") && !payoutUrl.startsWith("http://")) {
+        error.textContent = "Paste a payout transaction link.";
+        input.focus();
+        return;
+      }
+      send.disabled = true;
+      cancel.disabled = true;
+      input.disabled = true;
+      send.textContent = "Sending…";
+      error.textContent = "";
+      void reviewBountyClaim(token, claimId, "approved", { payoutUrl })
+        .then(() => {
+          if (!dialog.isConnected) return;
+          this.closeBountyPayoutDialog();
+          onApproved();
+        })
+        .catch((err) => {
+          console.error(err);
+          if (!dialog.isConnected) return;
+          send.disabled = false;
+          cancel.disabled = false;
+          input.disabled = false;
+          send.textContent = "Send";
+          error.textContent =
+            err instanceof Error ? err.message : "Could not send the approval email.";
+        });
+    };
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      submit();
+    });
+
+    actions.append(cancel, send);
+    panel.append(header, hint, input, error, actions);
+    dialog.append(panel);
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) this.closeBountyPayoutDialog();
+    });
+    this.adminMenu.appendChild(dialog);
+    input.focus();
+  }
+
+  private closeBountyRejectDialog(): boolean {
+    if (!this.bountyRejectDialog) return false;
+    this.bountyRejectDialog.remove();
+    this.bountyRejectDialog = undefined;
+    return true;
+  }
+
+  private openBountyRejectDialog(claimId: number, onRejected: () => void): void {
+    if (!this.adminMenu) return;
+    this.closeBountyPayoutDialog();
+    this.closeBountyRejectDialog();
+
+    const dialog = document.createElement("div");
+    dialog.className = "admin-payout-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-label", "Reject bounty");
+    this.bountyRejectDialog = dialog;
+
+    const panel = document.createElement("div");
+    panel.className = "referral-menu-panel admin-menu-panel";
+
+    const header = document.createElement("div");
+    header.className = "referral-menu-header";
+    const title = document.createElement("h2");
+    title.className = "referral-menu-title";
+    title.textContent = "Reject bounty";
+    header.append(title, createDialogCloseButton(() => this.closeBountyRejectDialog()));
+
+    const hint = document.createElement("p");
+    hint.className = "admin-payout-hint";
+    hint.textContent = "Choose a reason and describe it. Both are emailed to the submitter.";
+
+    const reasonLabel = document.createElement("label");
+    reasonLabel.className = "admin-payout-label";
+    reasonLabel.htmlFor = "admin-bounty-reason";
+    reasonLabel.textContent = "Reason";
+
+    const reasons = ["Invalid Entry", "No Referral Signups", "Other"];
+    let pickedReason = "";
+    const reasonBox = document.createElement("div");
+    reasonBox.className = "admin-reason";
+    const reason = document.createElement("button");
+    reason.type = "button";
+    reason.id = "admin-bounty-reason";
+    reason.className = "admin-payout-field admin-reason-trigger";
+    reason.setAttribute("aria-haspopup", "listbox");
+    reason.setAttribute("aria-expanded", "false");
+    reason.setAttribute("aria-controls", "admin-bounty-reason-list");
+    const reasonValue = document.createElement("span");
+    reasonValue.className = "admin-reason-value is-placeholder";
+    reasonValue.textContent = "Select a reason";
+    const reasonChevron = document.createElement("span");
+    reasonChevron.className = "admin-reason-chevron";
+    reasonChevron.setAttribute("aria-hidden", "true");
+    reason.append(reasonValue, reasonChevron);
+    const reasonMenu = document.createElement("div");
+    reasonMenu.id = "admin-bounty-reason-list";
+    reasonMenu.className = "admin-reason-menu";
+    reasonMenu.setAttribute("role", "listbox");
+    reasonMenu.hidden = true;
+    const reasonOptions: HTMLButtonElement[] = [];
+    let activeReason = -1;
+    const setReasonOpen = (open: boolean) => {
+      reasonMenu.hidden = !open;
+      reasonBox.classList.toggle("is-open", open);
+      reason.setAttribute("aria-expanded", open ? "true" : "false");
+      if (!open) {
+        activeReason = -1;
+        for (const option of reasonOptions) option.classList.remove("is-active");
+      }
+    };
+    const chooseReason = (value: string) => {
+      pickedReason = value;
+      reasonValue.textContent = value;
+      reasonValue.classList.remove("is-placeholder");
+      for (const option of reasonOptions) {
+        option.setAttribute("aria-selected", option.dataset.value === value ? "true" : "false");
+      }
+      setReasonOpen(false);
+      reason.focus();
+    };
+    const highlightReason = (index: number) => {
+      activeReason = index;
+      reasonOptions.forEach((option, i) => option.classList.toggle("is-active", i === index));
+    };
+    for (const option of reasons) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "admin-reason-option";
+      choice.dataset.value = option;
+      choice.textContent = option;
+      choice.setAttribute("role", "option");
+      choice.setAttribute("aria-selected", "false");
+      choice.addEventListener("click", () => chooseReason(option));
+      reasonOptions.push(choice);
+      reasonMenu.append(choice);
+    }
+    reason.addEventListener("click", () => {
+      if (reason.disabled) return;
+      setReasonOpen(reasonMenu.hidden);
+    });
+    reasonBox.addEventListener("keydown", (event) => {
+      if (reason.disabled) return;
+      if (event.key === "Escape" && !reasonMenu.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        setReasonOpen(false);
+        reason.focus();
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (reasonMenu.hidden) {
+          setReasonOpen(true);
+          const current = reasonOptions.findIndex((option) => option.dataset.value === pickedReason);
+          highlightReason(current >= 0 ? current : 0);
+          return;
+        }
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const next = (activeReason + delta + reasonOptions.length) % reasonOptions.length;
+        highlightReason(next);
+        return;
+      }
+      if (event.key === "Enter" && !reasonMenu.hidden) {
+        event.preventDefault();
+        const option = reasonOptions[activeReason];
+        if (option?.dataset.value) chooseReason(option.dataset.value);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === " ") && reasonMenu.hidden && event.target === reason) {
+        event.preventDefault();
+        setReasonOpen(true);
+        const current = reasonOptions.findIndex((option) => option.dataset.value === pickedReason);
+        highlightReason(current >= 0 ? current : 0);
+      }
+    });
+    reasonBox.append(reason, reasonMenu);
+
+    const descriptionLabel = document.createElement("label");
+    descriptionLabel.className = "admin-payout-label";
+    descriptionLabel.htmlFor = "admin-bounty-description";
+    descriptionLabel.textContent = "Description";
+
+    const description = document.createElement("textarea");
+    description.id = "admin-bounty-description";
+    description.className = "admin-payout-field";
+    description.rows = 4;
+    description.maxLength = 1000;
+    description.placeholder = "Explain it in more detail";
+    description.setAttribute("aria-label", "Description");
+
+    const error = document.createElement("div");
+    error.className = "admin-menu-manual-hint";
+
+    const actions = document.createElement("div");
+    actions.className = "admin-menu-actions admin-payout-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "admin-action";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.closeBountyRejectDialog());
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "admin-action admin-action--ban";
+    send.textContent = "Send";
+
+    const submit = () => {
+      const token = this.session?.sessionToken;
+      const selected = pickedReason;
+      const note = description.value.trim();
+      if (!token || send.disabled) return;
+      if (!selected) {
+        error.textContent = "Select a reason.";
+        reason.focus();
+        return;
+      }
+      if (!note) {
+        error.textContent = "Write a description.";
+        description.focus();
+        return;
+      }
+      send.disabled = true;
+      cancel.disabled = true;
+      reason.disabled = true;
+      description.disabled = true;
+      setReasonOpen(false);
+      send.textContent = "Sending…";
+      error.textContent = "";
+      void reviewBountyClaim(token, claimId, "rejected", { reason: selected, description: note })
+        .then(() => {
+          if (!dialog.isConnected) return;
+          this.closeBountyRejectDialog();
+          onRejected();
+        })
+        .catch((err) => {
+          console.error(err);
+          if (!dialog.isConnected) return;
+          send.disabled = false;
+          cancel.disabled = false;
+          reason.disabled = false;
+          description.disabled = false;
+          send.textContent = "Send";
+          error.textContent =
+            err instanceof Error ? err.message : "Could not send the rejection email.";
+        });
+    };
+    send.addEventListener("click", submit);
+
+    actions.append(cancel, send);
+    panel.append(header, hint, reasonLabel, reasonBox, descriptionLabel, description, error, actions);
+    dialog.append(panel);
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        this.closeBountyRejectDialog();
+        return;
+      }
+      if (!reasonBox.contains(event.target as Node)) setReasonOpen(false);
+    });
+    this.adminMenu.appendChild(dialog);
+    reason.focus();
   }
 
   private openAdminMenu() {
@@ -1056,6 +1615,8 @@ export class MainMenu {
     this.adminMenuKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      if (this.closeBountyRejectDialog()) return;
+      if (this.closeBountyPayoutDialog()) return;
       this.closeAdminMenu();
     };
     document.addEventListener("keydown", this.adminMenuKey);
@@ -1087,8 +1648,109 @@ export class MainMenu {
     body.append(
       this.adminOnlineSection(board, reload),
       this.adminPayoutSection(board.payouts, reload),
+      this.adminBountySection(board.claims, reload),
+      this.adminReferralLookup(),
       this.adminBanSection(board, reload),
     );
+  }
+
+  private adminReferralLookup(): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "admin-menu-section";
+    const title = document.createElement("div");
+    title.className = "referral-menu-count";
+    title.textContent = "Referral signups";
+    const wrap = document.createElement("div");
+    wrap.className = "admin-menu-manual";
+    const row = document.createElement("div");
+    row.className = "referral-menu-row admin-menu-row admin-menu-manual-row";
+    const input = document.createElement("input");
+    input.id = "admin-menu-referral-id";
+    input.className = "admin-menu-id-input";
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = "User id";
+    input.setAttribute("aria-label", "Referral user id");
+    input.value = this.adminReferralDraft;
+    const result = document.createElement("div");
+    result.className = this.adminReferralError
+      ? "admin-menu-manual-hint"
+      : "admin-menu-lookup-result";
+    result.textContent = this.adminReferralResult;
+    const list = document.createElement("div");
+    list.className = "referral-menu-list admin-menu-list admin-referral-signups";
+    paintReferralSignupList(list, this.adminReferralError ? [] : this.adminReferralPlayers);
+    const search = document.createElement("button");
+    search.type = "button";
+    search.className = "admin-action";
+    search.textContent = "Search";
+    const showResult = (message: string, error: boolean) => {
+      this.adminReferralResult = message;
+      this.adminReferralError = error;
+      result.className = error ? "admin-menu-manual-hint" : "admin-menu-lookup-result";
+      result.textContent = message;
+    };
+    let request = 0;
+    const clearPlayers = () => {
+      this.adminReferralPlayers = [];
+      list.replaceChildren();
+    };
+    input.addEventListener("input", () => {
+      this.adminReferralDraft = input.value;
+      request += 1;
+      if (!this.adminReferralResult && this.adminReferralPlayers.length === 0) return;
+      clearPlayers();
+      showResult("", false);
+    });
+    const run = () => {
+      const token = this.session?.sessionToken;
+      const userId = input.value.trim();
+      this.adminReferralDraft = input.value;
+      if (!token || search.disabled) return;
+      if (!userId) {
+        clearPlayers();
+        showResult("Paste a user id first.", true);
+        input.focus();
+        return;
+      }
+      const ticket = ++request;
+      search.disabled = true;
+      search.textContent = "Searching…";
+      clearPlayers();
+      showResult("", false);
+      const finish = () => {
+        if (!wrap.isConnected) return;
+        search.disabled = false;
+        search.textContent = "Search";
+      };
+      void lookupReferralSignups(token, userId)
+        .then((found) => {
+          finish();
+          if (!wrap.isConnected || ticket !== request) return;
+          this.adminReferralPlayers = found.players;
+          paintReferralSignupList(list, found.players);
+          const finished = found.players.filter((player) => player.tutorialDone).length;
+          showResult(referralSignupCountText(found.name, found.signups, finished), false);
+        })
+        .catch((err) => {
+          console.error(err);
+          finish();
+          if (!wrap.isConnected || ticket !== request) return;
+          clearPlayers();
+          showResult(err instanceof Error ? err.message : "Could not look up that id.", true);
+        });
+    };
+    search.addEventListener("click", run);
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      run();
+    });
+    row.append(input, search);
+    wrap.append(row, result, list);
+    block.append(title, wrap);
+    return block;
   }
 
   private adminOnlineSection(board: AdminBoard, reload: () => void): HTMLElement {
@@ -1185,6 +1847,83 @@ export class MainMenu {
     block.append(title);
     if (payouts.length === 0) return block;
     block.append(this.referralPayoutSection(payouts, reload));
+    return block;
+  }
+
+  private adminBountySection(claims: BountyClaim[], reload: () => void): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "admin-menu-section";
+    const waiting = claims.filter((claim) => claim.status === "pending");
+    const title = document.createElement("div");
+    title.className = "referral-menu-count";
+    title.textContent =
+      waiting.length === 0
+        ? "No bounty claims"
+        : waiting.length === 1
+          ? "1 bounty claim waiting"
+          : `${waiting.length} bounty claims waiting`;
+    block.append(title);
+    if (waiting.length === 0) return block;
+    const list = document.createElement("div");
+    list.className = "referral-menu-list admin-menu-list";
+    for (const claim of waiting) {
+      const row = document.createElement("div");
+      row.className = "referral-menu-row admin-menu-row admin-bounty-row";
+      const text = document.createElement("div");
+      text.className = "admin-bounty-copy";
+      const name = document.createElement("div");
+      name.className = "referral-menu-name";
+      name.textContent = claim.email || "No email";
+      text.append(name);
+      const href = bountyClaimHref(claim.url);
+      const url = document.createElement(href ? "a" : "div");
+      url.className = "admin-bounty-url";
+      url.textContent = claim.url;
+      if (href && url instanceof HTMLAnchorElement) {
+        url.href = href;
+        url.target = "_blank";
+        url.rel = "noopener noreferrer";
+      }
+      text.append(url);
+      if (claim.note.trim()) {
+        const note = document.createElement("div");
+        note.className = "admin-bounty-note";
+        note.textContent = claim.note;
+        text.append(note);
+      }
+      const meta = document.createElement("div");
+      meta.className = "admin-bounty-meta";
+      const when = formatSignupWhen(claim.createdAt);
+      const detail = [bountyStatusLabel(claim.status)];
+      if (when) detail.push(when);
+      if (claim.ip) detail.push(claim.ip);
+      meta.textContent = detail.join(" · ");
+      text.append(meta);
+      const actions = document.createElement("div");
+      actions.className = "admin-menu-actions";
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "referral-approve";
+      approve.textContent = "Approve";
+      approve.disabled = claim.status === "approved";
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "admin-action admin-action--ban";
+      reject.textContent = "Reject";
+      reject.disabled = claim.status === "rejected";
+      approve.addEventListener("click", () => {
+        if (approve.disabled) return;
+        this.openBountyPayoutDialog(claim.id, reload);
+      });
+      reject.addEventListener("click", () => {
+        if (reject.disabled) return;
+        this.openBountyRejectDialog(claim.id, reload);
+      });
+      actions.append(approve, reject);
+      row.append(text, actions);
+      list.append(row);
+    }
+    block.append(list);
     return block;
   }
 
@@ -1319,37 +2058,85 @@ export class MainMenu {
 
   private referralPayoutSection(payouts: ReferralPayout[], onApproved: () => void): HTMLElement {
     const block = document.createElement("div");
-    block.className = "referral-payouts admin-menu-list";
+    block.className = "referral-payouts referral-menu-list admin-menu-list";
     for (const payout of payouts) {
       const row = document.createElement("div");
       row.className = "referral-menu-row referral-payout-row admin-menu-row";
+      if (payout.samePerson) row.classList.add("admin-referral-signup--same");
       const text = document.createElement("div");
       const name = document.createElement("div");
       name.className = "referral-menu-name";
-      name.textContent = payout.referrerName;
+      name.textContent = payout.referrerName || "No name";
       const meta = document.createElement("div");
       meta.className = "referral-menu-meta";
-      meta.textContent = `${payout.amount.toLocaleString()} notes for ${payout.referredName}`;
+      meta.textContent = `${payout.amount.toLocaleString("en-US")} notes for ${payout.referredName || "No name"}`;
+      const created = document.createElement("div");
+      created.className = "admin-referral-when";
+      const createdWhen = formatAdminWhen(payout.accountCreatedAt);
+      created.textContent = createdWhen ? `Signed up ${createdWhen}` : "Signed up unknown";
+      const seen = document.createElement("div");
+      seen.className = "admin-referral-when";
+      const seenWhen = formatAdminWhen(payout.lastSeen);
+      seen.textContent = seenWhen ? `Last seen ${seenWhen}` : "Last seen never";
+      const error = document.createElement("div");
+      error.className = "admin-referral-flag admin-referral-flag--same";
+      text.className = "referral-payout-copy";
       text.append(name, meta);
+      appendIpLine(text, payout.ip, payout.sameIp);
+      appendReferralFlags(text, payout);
+      text.append(created, seen);
+      appendReviewLine(text, "admin-referral-when", referrerPayoutText(payout));
+      text.append(error);
+      const actions = document.createElement("div");
+      actions.className = "admin-menu-actions";
       const approve = document.createElement("button");
       approve.type = "button";
       approve.className = "referral-approve";
       approve.textContent = "Approve";
-      approve.addEventListener("click", () => {
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "admin-action admin-action--ban";
+      reject.textContent = "Reject";
+      const run = (
+        button: HTMLButtonElement,
+        busy: string,
+        send: (token: string) => Promise<void>,
+        failed: string,
+      ) => {
         const token = this.session?.sessionToken;
-        if (!token || approve.disabled) return;
+        if (!token || approve.disabled || reject.disabled) return;
         approve.disabled = true;
-        approve.textContent = "Approving…";
-        void approveReferralPayout(token, payout.referredUserId)
+        reject.disabled = true;
+        button.textContent = busy;
+        void send(token)
           .then(() => onApproved())
           .catch((err) => {
             console.error(err);
             approve.disabled = false;
+            reject.disabled = false;
             approve.textContent = "Approve";
-            meta.textContent = err instanceof Error ? err.message : "Could not approve";
+            reject.textContent = "Reject";
+            error.textContent = err instanceof Error ? err.message : failed;
           });
+      };
+      approve.addEventListener("click", () => {
+        run(
+          approve,
+          "Approving…",
+          (token) => approveReferralPayout(token, payout.referredUserId),
+          "Could not approve",
+        );
       });
-      row.append(text, approve);
+      reject.addEventListener("click", () => {
+        run(
+          reject,
+          "Rejecting…",
+          (token) => rejectReferralPayout(token, payout.referredUserId),
+          "Could not reject",
+        );
+      });
+      actions.append(approve, reject);
+      row.append(text, actions);
       block.append(row);
     }
     return block;

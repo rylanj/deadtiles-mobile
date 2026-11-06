@@ -1,5 +1,5 @@
 import { appendItemIcon } from "./itemIcons";
-import { useMobileSheet } from "./mobileSheet";
+import { count, useMobileSheet } from "./mobileSheet";
 
 export type LootItem = {
   name: string;
@@ -110,8 +110,8 @@ export class LootPopup {
         // Reputation rewards use the rep icon and a +N label.
         qty.textContent =
           item.id === "rep"
-            ? `${item.quantity > 0 ? "+" : ""}${item.quantity}`
-            : `×${item.quantity}`;
+            ? `${item.quantity > 0 ? "+" : ""}${count(item.quantity)}`
+            : `×${count(item.quantity)}`;
         row.appendChild(qty);
       }
       card.appendChild(row);

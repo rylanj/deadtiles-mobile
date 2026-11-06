@@ -13,6 +13,7 @@ export type MobileWalletInfo = {
 
 export interface SolanaMWAPlugin {
   isAvailable(): Promise<{ available: boolean }>;
+  appDeviceId(): Promise<{ id: string }>;
   listWallets(): Promise<{ wallets: MobileWalletInfo[] }>;
   setPreferredWallet(options: { packageName: string | null }): Promise<void>;
   launchWalletUri(options: { uri: string }): Promise<{ launched: boolean }>;

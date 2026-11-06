@@ -190,7 +190,8 @@ export class CraftUI {
     );
     const hint = document.createElement("span");
     hint.className = "inventory-hint";
-    hint.textContent = "Craft materials, or break a firearm into parts";
+    hint.textContent =
+      "Craft materials here. Firearms are assembled and broken down at a gun bench.";
     this.hintEl = hint;
     header.append(headerTop, hint);
 
@@ -240,7 +241,10 @@ export class CraftUI {
     furnaceActiveUntil?: number;
   }) {
     this.workbenchId = opts.workbenchId;
-    this.station = opts.station === "furnace" ? "furnace" : "workbench";
+    this.station =
+      opts.station === "furnace" || opts.station === "gunbench"
+        ? opts.station
+        : "workbench";
     this.extraPockets = opts.extraPockets ?? 0;
     this.craftDurationScale = opts.craftDurationScale ?? 1;
     this.furnaceActiveUntil =
@@ -251,12 +255,9 @@ export class CraftUI {
     this.pageId = null;
     this.run = null;
     this.recraftId = null;
-    this.titleEl.textContent =
-      this.station === "furnace" ? "Furnace" : "Workbench";
-    this.hintEl.textContent =
-      this.station === "furnace"
-        ? "The fire must stay lit. If it goes out, the craft stops."
-        : "Craft materials, build a weapon you have learned, or break a firearm into parts";
+    const copy = this.stationCopy();
+    this.titleEl.textContent = copy.title;
+    this.hintEl.textContent = copy.hint;
     this.visible = true;
     this.overlay.hidden = false;
     document.body.classList.add("craft-open");
@@ -383,7 +384,10 @@ export class CraftUI {
     }
 
     const breakdowns = stationRecipes.filter((recipe) => recipe.breakdown);
-    if (breakdowns.length === 0 && this.station !== "workbench") return;
+    const disassemblies = DISASSEMBLY_RECIPES.filter(
+      (recipe) => recipe.station === this.station,
+    );
+    if (breakdowns.length === 0 && disassemblies.length === 0) return;
 
     const breakHead = document.createElement("div");
     breakHead.className = "red-dialog-task-heading craft-break-heading";
@@ -392,8 +396,7 @@ export class CraftUI {
     for (const recipe of breakdowns) {
       this.listEl.appendChild(this.buildToolBreakdownCard(recipe));
     }
-    if (this.station !== "workbench") return;
-    for (const recipe of DISASSEMBLY_RECIPES) {
+    for (const recipe of disassemblies) {
       this.listEl.appendChild(this.buildDisassemblyCard(recipe));
     }
   }
@@ -811,8 +814,27 @@ export class CraftUI {
     return !fireplaceIsActive(this.furnaceActiveUntil);
   }
 
+  private stationCopy(): { title: string; hint: string } {
+    if (this.station === "furnace") {
+      return {
+        title: "Furnace",
+        hint: "The fire must stay lit. If it goes out, the craft stops.",
+      };
+    }
+    if (this.station === "gunbench") {
+      return {
+        title: "Gun Bench",
+        hint: "Assemble a firearm you have learned, or break one down into parts.",
+      };
+    }
+    return {
+      title: "Workbench",
+      hint: "Craft materials here. Firearms are assembled and broken down at a gun bench.",
+    };
+  }
+
   private stationName(): string {
-    return this.station === "furnace" ? "Furnace" : "Workbench";
+    return this.stationCopy().title;
   }
 
   private itemName(itemId: string): string {
@@ -842,8 +864,8 @@ export class CraftUI {
       if (recipe.breakdown) entries.push(this.toolEntry(recipe));
       else entries.push(this.craftEntry(recipe));
     }
-    if (this.station === "workbench") {
-      for (const recipe of DISASSEMBLY_RECIPES) entries.push(this.disasmEntry(recipe));
+    for (const recipe of DISASSEMBLY_RECIPES) {
+      if (recipe.station === this.station) entries.push(this.disasmEntry(recipe));
     }
     return entries;
   }
