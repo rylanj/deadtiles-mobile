@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { isNativeApp } from "../native";
 import {
   buildingWallScreenDepth,
   cartesianToIso,
@@ -180,15 +181,59 @@ const STREETLIGHT_BOTTOM_PAD = Math.round(STREETLIGHT_DISPLAY_HEIGHT * 0.075);
 const LOOT_HOVER_FX_KEY = "lootHoverFx";
 /** Multiply fallback when WebGL FX is unavailable. Lime enough to shift orange wood. */
 const LOOT_HOVER_TINT = 0xb8ff6a;
+const WHITE_HOVER_PIPELINE = "WhiteHover";
 
 type LootHoverSprite = Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
+
+/** Lift the sprite toward white on the normal frame UVs. A white multiply tint is a no-op. */
+const WHITE_HOVER_FRAG = `
+#define SHADER_NAME WHITE_HOVER_FS
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D uMainSampler;
+varying vec2 outTexCoord;
+void main(void) {
+  vec4 color = texture2D(uMainSampler, outTexCoord);
+  color.rgb = mix(color.rgb, vec3(1.0), 0.55);
+  gl_FragColor = color;
+}
+`;
+
+class WhiteHoverPipeline extends Phaser.Renderer.WebGL.Pipelines.SinglePipeline {
+  constructor(game: Phaser.Game) {
+    super({ game, fragShader: WHITE_HOVER_FRAG });
+  }
+}
+
+function useWhiteHover(sprite: LootHoverSprite): boolean {
+  const game = sprite.scene?.sys.game;
+  const renderer = game?.renderer;
+  if (!game || !renderer || renderer.type !== Phaser.WEBGL) return false;
+  const pipelines = (renderer as Phaser.Renderer.WebGL.WebGLRenderer).pipelines;
+  if (!pipelines.has(WHITE_HOVER_PIPELINE)) {
+    pipelines.add(WHITE_HOVER_PIPELINE, new WhiteHoverPipeline(game));
+  }
+  sprite.setPipeline(WHITE_HOVER_PIPELINE);
+  sprite.setData(LOOT_HOVER_FX_KEY, true);
+  return true;
+}
 
 /**
  * Hover on lootable sprites: keep the texture, lift brightness and push hue
  * toward yellow-green so orange wood still reads as selected.
+ * The APK lifts toward white instead. Mali breaks the color-matrix pass.
  */
 export function applyLootHoverTint(sprite: LootHoverSprite | null | undefined) {
   if (!sprite) return;
+  if (isNativeApp()) {
+    if (sprite.getData(LOOT_HOVER_FX_KEY)) return;
+    if (useWhiteHover(sprite)) return;
+    sprite.setTint(LOOT_HOVER_TINT);
+    return;
+  }
   const fx = sprite.preFX;
   if (!fx) {
     sprite.setTint(LOOT_HOVER_TINT);

@@ -51,9 +51,11 @@ npm run apk:open
 
 Install Phantom, Solflare, or Seed Vault on the device before tapping Connect wallet. The APK uses Solana Mobile Wallet Adapter (same-device intents), not browser extensions.
 
-Phantom verifies the APK against `https://play.deadtiles.com/.well-known/assetlinks.json`. That file must be live JSON (not the SPA `index.html`) and must include this debug signing fingerprint:
+Phantom verifies the APK against `https://play.deadtiles.com/.well-known/assetlinks.json`. That file must be live JSON (not the SPA `index.html`) and must include the signing fingerprint of the installed APK. Android Studio and the GitHub Actions APK use different debug keys:
 
-`CB:0F:B1:7D:9F:07:5B:E6:F3:9F:65:36:4D:D2:A9:0D:A8:83:46:29:85:A7:54:17:BB:C0:D2:3B:54:40:0E:98`
+`CB:0F:B1:7D:9F:07:5B:E6:F3:9F:65:36:4D:D2:A9:0D:A8:83:46:29:85:A7:54:17:BB:C0:D2:3B:54:40:0E:98` (Android Studio)
+
+`B7:6F:E3:CC:D2:97:BD:39:F8:71:FE:7B:43:45:DC:99:F7:D0:E5:91:D1:FB:3B:4A:93:63:B1:E6:EA:61:45:D8` (GitHub Actions)
 
 Confirm with:
 
